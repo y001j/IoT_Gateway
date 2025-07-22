@@ -45,6 +45,7 @@ type SinkMetrics struct {
 // StandardConfig 是所有连接器的标准配置结构
 type StandardConfig struct {
 	Name       string            `json:"name"`
+
 	Type       string            `json:"type"`
 	BatchSize  int               `json:"batch_size,omitempty"`
 	BufferSize int               `json:"buffer_size,omitempty"`

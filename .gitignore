@@ -1,7 +1,26 @@
+# Build artifacts
 bin/
+*.exe
+main.exe
 plugins/*.so
 plugins/*.exe
+
+# Logs and runtime data
 *.log
-*.tmp
+logs/
+data/
+jetstream/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# TypeScript
+*.tsbuildinfo
+
+# Development tools
 .idea/
 .vscode/
+
+# Temporary files
+*.tmp
