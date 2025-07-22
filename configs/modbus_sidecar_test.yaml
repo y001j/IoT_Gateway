@@ -1,0 +1,79 @@
+gateway:
+  log_level: "debug"
+  jetstream: true
+  store_dir: "c:/projects/IoT Gateway/data/jetstream"
+  # plugins_dir: "c:/projects/IoT Gateway/plugins"
+  nats_url: "embedded"
+  plugins_dir: "./plugins"
+
+southbound:
+  adapters:
+    - name: "modbus-sensor"
+      type: "modbus"
+      config:
+        mode: "tcp"
+        address: "127.0.0.1:502"
+        timeout_ms: 5000
+        interval_ms: 2000
+        registers:
+          - key: "temperature"
+            device_id: 1
+            function: 3
+            address: 0
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "温度传感器"
+          - key: "humidity"
+            device_id: 1
+            function: 3
+            address: 1
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "湿度传感器"
+          - key: "pressure"
+            device_id: 1
+            function: 3
+            address: 2
+            quantity: 1
+            type: "float"
+            scale: 1.0
+            tags:
+              description: "压力传感器"
+          - key: "status"
+            device_id: 1
+            function: 1
+            address: 0
+            quantity: 1
+            type: "bool"
+            tags:
+              description: "设备状态"
+          # - key: "alarm"
+          #   device_id: 1
+          #   function: 2
+          #   address: 0
+          #   quantity: 1
+          #   type: "bool"
+          #   tags:
+          #     description: "报警状态"
+
+northbound:
+  sinks:
+    - name: "mqtt-sink"
+      type: "mqtt"
+      config:
+        name: "mqtt-sink"
+        type: "mqtt"
+        batch_size: 10
+        buffer_size: 100
+        tags:
+          source: "modbus-sidecar-test"
+        params:
+          broker: "tcp://localhost:1883"
+          client_id: "modbus-sidecar-test"
+          topic_tpl: "iot/data/%s/%s"
+          qos: 1
+          retained: false

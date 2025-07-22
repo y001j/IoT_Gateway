@@ -1,0 +1,51 @@
+# InfluxDB北向连接器测试配置
+southbound:
+  adapters:
+    - name: "mock-test"
+      type: "mock"
+      config:
+        name: "mock-test"
+        interval: 3
+        devices:
+          - device_id: "sensor001"
+            metrics:
+              - key: "temperature"
+                min: 15.0
+                max: 35.0
+                unit: "°C"
+              - key: "humidity" 
+                min: 30.0
+                max: 80.0
+                unit: "%"
+
+northbound:
+  sinks:
+    - name: "influxdb-test"
+      type: "influxdb"
+      config:
+        name: "influxdb-test"
+        batch_size: 5
+        buffer_size: 100
+        params:
+          url: "http://192.168.2.71:8086"
+          token: ""
+          org: "my-org"
+          bucket: "my-bucket"
+          flush_interval_ms: 1000
+          points:
+            "*":
+              measurement: "sensor_data"
+
+    - name: "console-test"
+      type: "console"
+      config:
+        name: "console-test"
+        batch_size: 1
+        buffer_size: 100
+
+gateway:
+  log_level: "info"
+  nats_url: "embedded"
+  api_port: 8081
+  web_port: 8080
+  plugins_dir: "./plugins"

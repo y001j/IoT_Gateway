@@ -1,0 +1,200 @@
+gateway:
+  id: "gateway-websocket-test"
+  http_port: 8080
+  log_level: "debug"
+  nats_url: "embedded"
+  plugins_dir: "./plugins"
+
+# 规则引擎配置
+# 在 config.yaml 中配置规则引擎
+rule_engine:
+  enabled: true
+  rules_dir: "./rules"  # 规则文件目录
+  rules:
+    - id: "temp_10point_avg"
+      name: "温度10点移动平均值"
+      description: "计算每个温度传感器的10点移动平均值并发送回数据总线"
+      enabled: true
+      priority: 10
+      conditions:
+        or:
+          - type: "simple"
+            field: "key"
+            operator: "eq"
+            value: "temperature"
+          - type: "simple"
+            field: "key"
+            operator: "eq"
+            value: "temperature2"
+      actions:
+        - type: "aggregate"
+          config:
+            type: "count_window"
+            count: 10
+            functions: ["avg"]
+            group_by: ["key", "device_id"]
+            trigger: "count"
+            output:
+              key_template: "{{.key}}_avg"
+              subject_template: "iot.data.{{.key}}_avg"
+              forward: true
+            buffer_size: 100
+        - type: "transform"
+          config:
+            field: "value"
+            transforms:
+              - type: "round"
+                precision: 2
+            add_tags:
+              aggregated: "true"
+              window_size: "10"
+              function: "avg"
+
+southbound:
+  adapters:
+    - name: "modbus-sensor"
+      type: "modbus"
+      config:
+        name: "modbus-sensor"
+        mode: "tcp"
+        address: "127.0.0.1:502"
+        timeout_ms: 5000
+        interval_ms: 2000
+        registers:
+          - key: "temperature"
+            device_id: 1
+            function: 3
+            address: 0
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "温度传感器"
+              unit: "°C"
+          - key: "humidity"
+            device_id: 1
+            function: 3
+            address: 1
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "湿度传感器"
+              unit: "%"
+          - key: "pressure"
+            device_id: 1
+            function: 3
+            address: 2
+            quantity: 1
+            type: "int"
+            scale: 1
+            tags:
+              description: "压力传感器"
+              unit: "Pa"
+          - key: "temperature2"
+            device_id: 2
+            function: 3
+            address: 0
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "温度传感器"
+              unit: "°C"
+          - key: "humidity2"
+            device_id: 2
+            function: 3
+            address: 1
+            quantity: 1
+            type: "float"
+            scale: 0.1
+            tags:
+              description: "湿度传感器"
+              unit: "%"
+          - key: "pressure2"
+            device_id: 2
+            function: 3
+            address: 2
+            quantity: 1
+            type: "int"
+            scale: 1
+            tags:
+              description: "压力传感器"
+              unit: "Pa"
+
+northbound:
+  sinks:
+    - name: "console-output"
+      type: "console"
+      config:
+        format: "json"
+        level: "info"
+    - name: "websocket-server"
+      type: "websocket"
+      config:
+        name: "websocket-server"
+        type: "websocket"
+        batch_size: 10
+        buffer_size: 1000
+        params:
+          address: ":8082"
+          path: "/ws"
+          allow_origins: ["*"]
+          subscribe_topics:
+            - "iot.data.>"  # 订阅所有数据点
+          points:
+            temperature:
+              topic: "iot.data.modbus-1.temperature"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "thermal"
+            humidity:
+              topic: "iot.data.modbus-1.humidity"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "environmental"
+            pressure:
+              topic: "iot.data.modbus-1.pressure"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "environmental"
+            temperature2:
+              topic: "iot.data.modbus-2.temperature2"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "thermal"
+            humidity2:
+              topic: "iot.data.modbus-2.humidity2"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "environmental"
+            pressure2:
+              topic: "iot.data.modbus-2.pressure2"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "environmental"
+            temperature_avg:
+              topic: "iot.data.temperature_avg"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "thermal_aggregated"
+                aggregated: "true"
+                window_size: "10"
+            temperature2_avg:
+              topic: "iot.data.temperature2_avg"
+              format: "full"
+              transform: "none"
+              tags:
+                sensor_type: "thermal_aggregated"
+                aggregated: "true"
+                window_size: "10"
+
+web_ui:
+  enabled: false 

@@ -1,0 +1,60 @@
+# WebSocket 配置示例
+# 在主配置文件中添加以下配置来自定义WebSocket行为
+
+# Web UI配置
+web_ui:
+  enabled: true
+  port: 3000
+  
+  # WebSocket配置
+  websocket:
+    # 最大客户端连接数 (默认: 50)
+    max_clients: 100
+    
+    # 消息发送速率限制，每秒最多发送的消息数 (默认: 10)
+    # 如果数据频率很高，可以适当增加此值
+    message_rate: 20
+    
+    # 读取缓冲区大小 (bytes, 默认: 2048)
+    read_buffer_size: 4096
+    
+    # 写入缓冲区大小 (bytes, 默认: 2048)
+    write_buffer_size: 4096
+    
+    # 连接清理间隔 (秒, 默认: 30)
+    cleanup_interval: 60
+    
+    # 客户端不活跃超时时间 (秒, 默认: 300 = 5分钟)
+    inactivity_timeout: 600
+    
+    # Ping消息间隔 (秒, 默认: 54)
+    ping_interval: 30
+    
+    # Pong响应超时 (秒, 默认: 60)
+    pong_timeout: 40
+
+# 使用说明:
+# 1. 如果您的IoT设备产生高频数据，建议增加 message_rate 值
+# 2. 如果有大量客户端连接，可以增加 max_clients 值
+# 3. 如果网络环境不稳定，可以适当增加超时时间
+# 4. 缓冲区大小可以根据消息大小调整，较大的消息需要更大的缓冲区
+
+# 常见场景配置:
+# 
+# 高频数据监控 (如振动传感器每100ms一次):
+# websocket:
+#   message_rate: 50          # 允许每秒50条消息
+#   max_clients: 20           # 限制连接数防止过载
+#   cleanup_interval: 30      # 频繁清理维护性能
+#
+# 普通监控 (如温度传感器每秒一次):
+# websocket:
+#   message_rate: 15          # 适中的消息频率
+#   max_clients: 50           # 标准连接数
+#   inactivity_timeout: 300   # 标准超时时间
+#
+# 低频监控 (如状态检查每分钟一次):
+# websocket:
+#   message_rate: 5           # 低消息频率
+#   max_clients: 100          # 可支持更多连接
+#   inactivity_timeout: 900   # 更长的超时时间

@@ -1,0 +1,18 @@
+{
+  "name": "jetstream-sink",
+  "type": "jetstream",
+  "batch_size": 100,
+  "buffer_size": 1000,
+  "tags": {
+    "source": "iot-gateway",
+    "environment": "production"
+  },
+  "params": {
+    "url": "nats://localhost:4222",
+    "stream_name": "iot_data",
+    "subject": "iot.data.>",
+    "max_age": 86400000000000,
+    "max_bytes": 1073741824,
+    "replicas": 1
+  }
+}

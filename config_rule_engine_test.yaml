@@ -1,0 +1,247 @@
+# IoT Gateway 规则引擎功能测试配置
+# 此配置文件专门用于测试规则引擎的各种功能和性能
+
+# 网关核心配置
+gateway:
+  name: "IoT Gateway Rule Engine Test"
+  version: "1.0.0"
+  log_level: "info"
+  http_port: 8080
+  https_port: 8443
+  nats_url: "embedded"
+  plugins_dir: "./plugins"
+  enable_metrics: true
+  enable_profiling: true
+
+# 规则引擎配置
+rule_engine:
+  enabled: true
+  rules_dir: "./rules"
+  subject: "iot.data.>"
+  
+  # 内联规则定义
+  rules:
+    - id: "temperature_alert"
+      name: "温度报警规则"
+      description: "当温度超过40度时发送报警"
+      enabled: true
+      priority: 100
+      conditions:
+        type: "simple"
+        and:
+          - type: "simple"
+            field: "key"
+            operator: "eq"
+            value: "temperature"
+          - type: "simple"
+            field: "value"
+            operator: "gt"
+            value: 40
+      actions:
+        - type: "alert"
+          config:
+            level: "warning"
+            message: "设备{{.DeviceID}}温度过高: {{.Value}}°C"
+    
+    - id: "humidity_monitor"
+      name: "湿度监控规则"
+      description: "监控湿度变化"
+      enabled: true
+      priority: 50
+      conditions:
+        type: "simple"
+        field: "key"
+        operator: "eq"
+        value: "humidity"
+      actions:
+        - type: "aggregate"
+          config:
+            window_type: "count"
+            size: 10
+            functions: ["avg", "max", "min"]
+            group_by: ["device_id"]
+            output_key: "{{.Key}}_stats"
+            forward: true
+    
+    - id: "pressure_range_check"
+      name: "压力范围检查"
+      description: "检查压力是否在正常范围内"
+      enabled: true
+      priority: 75
+      conditions:
+        or:
+          - type: "simple"
+            field: "key"
+            operator: "eq"
+            value: "pressure"
+          - type: "simple"
+            field: "key"
+            operator: "eq"
+            value: "altitude"
+      actions:
+        - type: "filter"
+          config:
+            type: "range"
+            min: 0
+            max: 2000
+            drop_on_match: false
+        - type: "transform"
+          config:
+            field: "value"
+            transforms:
+              - type: "round"
+                precision: 1
+            add_tags:
+              validated: "true"
+
+# 南向适配器配置 - 数据源
+southbound:
+  adapters:
+    # Mock适配器 - 用于测试
+    - name: "mock_temperature_sensors"
+      type: "mock"
+      enabled: true
+      config:
+        device_id: "temp_sensor_01"
+        interval_ms: 1000
+        points:
+          - key: "temperature"
+            min: 15.0
+            max: 45.0
+            type: "float"
+            variance: 0.1
+          - key: "humidity" 
+            min: 30.0
+            max: 90.0
+            type: "float"
+            variance: 0.1
+    
+    # Mock适配器 - 压力传感器
+    - name: "mock_pressure_sensors"
+      type: "mock"
+      enabled: true
+      config:
+        device_id: "pressure_sensor_01"
+        interval_ms: 2000
+        points:
+          - key: "pressure"
+            min: 900.0
+            max: 1100.0
+            type: "float"
+            variance: 0.1
+          - key: "altitude"
+            min: 0.0
+            max: 2000.0
+            type: "float"
+            variance: 0.1
+    
+    # Mock适配器 - 高频数据流（用于性能测试）
+    - name: "mock_high_frequency"
+      type: "mock"
+      enabled: true
+      config:
+        device_id: "vibration_sensor_01"
+        interval_ms: 100
+        points:
+          - key: "vibration"
+            min: 0.0
+            max: 10.0
+            type: "float"
+            variance: 0.1
+          - key: "rotation_speed"
+            min: 1000.0
+            max: 5000.0
+            type: "float"
+            variance: 0.1
+
+# 北向输出配置 - 数据目的地
+northbound:
+  sinks:
+    # 控制台输出 - 用于调试
+#    - name: "console_debug"
+#      type: "console"
+#      enabled: true
+#      config:
+#        name: "console_debug"
+#        type: "console"
+#        batch_size: 10
+#        buffer_size: 1000
+    
+#    # 文件输出 - 用于数据分析
+#    - name: "file_logger"
+#      type: "file"
+#      enabled: true
+#      config:
+#        filename: "./logs/rule_engine_test_data.log"
+#        max_size: "100MB"
+#        max_files: 10
+#        format: "json"
+#        include_raw_data: true
+    
+    # WebSocket输出 - 用于实时监控
+    - name: "websocket_monitor"
+      type: "websocket"
+      enabled: true
+      config:
+        name: "websocket_monitor"
+        type: "websocket"
+        batch_size: 10
+        buffer_size: 1000
+        params:
+          address: ":8092"  # 改为8092端口，避免与其他服务冲突
+          path: "/ws/rules"
+          allow_origins: ["*"]
+          subscribe_topics:
+            - "iot.rules.>"
+          points: {}
+    
+    # MQTT输出 - 用于外部系统集成
+    - name: "mqtt_output"
+      type: "mqtt"
+      enabled: false  # 默认禁用，需要MQTT broker
+      config:
+        name: "mqtt_output"
+        type: "mqtt"
+        batch_size: 10
+        buffer_size: 1000
+        params:
+          broker: "tcp://localhost:1883"
+          client_id: "iot_gateway_rules_test"
+          topic_tpl: "iot/%s/%s"
+          qos: 1
+          retained: false
+
+# Web UI配置
+web_ui:
+  enabled: true
+  port: 8081
+  auth:
+    jwt_secret: "your-secret-key-change-in-production"
+    token_duration: "24h"
+    refresh_duration: "168h"
+    max_login_attempts: 5
+    lockout_duration: "15m"
+    enable_two_factor: false
+    session_timeout: "30m"
+    password_min_length: 6
+    bcrypt_cost: 10
+  
+  # WebSocket配置 - 用于实时数据推送
+  websocket:
+    max_clients: 50        # 最大客户端连接数
+    message_rate: 40       # 消息发送速率限制 (每秒) - 适应高频数据
+    read_buffer_size: 4096 # 读取缓冲区大小
+    write_buffer_size: 4096 # 写入缓冲区大小
+    cleanup_interval: 30   # 清理间隔 (秒)
+    inactivity_timeout: 300 # 不活跃超时 (秒)
+    ping_interval: 54      # Ping间隔 (秒)
+    pong_timeout: 60       # Pong超时 (秒)
+
+# 数据库配置（用于存储认证信息）
+database:
+  sqlite:
+    path: "./data/auth.db"
+
+# Rules配置（Web服务使用）
+rules:
+  dir: "./rules"

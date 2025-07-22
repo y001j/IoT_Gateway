@@ -1,0 +1,332 @@
+[
+  {
+    "id": "temperature_high_alert",
+    "name": "高温报警规则",
+    "description": "当温度超过40°C时触发报警",
+    "enabled": true,
+    "priority": "high",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'temperature' && value > 40"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "critical",
+          "message": "设备 {{.device_id}} 温度过高: {{.value}}°C",
+          "channels": ["console", "websocket"],
+          "throttle": "30s",
+          "metadata": {
+            "severity": "high",
+            "category": "temperature",
+            "auto_escalate": true
+          }
+        }
+      },
+      {
+        "type": "transform",
+        "config": {
+          "add_fields": {
+            "alert_type": "temperature_high",
+            "timestamp": "{{.timestamp}}",
+            "zone": "critical"
+          },
+          "output_subject": "iot.alerts.temperature.high"
+        }
+      }
+    ]
+  },
+  {
+    "id": "humidity_range_check",
+    "name": "湿度范围检查",
+    "description": "检查湿度是否在正常范围内(30%-70%)",
+    "enabled": true,
+    "priority": "medium",
+    "conditions": {
+      "type": "expression", 
+      "expression": "key == 'humidity' && (value < 30 || value > 70)"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "warning",
+          "message": "设备 {{.device_id}} 湿度异常: {{.value}}%",
+          "channels": ["console"],
+          "throttle": "2m"
+        }
+      }
+    ]
+  },
+  {
+    "id": "temperature_aggregation",
+    "name": "温度数据聚合",
+    "description": "对温度数据进行5分钟窗口聚合统计",
+    "enabled": true,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'temperature'"
+    },
+    "actions": [
+      {
+        "type": "aggregate",
+        "config": {
+          "window_size": 10,
+          "window_type": "sliding",
+          "functions": ["avg", "min", "max", "count", "stddev"],
+          "group_by": ["device_id"],
+          "output_interval": "30s",
+          "ttl": "5m",
+          "output_subject": "iot.aggregated.temperature"
+        }
+      }
+    ]
+  },
+  {
+    "id": "pressure_anomaly_detection",
+    "name": "压力异常检测",
+    "description": "检测压力传感器异常值",
+    "enabled": true,
+    "priority": "high",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'pressure' && (value < 900 || value > 1100)"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "error",
+          "message": "压力传感器 {{.device_id}} 读数异常: {{.value}} hPa",
+          "channels": ["console", "file", "websocket"],
+          "throttle": "1m"
+        }
+      },
+      {
+        "type": "filter",
+        "config": {
+          "action": "flag",
+          "reason": "pressure_anomaly",
+          "add_tags": ["anomaly", "pressure_out_of_range"],
+          "output_subject": "iot.anomalies.pressure"
+        }
+      }
+    ]
+  },
+  {
+    "id": "vibration_threshold",
+    "name": "振动阈值监控",
+    "description": "监控设备振动，超过8g时报警",
+    "enabled": true,
+    "priority": "critical",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'vibration' && value > 8.0"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "critical",
+          "message": "设备 {{.device_id}} 振动过大: {{.value}}g - 可能需要维护",
+          "channels": ["console", "websocket"],
+          "throttle": "10s",
+          "metadata": {
+            "maintenance_required": true,
+            "priority": "urgent"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "multi_sensor_correlation",
+    "name": "多传感器关联分析",
+    "description": "关联分析温度和湿度数据，检测异常组合",
+    "enabled": true,
+    "priority": "medium",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'temperature' && value > 35 && exists('humidity')"
+    },
+    "actions": [
+      {
+        "type": "aggregate",
+        "config": {
+          "window_size": 5,
+          "window_type": "tumbling",
+          "functions": ["avg", "correlation"],
+          "group_by": ["device_id"],
+          "correlation_fields": ["temperature", "humidity"],
+          "output_interval": "1m",
+          "output_subject": "iot.correlation.temp_humidity"
+        }
+      }
+    ]
+  },
+  {
+    "id": "device_health_monitor",
+    "name": "设备健康监控",
+    "description": "监控设备数据频率，检测离线设备",
+    "enabled": true,
+    "priority": "medium",
+    "conditions": {
+      "type": "expression",
+      "expression": "true"
+    },
+    "actions": [
+      {
+        "type": "aggregate",
+        "config": {
+          "window_size": 60,
+          "window_type": "sliding",
+          "functions": ["count", "rate"],
+          "group_by": ["device_id"],
+          "output_interval": "30s",
+          "min_count_threshold": 10,
+          "output_subject": "iot.health.device_status"
+        }
+      }
+    ]
+  },
+  {
+    "id": "data_quality_check",
+    "name": "数据质量检查",
+    "description": "检查数据完整性和有效性",
+    "enabled": true,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "true"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "validations": [
+            {
+              "field": "value",
+              "type": "numeric",
+              "required": true
+            },
+            {
+              "field": "device_id", 
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_]+$",
+              "required": true
+            },
+            {
+              "field": "timestamp",
+              "type": "timestamp",
+              "required": true,
+              "max_age": "5m"
+            }
+          ],
+          "on_validation_fail": "flag",
+          "output_subject": "iot.quality.validation_results"
+        }
+      }
+    ]
+  },
+  {
+    "id": "performance_benchmark",
+    "name": "性能基准测试规则",
+    "description": "用于测试规则引擎性能的简单规则",
+    "enabled": true,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "contains(device_id, 'vibration_sensor_')"
+    },
+    "actions": [
+      {
+        "type": "transform",
+        "config": {
+          "add_fields": {
+            "processed_at": "{{.timestamp}}",
+            "rule_id": "performance_benchmark",
+            "processing_latency": "{{.processing_time}}"
+          },
+          "multiply_value": 1.0,
+          "round_decimals": 2,
+          "output_subject": "iot.performance.benchmark"
+        }
+      }
+    ]
+  },
+  {
+    "id": "complex_expression_test",
+    "name": "复杂表达式测试",
+    "description": "测试复杂表达式解析和执行",
+    "enabled": true,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'temperature' && value > avg(last_values, 5) + 2*stddev(last_values, 5) && time_range(9, 17) && regex('temp_sensor_[0-9]+', device_id)"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "info",
+          "message": "复杂表达式匹配: 设备 {{.device_id}} 温度显著高于历史平均值",
+          "channels": ["console"],
+          "throttle": "5m"
+        }
+      }
+    ]
+  },
+  {
+    "id": "rate_limiting_test",
+    "name": "频率限制测试",
+    "description": "测试高频数据的处理和限流",
+    "enabled": true,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "key == 'rotation_speed'"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "rate_limit": {
+            "max_per_second": 10,
+            "window_size": "1s",
+            "group_by": ["device_id"]
+          },
+          "action": "sample",
+          "sampling_strategy": "uniform",
+          "output_subject": "iot.sampled.rotation_speed"
+        }
+      }
+    ]
+  },
+  {
+    "id": "error_injection_test",
+    "name": "错误注入测试",
+    "description": "用于测试错误处理机制",
+    "enabled": false,
+    "priority": "low",
+    "conditions": {
+      "type": "expression",
+      "expression": "random() < 0.001"
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "error",
+          "message": "测试错误: 随机错误注入 - 设备 {{.device_id}}",
+          "channels": ["console"],
+          "metadata": {
+            "test_error": true,
+            "error_type": "injection"
+          }
+        }
+      }
+    ]
+  }
+]

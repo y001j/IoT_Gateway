@@ -1,0 +1,61 @@
+{
+  "name": "modbus-test",
+  "type": "modbus",
+  "params": {
+    "mode": "tcp",
+    "tcp": {
+      "address": "127.0.0.1:502",
+      "timeout_ms": 5000
+    },
+    "interval_ms": 2000,
+    "registers": [
+      {
+        "name": "temperature",
+        "slave_id": 1,
+        "function": "read_holding_registers",
+        "address": 0,
+        "quantity": 1,
+        "data_type": "float",
+        "scale": 0.1,
+        "description": "温度传感器"
+      },
+      {
+        "name": "humidity",
+        "slave_id": 1,
+        "function": "read_holding_registers",
+        "address": 1,
+        "quantity": 1,
+        "data_type": "float",
+        "scale": 0.1,
+        "description": "湿度传感器"
+      },
+      {
+        "name": "pressure",
+        "slave_id": 1,
+        "function": "read_holding_registers",
+        "address": 2,
+        "quantity": 1,
+        "data_type": "float",
+        "description": "压力传感器"
+      },
+      {
+        "name": "status",
+        "slave_id": 1,
+        "function": "read_coils",
+        "address": 0,
+        "quantity": 1,
+        "data_type": "bool",
+        "description": "设备状态"
+      },
+      {
+        "name": "alarm",
+        "slave_id": 1,
+        "function": "read_discrete_inputs",
+        "address": 0,
+        "quantity": 1,
+        "data_type": "bool",
+        "description": "报警状态"
+      }
+    ]
+  }
+}

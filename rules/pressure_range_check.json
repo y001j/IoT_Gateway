@@ -1,0 +1,52 @@
+{
+  "id": "pressure_range_check",
+  "name": "压力范围检查",
+  "description": "检查压力是否在正常范围内",
+  "enabled": true,
+  "priority": 75,
+  "version": 1,
+  "conditions": {
+    "or": [
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "pressure"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "altitude"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "filter",
+      "config": {
+        "drop_on_match": false,
+        "max": 2000,
+        "min": 0,
+        "type": "range"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "validated": "true"
+        },
+        "field": "value",
+        "transforms": [
+          {
+            "precision": 1,
+            "type": "round"
+          }
+        ]
+      }
+    }
+  ],
+  "created_at": "2025-07-17T05:07:31.697970319+08:00",
+  "updated_at": "2025-07-17T05:07:31.69797039+08:00"
+}

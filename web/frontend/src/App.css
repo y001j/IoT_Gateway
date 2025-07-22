@@ -1,0 +1,95 @@
+/* App 组件样式 */
+.app-layout {
+  min-height: 100vh;
+  background-color: #f0f2f5;
+}
+
+/* 登录页面样式 */
+.login-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.login-form {
+  background: white;
+  padding: 40px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-title {
+  text-align: center;
+  margin-bottom: 24px;
+  color: #1890ff;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+/* 仪表板样式 */
+.dashboard-container {
+  padding: 24px;
+}
+
+.dashboard-header {
+  background: white;
+  padding: 16px 24px;
+  margin-bottom: 24px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.dashboard-content {
+  background: white;
+  padding: 24px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  min-height: 400px;
+}
+
+/* 卡片样式 */
+.status-card {
+  text-align: center;
+  padding: 20px;
+  border-radius: 6px;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+.status-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.status-card .ant-statistic-title {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.status-card .ant-statistic-content {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .login-form {
+    margin: 20px;
+    padding: 30px 20px;
+  }
+  
+  .dashboard-container {
+    padding: 16px;
+  }
+  
+  .dashboard-header,
+  .dashboard-content {
+    padding: 16px;
+  }
+} 

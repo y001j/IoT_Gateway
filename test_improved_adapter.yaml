@@ -1,0 +1,49 @@
+# 测试改进后的适配器配置
+gateway:
+  log_level: "debug"
+  nats_url: "embedded"
+  enable_embedded_nats: true
+  embedded_nats_port: 4222
+  api_port: 8081
+  web_port: 8080
+  plugins_dir: "./plugins"
+
+southbound:
+  adapters:
+    - name: "improved-mock"
+      type: "mock"
+      config:
+        name: "improved-mock"
+        device_id: "test-device-001"
+        interval_ms: 2000
+        points:
+          - key: "temperature"
+            min: 18.0
+            max: 28.0
+            type: "float"
+            variance: 0.2
+          - key: "humidity"
+            min: 40.0
+            max: 70.0
+            type: "float"
+            variance: 0.1
+          - key: "status"
+            type: "bool"
+            constant: true
+          - key: "counter"
+            min: 0
+            max: 100
+            type: "int"
+            variance: 0.1
+
+northbound:
+  sinks:
+    - name: "console-monitor"
+      type: "console"
+      config:
+        name: "console-monitor"
+        batch_size: 1
+        buffer_size: 100
+        params:
+          format: "json"
+          prefix: "[IMPROVED]"

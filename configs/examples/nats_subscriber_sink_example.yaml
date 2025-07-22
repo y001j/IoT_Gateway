@@ -1,0 +1,262 @@
+# NATS订阅器Sink配置示例
+# 这个配置展示了如何让sink订阅不同类型的NATS数据
+
+northbound:
+  sinks:
+    # 示例1: 订阅所有原始数据并转发到控制台
+    - name: "raw_data_console"
+      type: "nats_subscriber"
+      batch_size: 20
+      params:
+        # 数据处理配置
+        buffer_size: 1000
+        batch_size: 50
+        flush_interval: "2s"
+        
+        # 订阅配置
+        subscriptions:
+          - subject: "iot.data.>"           # 订阅所有原始数据
+            data_type: "raw"               # 数据类型：原始数据
+            enabled: true
+            tags:
+              source: "adapter"
+              category: "sensor_data"
+        
+        # 目标sink配置
+        target_sinks:
+          - name: "console_output"
+            type: "console"
+            params:
+              format: "json"
+
+    # 示例2: 订阅告警数据并转发到多个目标
+    - name: "alert_processor"
+      type: "nats_subscriber"
+      batch_size: 10
+      params:
+        buffer_size: 500
+        batch_size: 25
+        flush_interval: "1s"
+        
+        # 订阅告警相关主题
+        subscriptions:
+          - subject: "iot.alerts.triggered"
+            data_type: "alert"
+            enabled: true
+            tags:
+              source: "rule_engine"
+              category: "alert"
+          
+          - subject: "iot.alerts.triggered.critical"
+            data_type: "alert"
+            enabled: true
+            queue_group: "critical_alerts"  # 使用队列组确保负载均衡
+            tags:
+              source: "rule_engine"
+              category: "critical_alert"
+        
+        # 多个目标sink
+        target_sinks:
+          - name: "alert_console"
+            type: "console"
+            params:
+              format: "json"
+          
+          - name: "alert_influxdb"
+            type: "influxdb"
+            params:
+              url: "http://localhost:8086"
+              token: "your-token"
+              org: "your-org"
+              bucket: "alerts"
+        
+        # 过滤规则：只处理critical和warning级别的告警
+        filter_rules:
+          - field: "level"
+            operator: "eq"
+            value: "critical"
+            action: "include"
+          - field: "level"
+            operator: "eq"
+            value: "warning"
+            action: "include"
+
+    # 示例3: 订阅特定设备的数据并转换
+    - name: "device_specific_processor"
+      type: "nats_subscriber"
+      batch_size: 30
+      params:
+        buffer_size: 800
+        batch_size: 40
+        flush_interval: "3s"
+        
+        # 订阅特定设备的数据
+        subscriptions:
+          - subject: "iot.data.sensor_*.temperature"  # 所有温度传感器数据
+            data_type: "raw"
+            enabled: true
+            transform:
+              static_tags:
+                sensor_type: "temperature"
+                unit: "celsius"
+          
+          - subject: "iot.data.sensor_*.humidity"     # 所有湿度传感器数据
+            data_type: "raw"
+            enabled: true
+            transform:
+              static_tags:
+                sensor_type: "humidity"
+                unit: "percent"
+        
+        # 转发到时序数据库
+        target_sinks:
+          - name: "timeseries_db"
+            type: "influxdb"
+            params:
+              url: "http://localhost:8086"
+              token: "your-token"
+              org: "your-org"
+              bucket: "sensor_data"
+              measurement: "environmental_data"
+        
+        # 过滤规则：只处理有效的数值数据
+        filter_rules:
+          - field: "value"
+            operator: "gt"
+            value: -999
+            action: "include"
+
+    # 示例4: 订阅规则引擎处理后的数据
+    - name: "rule_output_processor"
+      type: "nats_subscriber"
+      batch_size: 15
+      params:
+        buffer_size: 600
+        batch_size: 30
+        flush_interval: "1.5s"
+        
+        # 订阅规则引擎输出
+        subscriptions:
+          - subject: "iot.rules.>"
+            data_type: "rule"
+            enabled: true
+            tags:
+              source: "rule_engine"
+              category: "processed_data"
+          
+          - subject: "aggregated.>"               # 聚合后的数据
+            data_type: "raw"
+            enabled: true
+            tags:
+              source: "aggregator"
+              category: "aggregated_data"
+        
+        # 转发到WebSocket和Redis
+        target_sinks:
+          - name: "websocket_live"
+            type: "websocket"
+            params:
+              port: 8080
+              path: "/live-data"
+          
+          - name: "redis_cache"
+            type: "redis"
+            params:
+              host: "localhost"
+              port: 6379
+              db: 0
+              key_prefix: "iot_processed:"
+
+    # 示例5: 系统事件处理
+    - name: "system_event_processor"
+      type: "nats_subscriber"
+      batch_size: 5
+      params:
+        buffer_size: 200
+        batch_size: 10
+        flush_interval: "500ms"
+        
+        # 订阅系统事件
+        subscriptions:
+          - subject: "iot.system.>"
+            data_type: "system"
+            enabled: true
+            tags:
+              source: "system"
+              category: "system_event"
+        
+        # 转发到日志系统
+        target_sinks:
+          - name: "system_log"
+            type: "console"
+            params:
+              format: "structured"
+              timestamp: true
+
+    # 示例6: 混合数据类型处理（高级用法）
+    - name: "mixed_data_processor"
+      type: "nats_subscriber"
+      batch_size: 25
+      params:
+        buffer_size: 1200
+        batch_size: 60
+        flush_interval: "2s"
+        
+        # 订阅多种数据类型
+        subscriptions:
+          # 原始传感器数据
+          - subject: "iot.data.sensor_*.>"
+            data_type: "raw"
+            enabled: true
+            tags:
+              source: "sensor"
+              category: "raw_data"
+          
+          # 告警数据
+          - subject: "iot.alerts.triggered"
+            data_type: "alert"
+            enabled: true
+            tags:
+              source: "alert_system"
+              category: "alert_data"
+          
+          # 规则处理结果
+          - subject: "iot.rules.output"
+            data_type: "rule"
+            enabled: true
+            tags:
+              source: "rule_engine"
+              category: "processed_data"
+        
+        # 转发到综合数据平台
+        target_sinks:
+          - name: "data_platform"
+            type: "jetstream"
+            params:
+              url: "nats://localhost:4222"
+              stream_name: "IOT_DATA_STREAM"
+              subject: "platform.data.mixed"
+              max_age: "24h"
+              max_bytes: 1073741824  # 1GB
+          
+          - name: "analytics_db"
+            type: "influxdb"
+            params:
+              url: "http://localhost:8086"
+              token: "analytics-token"
+              org: "analytics-org"
+              bucket: "mixed_data"
+        
+        # 复杂过滤规则
+        filter_rules:
+          # 排除测试数据
+          - field: "device_id"
+            operator: "contains"
+            value: "test"
+            action: "exclude"
+          
+          # 只包含有效数据
+          - field: "value"
+            operator: "ne"
+            value: null
+            action: "include"

@@ -1,0 +1,122 @@
+# 规则引擎优化测试配置
+gateway:
+  data_port: 4222
+  web_port: 8081
+  log_level: "info"
+  nats_url: "nats://localhost:4222"
+  plugins_dir: "./plugins"
+  embedded_nats: true
+
+# 🆕 优化后的规则引擎配置
+rule_engine:
+  enabled: true
+  rules_dir: "./rules"
+  
+  # 🚀 工作池配置（新增）
+  worker_pool:
+    size: 8                    # 并行工作线程数
+    queue_size: 1000          # 任务队列大小
+    batch_size: 50            # 批处理大小
+    batch_timeout: "100ms"    # 批处理超时
+    
+  # 🚀 对象池优化（新增）
+  object_pools:
+    enabled: true             # 启用对象池
+    point_batch_pool: 100     # 数据点批次池大小
+    json_buffer_pool: 200     # JSON缓冲区池大小
+    device_map_pool: 50       # 设备映射池大小
+    
+  # 🚀 聚合优化配置（新增）
+  aggregation:
+    enable_incremental: true   # 启用增量统计
+    state_cleanup_interval: "5m"  # 状态清理间隔
+    max_states: 10000         # 最大聚合状态数
+    default_ttl: "10m"        # 默认TTL
+    
+  # 🚀 NATS优化（新增）
+  nats:
+    batch_publish: true       # 批量发布
+    batch_size: 100          # 批量大小
+    flush_timeout: "10ms"    # 刷新超时
+    async_publish: true      # 异步发布
+    
+  # 缓存配置
+  cache:
+    rules:
+      size: 5000             # 规则缓存大小
+      ttl: "30m"            # 规则缓存TTL
+    plugin_metadata:
+      size: 1000             # 插件元数据缓存
+      ttl: "1h"             # 元数据缓存TTL
+      
+  # 🆕 监控配置（新增）
+  monitoring:
+    enabled: true
+    metrics_retention: "24h"  # 指标保留时间
+    error_retention: "7d"     # 错误保留时间
+    health_check_interval: "30s"  # 健康检查间隔
+
+# Southbound适配器配置
+southbound:
+  adapters:
+    - name: "mock-test-adapter"
+      type: "mock"
+      enabled: true
+      config:
+        device_id: "test-device-optimized"
+        interval_ms: 100  # 高频率测试
+        points:
+          - key: "temperature"
+            min: 20.0
+            max: 40.0
+            type: "float"
+            variance: 0.1
+          - key: "humidity" 
+            min: 30.0
+            max: 70.0
+            type: "float"
+            variance: 0.05
+          - key: "pressure"
+            min: 950.0
+            max: 1050.0
+            type: "float"
+            variance: 0.02
+          - key: "voltage"
+            min: 3.0
+            max: 5.0
+            type: "float"
+            variance: 0.01
+          - key: "status"
+            min: 0
+            max: 1
+            type: "int"
+            variance: 0.1
+
+# Northbound接收器配置
+northbound:
+  sinks:
+    - name: "console-test-sink"
+      type: "console"
+      enabled: true
+      config:
+        format: "json"
+        timestamp: true
+        
+    - name: "websocket-test-sink"
+      type: "websocket"
+      enabled: true
+      config:
+        path: "/ws/data"
+        buffer_size: 1000
+        heartbeat_interval: "30s"
+
+# Web UI配置
+web_ui:
+  enabled: true
+  port: 8081
+  static_dir: "./web/frontend/dist"
+  auth:
+    enabled: false  # 测试时禁用认证
+  cors:
+    enabled: true
+    origins: ["*"]

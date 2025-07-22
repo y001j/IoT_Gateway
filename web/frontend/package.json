@@ -1,0 +1,55 @@
+{
+  "name": "iot-gateway-web-frontend",
+  "version": "1.0.0",
+  "description": "IoT Gateway Web管理界面前端",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint:fix": "eslint . --ext ts,tsx --fix"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.2.6",
+    "@monaco-editor/react": "^4.6.0",
+    "antd": "^5.15.1",
+    "axios": "^1.6.7",
+    "dayjs": "^1.11.13",
+    "echarts": "^5.5.0",
+    "echarts-for-react": "^3.0.2",
+    "monaco-editor": "^0.46.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.1",
+    "zustand": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.13",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.33.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "less": "^4.2.0",
+    "terser": "^5.43.1",
+    "typescript": "^5.3.3",
+    "vite": "^7.0.4"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

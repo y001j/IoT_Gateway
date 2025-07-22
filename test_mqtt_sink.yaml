@@ -1,0 +1,55 @@
+# MQTT北向连接器测试配置
+southbound:
+  adapters:
+    - name: "mock-test"
+      type: "mock"
+      config:
+        name: "mock-test"
+        interval: 3
+        devices:
+          - device_id: "sensor001"
+            metrics:
+              - key: "temperature"
+                min: 15.0
+                max: 35.0
+                unit: "°C"
+              - key: "humidity"
+                min: 30.0
+                max: 80.0
+                unit: "%"
+
+northbound:
+  sinks:
+    - name: "mqtt-test"
+      type: "mqtt"
+      config:
+        name: "mqtt-test"
+        batch_size: 1
+        buffer_size: 100
+        params:
+          broker: "tcp://127.0.0.1:1883"
+          client_id: "iot-gateway-test"
+          username: ""
+          password: ""
+          topic_tpl: "test/devices/%s/%s"
+          qos: 0
+          retained: false
+
+    - name: "console-test"
+      type: "console"
+      config:
+        name: "console-test"
+        batch_size: 10
+        buffer_size: 100
+        params:
+          format: "json"
+          prefix: "[MQTT测试]"
+
+gateway:
+  log_level: "info"
+  nats_url: "embedded"
+  enable_embedded_nats: true
+  embedded_nats_port: 4222
+  api_port: 8081
+  web_port: 8080
+  plugins_dir: "./plugins"

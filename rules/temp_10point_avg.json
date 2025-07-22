@@ -1,0 +1,64 @@
+{
+  "id": "temp_10point_avg",
+  "name": "温度10点移动平均值",
+  "description": "计算每个温度传感器的10点移动平均值并发送回数据总线",
+  "enabled": true,
+  "priority": 10,
+  "version": 1,
+  "conditions": {
+    "or": [
+      {
+        "field": "key",
+        "operator": "eq",
+        "value": "temperature"
+      },
+      {
+        "field": "key",
+        "operator": "eq",
+        "value": "temperature2"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "aggregate",
+      "config": {
+        "buffer_size": 100,
+        "count": 10,
+        "functions": [
+          "avg"
+        ],
+        "group_by": [
+          "key",
+          "device_id"
+        ],
+        "output": {
+          "forward": true,
+          "key_template": "{{.key}}_avg",
+          "subject_template": "iot.data.{{.key}}_avg"
+        },
+        "trigger": "count",
+        "type": "count_window"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "aggregated": "true",
+          "function": "avg",
+          "window_size": "10"
+        },
+        "field": "value",
+        "transforms": [
+          {
+            "precision": 2,
+            "type": "round"
+          }
+        ]
+      }
+    }
+  ],
+  "created_at": "2025-07-13T06:09:05.627866646+08:00",
+  "updated_at": "2025-07-13T06:09:05.627866754+08:00"
+}

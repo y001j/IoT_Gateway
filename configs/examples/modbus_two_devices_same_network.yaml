@@ -1,0 +1,74 @@
+# 方案一：同一网络不同设备ID配置
+southbound:
+  adapters:
+    # 设备1：温湿度传感器
+    - name: "modbus-device1"
+      type: "modbus"
+      config:
+        name: "modbus-device1"
+        mode: "tcp"
+        address: "192.168.1.100:502"  # 你的Modbus网关地址
+        timeout_ms: 3000
+        interval_ms: 2000
+        max_retries: 3
+        retry_interval: 5000
+        unit_id: 1  # 设备1的从站ID
+        registers:
+          - key: "device1_temperature"
+            address: 0
+            quantity: 1
+            type: "int16"
+            function: 3
+            scale: 0.1
+            device_id: 1
+            tags:
+              description: "设备1温度传感器"
+              unit: "°C"
+              location: "车间A"
+          - key: "device1_humidity"
+            address: 1
+            quantity: 1
+            type: "int16"
+            function: 3
+            scale: 0.1
+            device_id: 1
+            tags:
+              description: "设备1湿度传感器"
+              unit: "%"
+              location: "车间A"
+    
+    # 设备2：压力传感器
+    - name: "modbus-device2"
+      type: "modbus"
+      config:
+        name: "modbus-device2"
+        mode: "tcp"
+        address: "192.168.1.100:502"  # 同一个网关地址
+        timeout_ms: 3000
+        interval_ms: 2000
+        max_retries: 3
+        retry_interval: 5000
+        unit_id: 2  # 设备2的从站ID（不同于设备1）
+        registers:
+          - key: "device2_pressure"
+            address: 0
+            quantity: 1
+            type: "float"
+            function: 3
+            scale: 1.0
+            device_id: 2
+            tags:
+              description: "设备2压力传感器"
+              unit: "bar"
+              location: "车间B"
+          - key: "device2_flow_rate"
+            address: 2
+            quantity: 1
+            type: "float"
+            function: 3
+            scale: 0.01
+            device_id: 2
+            tags:
+              description: "设备2流量传感器"
+              unit: "L/min"
+              location: "车间B" 

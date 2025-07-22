@@ -1,0 +1,84 @@
+{
+  "name": "modbus-multi-device-sidecar",
+  "type": "adapter",
+  "adapter_type": "modbus",
+  "version": "1.0.0",
+  "description": "Multiple Modbus devices via ISP Sidecar",
+  "entry": "modbus-sidecar/modbus-sidecar.exe",
+  "config": {
+    "isp_addr": "localhost:8501",
+    "log_level": "info",
+    "devices": [
+      {
+        "name": "device1",
+        "address": "192.168.1.100:502",
+        "unit_id": 1,
+        "timeout_ms": 3000,
+        "interval_ms": 2000,
+        "registers": [
+          {
+            "key": "device1_temperature",
+            "address": 0,
+            "quantity": 1,
+            "type": "int16",
+            "function": 3,
+            "scale": 0.1,
+            "tags": {
+              "description": "设备1温度",
+              "unit": "°C",
+              "location": "产线1"
+            }
+          },
+          {
+            "key": "device1_humidity",
+            "address": 1,
+            "quantity": 1,
+            "type": "int16",
+            "function": 3,
+            "scale": 0.1,
+            "tags": {
+              "description": "设备1湿度",
+              "unit": "%",
+              "location": "产线1"
+            }
+          }
+        ]
+      },
+      {
+        "name": "device2",
+        "address": "192.168.1.101:502",
+        "unit_id": 1,
+        "timeout_ms": 3000,
+        "interval_ms": 3000,
+        "registers": [
+          {
+            "key": "device2_pressure",
+            "address": 0,
+            "quantity": 1,
+            "type": "float",
+            "function": 3,
+            "scale": 1.0,
+            "tags": {
+              "description": "设备2压力",
+              "unit": "bar",
+              "location": "产线2"
+            }
+          },
+          {
+            "key": "device2_flow",
+            "address": 2,
+            "quantity": 1,
+            "type": "float",
+            "function": 3,
+            "scale": 0.01,
+            "tags": {
+              "description": "设备2流量",
+              "unit": "L/min",
+              "location": "产线2"
+            }
+          }
+        ]
+      }
+    ]
+  }
+} 

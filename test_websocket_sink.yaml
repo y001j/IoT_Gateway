@@ -1,0 +1,50 @@
+# WebSocket北向连接器测试配置
+southbound:
+  adapters:
+    - name: "mock-test"
+      type: "mock"
+      config:
+        name: "mock-test"
+        interval: 2
+        devices:
+          - device_id: "sensor001"
+            metrics:
+              - key: "temperature"
+                min: 20.0
+                max: 30.0
+                unit: "°C"
+              - key: "humidity"
+                min: 40.0
+                max: 80.0
+                unit: "%"
+
+northbound:
+  sinks:
+    - name: "websocket-test"
+      type: "websocket"
+      config:
+        name: "websocket-test"
+        batch_size: 1
+        buffer_size: 100
+        params:
+          address: ":8082"
+          path: "/ws"
+          allow_origins: ["*"]
+          points:
+            "*":
+              topic: "sensor-data"
+              format: "full"
+
+    - name: "console-test"
+      type: "console"
+      config:
+        name: "console-test"
+        batch_size: 1
+        buffer_size: 100
+
+gateway:
+  log_level: "info"
+  nats_url: "embedded"
+  api_port: 8081
+  web_port: 8080
+  plugins_dir: "./plugins"

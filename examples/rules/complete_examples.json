@@ -1,0 +1,696 @@
+[
+  {
+    "id": "temperature_monitoring",
+    "name": "温度监控系统",
+    "description": "监控设备温度，超过阈值时发送报警并记录日志",
+    "enabled": true,
+    "priority": 1,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "key",
+          "operator": "eq",
+          "value": "temperature"
+        },
+        {
+          "type": "simple",
+          "field": "value",
+          "operator": "gt",
+          "value": 35.0
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "warning",
+          "message": "高温报警: 设备 {{.DeviceID}} 温度达到 {{.Value}}°C",
+          "channels": [
+            {
+              "type": "console",
+              "enabled": true
+            },
+            {
+              "type": "webhook",
+              "enabled": true,
+              "config": {
+                "url": "https://api.example.com/alerts",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json",
+                  "Authorization": "Bearer your-token"
+                }
+              }
+            }
+          ],
+          "throttle": "5m"
+        }
+      },
+      {
+        "type": "forward",
+        "config": {
+          "targets": [
+            {
+              "name": "alert_log",
+              "type": "file",
+              "enabled": true,
+              "config": {
+                "path": "/var/log/iot-gateway/temperature_alerts.log",
+                "format": "text",
+                "template": "{{.timestamp}} ALERT [{{.device_id}}] Temperature: {{.value}}°C\n",
+                "append": true
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "tags": {
+      "category": "temperature",
+      "severity": "high"
+    }
+  },
+  {
+    "id": "humidity_data_processing",
+    "name": "湿度数据处理",
+    "description": "处理湿度数据，进行单位转换和范围过滤",
+    "enabled": true,
+    "priority": 2,
+    "conditions": {
+      "type": "simple",
+      "field": "key",
+      "operator": "eq",
+      "value": "humidity"
+    },
+    "actions": [
+      {
+        "type": "transform",
+        "config": {
+          "field": "value",
+          "transforms": [
+            {
+              "type": "scale",
+              "factor": 100
+            },
+            {
+              "type": "round",
+              "precision": 1
+            },
+            {
+              "type": "clamp",
+              "min": 0,
+              "max": 100
+            }
+          ],
+          "output_field": "humidity_percent",
+          "error_handling": "default",
+          "default_value": 50.0
+        }
+      },
+      {
+        "type": "filter",
+        "config": {
+          "filters": [
+            {
+              "type": "range",
+              "field": "humidity_percent",
+              "min": 0,
+              "max": 100
+            },
+            {
+              "type": "duplicate",
+              "field": "humidity_percent",
+              "window": "30s"
+            }
+          ],
+          "action": "pass"
+        }
+      }
+    ],
+    "tags": {
+      "category": "humidity",
+      "processing": "transform"
+    }
+  },
+  {
+    "id": "sensor_data_aggregation",
+    "name": "传感器数据聚合",
+    "description": "对传感器数据进行实时聚合统计",
+    "enabled": true,
+    "priority": 3,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "device_id",
+          "operator": "startswith",
+          "value": "sensor_"
+        },
+        {
+          "type": "simple",
+          "field": "type",
+          "operator": "eq",
+          "value": "float"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "aggregate",
+        "config": {
+          "window": {
+            "type": "time",
+            "size": "5m"
+          },
+          "functions": ["avg", "max", "min", "count", "stddev"],
+          "group_by": ["device_id", "key"],
+          "trigger": {
+            "type": "time",
+            "interval": "1m"
+          },
+          "output_subject": "aggregated.{{.device_id}}.{{.key}}"
+        }
+      }
+    ],
+    "tags": {
+      "category": "aggregation",
+      "type": "realtime"
+    }
+  },
+  {
+    "id": "device_status_monitor",
+    "name": "设备状态监控",
+    "description": "监控设备状态变化，记录状态转换",
+    "enabled": true,
+    "priority": 4,
+    "conditions": {
+      "type": "simple",
+      "field": "key",
+      "operator": "eq",
+      "value": "status"
+    },
+    "actions": [
+      {
+        "type": "transform",
+        "config": {
+          "field": "value",
+          "transforms": [
+            {
+              "type": "map",
+              "mapping": {
+                "0": "offline",
+                "1": "online",
+                "2": "error",
+                "3": "maintenance"
+              }
+            }
+          ],
+          "output_field": "status_text",
+          "error_handling": "default",
+          "default_value": "unknown"
+        }
+      },
+      {
+        "type": "forward",
+        "config": {
+          "targets": [
+            {
+              "name": "status_database",
+              "type": "http",
+              "enabled": true,
+              "async": true,
+              "timeout": "10s",
+              "retry": 3,
+              "config": {
+                "url": "http://localhost:8080/api/device-status",
+                "method": "POST",
+                "content_type": "application/json"
+              }
+            },
+            {
+              "name": "status_log",
+              "type": "file",
+              "enabled": true,
+              "config": {
+                "path": "/var/log/iot-gateway/device_status.json",
+                "format": "json",
+                "append": true
+              }
+            }
+          ],
+          "add_rule_info": true,
+          "data_transform": {
+            "fields": ["device_id", "status_text", "timestamp"],
+            "constants": {
+              "source": "iot-gateway",
+              "type": "status_change"
+            }
+          }
+        }
+      }
+    ],
+    "tags": {
+      "category": "status",
+      "monitoring": "device"
+    }
+  },
+  {
+    "id": "error_condition_alert",
+    "name": "错误条件报警",
+    "description": "检测设备错误状态并发送紧急报警",
+    "enabled": true,
+    "priority": 0,
+    "conditions": {
+      "type": "or",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "key",
+          "operator": "eq",
+          "value": "error"
+        },
+        {
+          "type": "and",
+          "conditions": [
+            {
+              "type": "simple",
+              "field": "key",
+              "operator": "eq",
+              "value": "status"
+            },
+            {
+              "type": "simple",
+              "field": "value",
+              "operator": "eq",
+              "value": "error"
+            }
+          ]
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "critical",
+          "message": "设备错误: {{.DeviceID}} - {{.Key}}: {{.Value}}",
+          "channels": [
+            {
+              "type": "console",
+              "enabled": true
+            },
+            {
+              "type": "webhook",
+              "enabled": true,
+              "config": {
+                "url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json"
+                }
+              }
+            }
+          ],
+          "throttle": "1m"
+        }
+      },
+      {
+        "type": "forward",
+        "config": {
+          "targets": [
+            {
+              "name": "error_mqtt",
+              "type": "mqtt",
+              "enabled": true,
+              "async": true,
+              "timeout": "15s",
+              "retry": 2,
+              "config": {
+                "broker": "tcp://localhost:1883",
+                "topic": "alerts/error/{{.device_id}}",
+                "qos": 2,
+                "retain": true,
+                "format": "json"
+              }
+            },
+            {
+              "name": "error_file",
+              "type": "file",
+              "enabled": true,
+              "config": {
+                "path": "/var/log/iot-gateway/errors.log",
+                "format": "text",
+                "template": "{{.timestamp}} ERROR [{{.device_id}}] {{.key}}={{.value}}\n",
+                "append": true
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "tags": {
+      "category": "error",
+      "priority": "critical"
+    }
+  },
+  {
+    "id": "power_consumption_analysis",
+    "name": "功耗分析",
+    "description": "分析设备功耗数据，计算能耗统计",
+    "enabled": true,
+    "priority": 5,
+    "conditions": {
+      "type": "simple",
+      "field": "key",
+      "operator": "eq",
+      "value": "power"
+    },
+    "actions": [
+      {
+        "type": "transform",
+        "config": {
+          "field": "value",
+          "transforms": [
+            {
+              "type": "unit_convert",
+              "from": "watts",
+              "to": "kilowatts"
+            },
+            {
+              "type": "round",
+              "precision": 3
+            }
+          ],
+          "output_field": "power_kw",
+          "error_handling": "ignore"
+        }
+      },
+      {
+        "type": "aggregate",
+        "config": {
+          "window": {
+            "type": "time",
+            "size": "1h"
+          },
+          "functions": ["sum", "avg", "max"],
+          "group_by": ["device_id"],
+          "trigger": {
+            "type": "time",
+            "interval": "15m"
+          },
+          "output_subject": "energy.{{.device_id}}"
+        }
+      },
+      {
+        "type": "filter",
+        "config": {
+          "filters": [
+            {
+              "type": "threshold",
+              "field": "power_kw",
+              "threshold": 10.0,
+              "action": "alert"
+            }
+          ]
+        }
+      }
+    ],
+    "tags": {
+      "category": "power",
+      "analysis": "consumption"
+    }
+  },
+  {
+    "id": "data_quality_check",
+    "name": "数据质量检查",
+    "description": "检查数据质量，过滤异常数据",
+    "enabled": true,
+    "priority": 6,
+    "conditions": {
+      "type": "simple",
+      "field": "type",
+      "operator": "ne",
+      "value": "string"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "filters": [
+            {
+              "type": "null",
+              "field": "value",
+              "action": "drop"
+            },
+            {
+              "type": "range",
+              "field": "value",
+              "min": -1000,
+              "max": 10000
+            },
+            {
+              "type": "rate_limit",
+              "max_rate": 100,
+              "window": "1s",
+              "action": "drop"
+            }
+          ],
+          "action": "pass"
+        }
+      },
+      {
+        "type": "transform",
+        "config": {
+          "field": "value",
+          "transforms": [
+            {
+              "type": "expression",
+              "expression": "abs(value)"
+            }
+          ],
+          "output_field": "abs_value",
+          "error_handling": "ignore"
+        }
+      }
+    ],
+    "tags": {
+      "category": "quality",
+      "type": "validation"
+    }
+  },
+  {
+    "id": "multi_target_forwarding",
+    "name": "多目标数据转发",
+    "description": "将处理后的数据转发到多个目标系统",
+    "enabled": true,
+    "priority": 7,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "tags.processed",
+          "operator": "eq",
+          "value": true
+        },
+        {
+          "type": "simple",
+          "field": "type",
+          "operator": "eq",
+          "value": "float"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "forward",
+        "config": {
+          "targets": [
+            {
+              "name": "influxdb",
+              "type": "http",
+              "enabled": true,
+              "async": true,
+              "timeout": "10s",
+              "retry": 3,
+              "config": {
+                "url": "http://localhost:8086/write?db=iot",
+                "method": "POST",
+                "content_type": "text/plain",
+                "template": "{{.key}},device={{.device_id}} value={{.value}} {{.timestamp}}"
+              }
+            },
+            {
+              "name": "elasticsearch",
+              "type": "http",
+              "enabled": true,
+              "async": true,
+              "timeout": "15s",
+              "retry": 2,
+              "config": {
+                "url": "http://localhost:9200/iot-data/_doc",
+                "method": "POST",
+                "content_type": "application/json"
+              }
+            },
+            {
+              "name": "mqtt_cloud",
+              "type": "mqtt",
+              "enabled": true,
+              "async": true,
+              "timeout": "20s",
+              "retry": 3,
+              "config": {
+                "broker": "ssl://mqtt.cloud.example.com:8883",
+                "topic": "devices/{{.device_id}}/telemetry",
+                "qos": 1,
+                "retain": false,
+                "format": "json",
+                "tls": true
+              }
+            },
+            {
+              "name": "backup_file",
+              "type": "file",
+              "enabled": true,
+              "config": {
+                "path": "/var/backup/iot-data/{{.device_id}}/{{.key}}.json",
+                "format": "json",
+                "append": true
+              }
+            }
+          ],
+          "add_rule_info": true,
+          "add_timestamp": true,
+          "data_transform": {
+            "constants": {
+              "source": "iot-gateway",
+              "version": "1.0"
+            }
+          }
+        }
+      }
+    ],
+    "tags": {
+      "category": "forwarding",
+      "targets": "multiple"
+    }
+  },
+  {
+    "id": "complex_condition_example",
+    "name": "复杂条件示例",
+    "description": "演示复杂条件逻辑的使用",
+    "enabled": true,
+    "priority": 8,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "or",
+          "conditions": [
+            {
+              "type": "simple",
+              "field": "device_id",
+              "operator": "startswith",
+              "value": "critical_"
+            },
+            {
+              "type": "simple",
+              "field": "tags.priority",
+              "operator": "eq",
+              "value": "high"
+            }
+          ]
+        },
+        {
+          "type": "not",
+          "condition": {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "heartbeat"
+          }
+        },
+        {
+          "type": "expression",
+          "expression": "value > 50 && timestamp > now() - 3600"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "alert",
+        "config": {
+          "level": "info",
+          "message": "复杂条件匹配: {{.DeviceID}} - {{.Key}}: {{.Value}}",
+          "channels": [
+            {
+              "type": "console",
+              "enabled": true
+            }
+          ]
+        }
+      }
+    ],
+    "tags": {
+      "category": "example",
+      "type": "complex_condition"
+    }
+  },
+  {
+    "id": "batch_processing_example",
+    "name": "批处理示例",
+    "description": "演示批量数据处理",
+    "enabled": true,
+    "priority": 9,
+    "conditions": {
+      "type": "simple",
+      "field": "tags.batch",
+      "operator": "eq",
+      "value": true
+    },
+    "actions": [
+      {
+        "type": "aggregate",
+        "config": {
+          "window": {
+            "type": "count",
+            "size": 100
+          },
+          "functions": ["count", "avg", "sum"],
+          "group_by": ["device_id"],
+          "trigger": {
+            "type": "count",
+            "threshold": 100
+          },
+          "output_subject": "batch.processed"
+        }
+      },
+      {
+        "type": "forward",
+        "config": {
+          "targets": [
+            {
+              "name": "batch_file",
+              "type": "file",
+              "enabled": true,
+              "config": {
+                "path": "/var/batch/processed_{{.timestamp}}.csv",
+                "format": "csv",
+                "append": false
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "tags": {
+      "category": "batch",
+      "processing": "bulk"
+    }
+  }
+] 

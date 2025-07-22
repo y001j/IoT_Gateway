@@ -1,0 +1,168 @@
+# IoT Gateway Web API 配置文件
+
+# 服务器配置
+server:
+  addr: ":8081"  # 修改为8081端口，避免与gateway服务的8080端口冲突
+
+# 安全配置
+security:
+  jwt_secret: "your-secret-key-change-in-production"
+  jwt_expires_in: 24h
+  jwt_refresh_expires_in: 604800  # 7天
+  bcrypt_cost: 10
+
+# CORS 配置
+cors:
+  allowed_origins:
+    - "http://localhost:5173"  # Vite dev server
+    - "http://localhost:3000"  # Alternative dev server
+  allowed_methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "OPTIONS"
+  allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+  exposed_headers:
+    - "Authorization"
+  allow_credentials: true
+  max_age: 300
+
+# 日志配置
+logging:
+  level: "debug"
+  format: "json"
+  output: "console"  # console, file, both
+  file_path: "/var/log/iot-gateway-web.log"
+  max_size: 100  # MB
+  max_files: 10
+  max_age: 30  # 天
+  compress: true
+
+# 数据库配置
+database:
+  type: "sqlite"  # sqlite, mysql, postgres
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: ""
+  database: "iot_gateway"
+  charset: "utf8mb4"
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600s
+  sqlite:
+    path: "./data/auth.db"
+
+# Redis 配置（如果需要）
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""
+  database: 0
+  pool_size: 10
+  min_idle_conns: 5
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+# WebSocket 配置
+websocket:
+  enabled: true
+  path: "/ws"
+  check_origin: false
+  read_buffer_size: 1024
+  write_buffer_size: 1024
+  max_message_size: 1048576  # 1MB
+  ping_period: 54s
+  pong_wait: 60s
+  write_wait: 10s
+
+# 文件上传配置
+upload:
+  max_size: 10485760  # 10MB
+  allowed_types:
+    - ".json"
+    - ".yaml"
+    - ".yml"
+    - ".txt"
+    - ".log"
+  upload_dir: "./uploads"
+
+# 导出配置
+export:
+  temp_dir: "./temp"
+  max_file_size: 104857600  # 100MB
+  cleanup_interval: 3600s  # 1小时
+
+# 性能配置
+performance:
+  cache_enabled: true
+  cache_ttl: 300s  # 5分钟
+  max_concurrent_requests: 1000
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+    burst: 20
+
+# 开发配置
+development:
+  debug: true
+  pprof_enabled: true
+  swagger_enabled: true
+  mock_data: true
+  auto_migrate: true
+
+# 认证配置
+auth:
+  jwt_secret: "your-secret-key-change-in-production"
+  token_duration: "24h"
+  refresh_duration: "168h"  # 7 days
+  max_login_attempts: 5
+  lockout_duration: "15m"
+  enable_two_factor: false
+  session_timeout: "30m"
+  password_min_length: 6
+  bcrypt_cost: 10
+
+# 插件和规则目录配置（仅用于管理界面）
+plugins:
+  dir: "./plugins"
+
+rules:
+  dir: "./data/rules"
+
+# IoT Gateway 集成配置（用于连接到主Gateway服务）
+iot_gateway:
+  # Gateway 主程序路径
+  gateway_path: "../../iot-gateway.exe"
+  
+  # 配置文件路径
+  config_path: "../../config.yaml"
+  
+  # 插件目录
+  plugins_dir: "./plugins"
+  
+  # 日志目录
+  logs_dir: "../../logs"
+  
+  # 数据目录
+  data_dir: "../../data"
+  
+  # NATS 连接配置（用于连接到Gateway的NATS服务）
+  nats:
+    url: "nats://localhost:4222"
+    cluster_id: "iot-cluster"
+    client_id: "web-client"
+    
+  # 监控配置
+  monitoring:
+    enabled: true
+    interval: 30s
+    metrics_endpoint: "http://localhost:8080/metrics"  # Gateway服务的metrics端点
+
+# 注意：IoT设备适配器和连接器配置已移除
+# 这些配置应该在Gateway主服务的config.yaml中配置
+# Web API服务仅提供管理界面和API，不直接处理IoT数据 

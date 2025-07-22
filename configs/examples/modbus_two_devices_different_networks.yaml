@@ -1,0 +1,95 @@
+# 方案二：不同网络地址配置
+southbound:
+  adapters:
+    # 设备1：直接连接的设备
+    - name: "modbus-device1"
+      type: "modbus"
+      config:
+        name: "modbus-device1"
+        mode: "tcp"
+        address: "192.168.1.100:502"  # 设备1的IP地址
+        timeout_ms: 3000
+        interval_ms: 2000
+        max_retries: 3
+        retry_interval: 5000
+        unit_id: 1
+        registers:
+          - key: "device1_temperature"
+            address: 0
+            quantity: 1
+            type: "int16"
+            function: 3
+            scale: 0.1
+            device_id: 1
+            tags:
+              description: "设备1温度"
+              unit: "°C"
+              ip: "192.168.1.100"
+          - key: "device1_status"
+            address: 100
+            quantity: 1
+            type: "bool"
+            function: 1  # 读取线圈状态
+            device_id: 1
+            tags:
+              description: "设备1运行状态"
+              type: "status"
+    
+    # 设备2：另一个网络的设备
+    - name: "modbus-device2"
+      type: "modbus"
+      config:
+        name: "modbus-device2"
+        mode: "tcp"
+        address: "192.168.1.101:502"  # 设备2的IP地址（不同网络）
+        timeout_ms: 3000
+        interval_ms: 3000  # 可以设置不同的采集间隔
+        max_retries: 3
+        retry_interval: 5000
+        unit_id: 1  # 可以使用相同的unit_id，因为是不同的网络连接
+        registers:
+          - key: "device2_pressure"
+            address: 0
+            quantity: 1
+            type: "float"
+            function: 3
+            scale: 1.0
+            device_id: 1
+            tags:
+              description: "设备2压力"
+              unit: "bar"
+              ip: "192.168.1.101"
+          - key: "device2_motor_speed"
+            address: 10
+            quantity: 1
+            type: "int32"
+            function: 3
+            scale: 1.0
+            device_id: 1
+            tags:
+              description: "设备2电机转速"
+              unit: "rpm"
+    
+    # 设备3：使用串口转以太网的设备
+    - name: "modbus-device3-serial"
+      type: "modbus"
+      config:
+        name: "modbus-device3-serial"
+        mode: "tcp"
+        address: "192.168.1.200:4001"  # 串口转以太网设备
+        timeout_ms: 5000  # 串口设备通常需要更长超时
+        interval_ms: 5000
+        max_retries: 5
+        retry_interval: 3000
+        unit_id: 3  # 串口设备的站号
+        registers:
+          - key: "device3_analog_input"
+            address: 30001  # 模拟量输入寄存器
+            quantity: 4
+            type: "int16"
+            function: 4  # 读取输入寄存器
+            scale: 0.01
+            device_id: 3
+            tags:
+              description: "设备3模拟量输入"
+              connection_type: "serial_to_ethernet" 

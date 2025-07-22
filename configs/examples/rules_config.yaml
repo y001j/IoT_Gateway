@@ -1,0 +1,280 @@
+# IoT Gateway 规则引擎配置示例
+# Rule Engine Configuration Example
+
+# 主配置
+rules:
+  enabled: true
+  rules_dir: "./rules"
+  api_enabled: true
+  api_port: 8082
+  
+  # 性能配置
+  performance:
+    batch_size: 100
+    worker_pool_size: 10
+    cache_size: 10000
+    max_concurrent_rules: 1000
+    
+  # 表达式引擎配置
+  engines:
+    json:
+      enabled: true
+    cel:
+      enabled: true
+      max_cost: 1000000
+    lua:
+      enabled: false  # 可选，高级功能
+      max_memory: "10MB"
+      timeout: "1s"
+  
+  # 动作配置
+  actions:
+    alert:
+      enabled: true
+      default_throttle: "5m"
+      channels:
+        email:
+          enabled: false
+          smtp_server: "smtp.example.com"
+          smtp_port: 587
+          username: "alerts@example.com"
+          password: "password"
+        webhook:
+          enabled: true
+          url: "https://hooks.example.com/alerts"
+          timeout: "5s"
+          retry_count: 3
+    
+    forward:
+      enabled: true
+      default_timeout: "30s"
+      
+    transform:
+      enabled: true
+      max_operations: 10
+      
+    aggregate:
+      enabled: true
+      max_window: "1h"
+      max_groups: 1000
+
+# 规则定义示例
+example_rules:
+  # 基础JSON规则示例
+  - id: "temperature_high_alert"
+    name: "温度过高报警"
+    description: "当温度超过35度时发送报警"
+    enabled: true
+    priority: 100
+    conditions:
+      and:
+        - field: "key"
+          operator: "eq"
+          value: "temperature"
+        - field: "value"
+          operator: "gt"
+          value: 35.0
+    actions:
+      - type: "alert"
+        config:
+          level: "warning"
+          message: "设备{{device_id}}温度过高: {{value}}°C"
+          throttle: "5m"
+      - type: "forward"
+        config:
+          sink: "mqtt-alerts"
+          topic: "alerts/temperature/{{device_id}}"
+    tags:
+      category: "temperature"
+      severity: "high"
+
+  # 数据转换规则示例
+  - id: "temperature_unit_convert"
+    name: "温度单位转换"
+    description: "将摄氏度转换为华氏度"
+    enabled: true
+    priority: 50
+    conditions:
+      and:
+        - field: "key"
+          operator: "eq"
+          value: "temperature"
+        - field: "tags.unit"
+          operator: "eq"
+          value: "celsius"
+    actions:
+      - type: "transform"
+        config:
+          operations:
+            - type: "formula"
+              expression: "value * 9 / 5 + 32"
+            - type: "set_tag"
+              key: "unit"
+              value: "fahrenheit"
+      - type: "forward"
+        config:
+          sink: "console"
+
+  # 数据过滤规则示例
+  - id: "duplicate_filter"
+    name: "重复数据过滤"
+    description: "过滤重复的数据点"
+    enabled: true
+    priority: 200
+    conditions:
+      type: "expression"
+      expression: "isDuplicate(device_id, key, value, '1m')"
+    actions:
+      - type: "filter"
+        config:
+          action: "drop"
+          reason: "duplicate_data"
+
+  # 数据聚合规则示例
+  - id: "hourly_average"
+    name: "小时平均值计算"
+    description: "计算每小时的平均温度"
+    enabled: true
+    priority: 30
+    conditions:
+      and:
+        - field: "key"
+          operator: "eq"
+          value: "temperature"
+        - type: "expression"
+          expression: "minute() == 0"  # 每小时的第0分钟触发
+    actions:
+      - type: "aggregate"
+        config:
+          window: "1h"
+          functions: ["avg", "max", "min", "count"]
+          group_by: ["device_id", "location"]
+          output_key: "temperature_hourly_stats"
+      - type: "forward"
+        config:
+          sink: "influxdb"
+          topic: "statistics/hourly/{{device_id}}"
+
+  # 复杂表达式规则示例
+  - id: "anomaly_detection"
+    name: "异常检测"
+    description: "检测温度异常波动"
+    enabled: true
+    priority: 80
+    conditions:
+      type: "expression"
+      expression: "key == 'temperature' && abs(value - avg(device_id, 'temperature', '10m')) > 2 * stddev(device_id, 'temperature', '10m')"
+    actions:
+      - type: "alert"
+        config:
+          level: "warning"
+          message: "设备{{device_id}}温度异常: 当前值{{value}}, 平均值{{avg(device_id, 'temperature', '10m')}}"
+      - type: "transform"
+        config:
+          operations:
+            - type: "add_tag"
+              key: "anomaly"
+              value: "temperature_spike"
+            - type: "add_tag"
+              key: "detection_time"
+              value: "{{now()}}"
+      - type: "forward"
+        config:
+          sink: "mqtt-anomalies"
+          topic: "anomalies/{{device_id}}/{{key}}"
+
+  # 设备状态监控规则示例
+  - id: "device_offline_alert"
+    name: "设备离线报警"
+    description: "设备超过5分钟未上报数据时报警"
+    enabled: true
+    priority: 150
+    conditions:
+      type: "expression"
+      expression: "lastSeen(device_id) > ago('5m')"
+    actions:
+      - type: "alert"
+        config:
+          level: "error"
+          message: "设备{{device_id}}已离线超过5分钟"
+          throttle: "30m"  # 30分钟内只报警一次
+      - type: "transform"
+        config:
+          operations:
+            - type: "set_field"
+              key: "status"
+              value: "offline"
+      - type: "forward"
+        config:
+          sink: "mqtt-status"
+          topic: "status/{{device_id}}"
+
+  # 多条件组合规则示例
+  - id: "workshop_environment_alert"
+    name: "车间环境综合报警"
+    description: "车间温度高且湿度低时的综合报警"
+    enabled: true
+    priority: 120
+    conditions:
+      and:
+        - field: "tags.location"
+          operator: "eq"
+          value: "workshop"
+        - or:
+          - and:
+            - field: "key"
+              operator: "eq"
+              value: "temperature"
+            - field: "value"
+              operator: "gt"
+              value: 35.0
+          - and:
+            - field: "key"
+              operator: "eq"
+              value: "humidity"
+            - field: "value"
+              operator: "lt"
+              value: 30.0
+    actions:
+      - type: "alert"
+        config:
+          level: "warning"
+          message: "车间环境异常: {{key}}={{value}}"
+      - type: "forward"
+        config:
+          sink: "mqtt-environment"
+          topic: "environment/workshop/alerts"
+
+# 规则模板定义
+rule_templates:
+  threshold_alert:
+    description: "阈值报警模板"
+    parameters:
+      - name: "key"
+        type: "string"
+        required: true
+      - name: "threshold"
+        type: "float"
+        required: true
+      - name: "operator"
+        type: "string"
+        default: "gt"
+        enum: ["gt", "lt", "gte", "lte", "eq", "ne"]
+      - name: "alert_level"
+        type: "string"
+        default: "warning"
+        enum: ["info", "warning", "error", "critical"]
+    template:
+      conditions:
+        and:
+          - field: "key"
+            operator: "eq"
+            value: "{{key}}"
+          - field: "value"
+            operator: "{{operator}}"
+            value: "{{threshold}}"
+      actions:
+        - type: "alert"
+          config:
+            level: "{{alert_level}}"
+            message: "{{key}}阈值报警: 当前值{{value}}, 阈值{{threshold}}" 
