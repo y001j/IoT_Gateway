@@ -158,6 +158,7 @@ export interface User {
   username: string;
   email: string;
   role: UserRole;
+  role_id: string;
   created_at: string;
   last_login?: string;
   enabled: boolean;
@@ -200,6 +201,23 @@ export interface ApiAccessRule {
   roles: string[];
   api_keys: string[];
   enabled: boolean;
+}
+
+// API权限相关类型
+export interface ApiPermissionRule {
+  id: string;
+  name: string;
+  path: string;
+  method: string;
+  roles: string[];
+  enabled: boolean;
+}
+
+export interface ApiEndpoint {
+  path: string;
+  method: string;
+  description: string;
+  category: string;
 }
 
 // 审计日志

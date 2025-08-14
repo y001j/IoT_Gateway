@@ -50,6 +50,12 @@ import RuleHelp from '../components/RuleHelp';
 import ConditionForm from '../components/ConditionForm';
 import ActionForm from '../components/ActionForm';
 import RuleTemplates from '../components/RuleTemplates';
+import DataTypeSelector, { type DataTypeOption } from '../components/DataTypeSelector';
+import ComplexDataRuleEditor from '../components/ComplexDataRuleEditor';
+import GeospatialRuleEditor from '../components/GeospatialRuleEditor';
+import Vector3DRuleEditor from '../components/Vector3DRuleEditor';
+import GenericVectorRuleEditor from '../components/GenericVectorRuleEditor';
+import VisualRuleEditor from '../components/VisualRuleEditor';
 
 const { Title, Text } = Typography;
 const { Search } = Input;
@@ -82,6 +88,19 @@ const RulesPage: React.FC = () => {
   // 模板选择状态
   const [templatesVisible, setTemplatesVisible] = useState(false);
 
+  // 数据类型选择状态
+  const [dataTypeSelectorVisible, setDataTypeSelectorVisible] = useState(false);
+  const [selectedDataType, setSelectedDataType] = useState<DataTypeOption | null>(null);
+  
+  // 复合数据规则编辑器状态
+  const [complexRuleEditorVisible, setComplexRuleEditorVisible] = useState(false);
+  
+  // 专门化规则编辑器状态
+  const [geospatialEditorVisible, setGeospatialEditorVisible] = useState(false);
+  const [vector3dEditorVisible, setVector3dEditorVisible] = useState(false);
+  const [genericVectorEditorVisible, setGenericVectorEditorVisible] = useState(false);
+  const [visualEditorVisible, setVisualEditorVisible] = useState(false);
+
   // 表单模式状态
   const [formMode, setFormMode] = useState<'visual' | 'json'>('visual');
 
@@ -92,6 +111,61 @@ const RulesPage: React.FC = () => {
   // JSON预览状态
   const [jsonPreview, setJsonPreview] = useState<string>('');
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
+  // 验证条件数据结构
+  const validateConditionStructure = (condition: Condition): boolean => {
+    if (!condition || !condition.type) {
+      console.error('条件缺少 type 字段');
+      return false;
+    }
+
+    if (condition.type === 'simple') {
+      if (condition.and || condition.or || condition.expression) {
+        console.error('simple 类型条件不应包含 and、or 或 expression 字段', condition);
+        return false;
+      }
+      return true;
+    }
+
+    if (condition.type === 'and') {
+      if (!condition.and || !Array.isArray(condition.and)) {
+        console.error('and 类型条件必须包含 and 数组', condition);
+        return false;
+      }
+      if (condition.field || condition.operator || condition.value || condition.expression) {
+        console.error('and 类型条件不应包含 field、operator、value 或 expression 字段', condition);
+        return false;
+      }
+      return condition.and.every(validateConditionStructure);
+    }
+
+    if (condition.type === 'or') {
+      if (!condition.or || !Array.isArray(condition.or)) {
+        console.error('or 类型条件必须包含 or 数组', condition);
+        return false;
+      }
+      if (condition.field || condition.operator || condition.value || condition.expression) {
+        console.error('or 类型条件不应包含 field、operator、value 或 expression 字段', condition);
+        return false;
+      }
+      return condition.or.every(validateConditionStructure);
+    }
+
+    if (condition.type === 'expression') {
+      if (!condition.expression) {
+        console.error('expression 类型条件必须包含 expression 字段', condition);
+        return false;
+      }
+      if (condition.field || condition.operator || condition.value || condition.and || condition.or) {
+        console.error('expression 类型条件不应包含其他字段', condition);
+        return false;
+      }
+      return true;
+    }
+
+    console.error('未知的条件类型:', condition.type);
+    return false;
+  };
 
   // 获取规则列表
   const fetchRules = async () => {
@@ -127,6 +201,8 @@ const RulesPage: React.FC = () => {
         await ruleService.enableRule(rule.id);
         message.success('规则已启用');
       }
+      // 添加延迟以确保状态同步
+      await new Promise(resolve => setTimeout(resolve, 300));
       await fetchRules();
     } catch (error: any) {
       message.error('操作失败：' + (error.message || '未知错误'));
@@ -138,6 +214,8 @@ const RulesPage: React.FC = () => {
     try {
       await ruleService.deleteRule(rule.id);
       message.success('删除规则成功');
+      // 添加延迟以确保状态同步
+      await new Promise(resolve => setTimeout(resolve, 300));
       await fetchRules();
     } catch (error: any) {
       message.error('删除规则失败：' + (error.message || '未知错误'));
@@ -148,6 +226,42 @@ const RulesPage: React.FC = () => {
   const showRuleDetails = (rule: Rule) => {
     setSelectedRule(rule);
     setDetailDrawerVisible(true);
+  };
+
+  // 显示数据类型选择器
+  const showDataTypeSelector = () => {
+    setDataTypeSelectorVisible(true);
+  };
+
+  // 处理数据类型选择
+  const handleDataTypeSelect = (dataType: DataTypeOption) => {
+    setSelectedDataType(dataType);
+    setDataTypeSelectorVisible(false);
+    
+    if (dataType.type === 'complex') {
+      // 复合数据类型，根据类别选择专门化编辑器
+      switch (dataType.category) {
+        case 'geospatial':
+          setGeospatialEditorVisible(true);
+          break;
+        case 'vector':
+          setVector3dEditorVisible(true);
+          break;
+        case 'vector_generic':
+          setGenericVectorEditorVisible(true);
+          break;
+        case 'visual':
+          setVisualEditorVisible(true);
+          break;
+        default:
+          // 其他复合数据类型使用通用编辑器
+          setComplexRuleEditorVisible(true);
+          break;
+      }
+    } else {
+      // 简单数据类型，使用原有的编辑器
+      showEditModal();
+    }
   };
 
   // 显示编辑模态框
@@ -240,29 +354,19 @@ const RulesPage: React.FC = () => {
 
   // 处理表单字段变更
   const handleFormChange = () => {
-    setTimeout(updateJsonPreview, 0);
+    updateJsonPreview();
   };
 
   // 处理条件变更
   const handleConditionChange = (condition: Condition) => {
     setCurrentCondition(condition);
-    if (formMode === 'visual') {
-      editForm.setFieldsValue({
-        conditions: JSON.stringify(condition, null, 2)
-      });
-    }
-    setTimeout(updateJsonPreview, 0);
+    updateJsonPreview();
   };
 
   // 处理动作变更
   const handleActionsChange = (actions: Action[]) => {
     setCurrentActions(actions);
-    if (formMode === 'visual') {
-      editForm.setFieldsValue({
-        actions: JSON.stringify(actions, null, 2)
-      });
-    }
-    setTimeout(updateJsonPreview, 0);
+    updateJsonPreview();
   };
 
   // 处理模式切换
@@ -304,9 +408,32 @@ const RulesPage: React.FC = () => {
       if (formMode === 'visual') {
         conditions = currentCondition;
         actions = currentActions;
+        
+        // 验证条件数据结构
+        if (conditions && !validateConditionStructure(conditions)) {
+          message.error('条件数据结构不正确，无法保存');
+          return;
+        }
       } else {
         conditions = JSON.parse(values.conditions);
         actions = JSON.parse(values.actions);
+        
+        // 验证条件数据结构
+        if (conditions && !validateConditionStructure(conditions)) {
+          message.error('条件数据结构不正确，无法保存');
+          return;
+        }
+      }
+      
+      // 基本数据验证
+      if (!conditions) {
+        message.error('请配置触发条件');
+        return;
+      }
+      
+      if (!actions || actions.length === 0) {
+        message.error('请配置至少一个动作');
+        return;
       }
       
       const tags = values.tags?.reduce((acc: any, item: any) => {
@@ -338,12 +465,33 @@ const RulesPage: React.FC = () => {
       }
 
       setEditModalVisible(false);
+      // 添加延迟以确保后端文件监控和内存状态同步
+      await new Promise(resolve => setTimeout(resolve, 500));
       await fetchRules();
     } catch (error: any) {
+      console.error('保存规则失败:', error);
+      
       if (error instanceof SyntaxError) {
         message.error('JSON 格式错误，请检查条件和动作配置');
+      } else if (error.response) {
+        // API 错误响应
+        const errorMsg = error.response.data?.message || error.response.data?.error || error.response.statusText || '服务器错误';
+        message.error(`保存规则失败: ${errorMsg} (状态码: ${error.response.status})`);
+        
+        // 详细错误信息输出到控制台
+        console.error('API错误响应:', {
+          status: error.response.status,
+          data: error.response.data,
+          headers: error.response.headers
+        });
+      } else if (error.request) {
+        // 请求发送失败
+        message.error('网络请求失败，请检查网络连接');
+        console.error('网络请求失败:', error.request);
       } else {
+        // 其他错误
         message.error('保存规则失败：' + (error.message || '未知错误'));
+        console.error('其他错误:', error.message);
       }
     }
   };
@@ -355,7 +503,13 @@ const RulesPage: React.FC = () => {
       name: `${rule.name} (副本)`,
       id: '' // 新规则使用空字符串ID
     };
-    showEditModal(newRule);
+    
+    // 智能判断规则类型并使用相应编辑器
+    if (isComplexDataRule(newRule)) {
+      handleEditRule(newRule);
+    } else {
+      showEditModal(newRule);
+    }
   };
 
   // 处理模板选择
@@ -392,6 +546,397 @@ const RulesPage: React.FC = () => {
     message.success(`已加载模板：${template.name}`);
   };
 
+  // 处理复合数据规则保存
+  const handleComplexRuleSave = async (ruleData: Partial<Rule>) => {
+    try {
+      if (isEditing && selectedRule) {
+        await ruleService.updateRule(selectedRule.id, {
+          ...ruleData,
+          version: selectedRule.version
+        });
+        message.success('复合数据规则更新成功');
+      } else {
+        await ruleService.createRule(ruleData);
+        message.success('复合数据规则创建成功');
+      }
+
+      setComplexRuleEditorVisible(false);
+      setSelectedDataType(null);
+      // 添加延迟以确保后端文件监控和内存状态同步
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await fetchRules();
+    } catch (error: any) {
+      console.error('保存复合数据规则失败:', error);
+      
+      if (error.response) {
+        const errorMsg = error.response.data?.message || error.response.data?.error || error.response.statusText || '服务器错误';
+        message.error(`保存复合数据规则失败: ${errorMsg} (状态码: ${error.response.status})`);
+      } else if (error.request) {
+        message.error('网络请求失败，请检查网络连接');
+      } else {
+        message.error('保存复合数据规则失败：' + (error.message || '未知错误'));
+      }
+    }
+  };
+
+  // 处理复合数据规则编辑器取消
+  const handleComplexRuleCancel = () => {
+    setComplexRuleEditorVisible(false);
+    setSelectedDataType(null);
+    setSelectedRule(null);
+    setIsEditing(false);
+  };
+
+  // 返回数据类型选择器
+  const handleBackToDataTypeSelector = () => {
+    // 关闭所有编辑器
+    setComplexRuleEditorVisible(false);
+    setGeospatialEditorVisible(false);
+    setVector3dEditorVisible(false);
+    setGenericVectorEditorVisible(false);
+    setVisualEditorVisible(false);
+    // 重新打开数据类型选择器
+    setDataTypeSelectorVisible(true);
+  };
+
+  // 专门化规则编辑器的保存处理
+  const handleSpecializedRuleSave = async (ruleData: Partial<Rule>) => {
+    try {
+      if (isEditing && selectedRule) {
+        await ruleService.updateRule(selectedRule.id, {
+          ...ruleData,
+          version: selectedRule.version
+        });
+        message.success('复合数据规则更新成功');
+      } else {
+        await ruleService.createRule(ruleData);
+        message.success('复合数据规则创建成功');
+      }
+
+      // 关闭所有专门化编辑器
+      setGeospatialEditorVisible(false);
+      setVector3dEditorVisible(false);
+      setGenericVectorEditorVisible(false);
+      setVisualEditorVisible(false);
+      setComplexRuleEditorVisible(false);
+      setSelectedDataType(null);
+      
+      // 添加延迟以确保后端文件监控和内存状态同步
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await fetchRules();
+    } catch (error: any) {
+      console.error('保存专门化规则失败:', error);
+      
+      if (error.response) {
+        const errorMsg = error.response.data?.message || error.response.data?.error || error.response.statusText || '服务器错误';
+        message.error(`保存规则失败: ${errorMsg} (状态码: ${error.response.status})`);
+      } else if (error.request) {
+        message.error('网络请求失败，请检查网络连接');
+      } else {
+        message.error('保存规则失败：' + (error.message || '未知错误'));
+      }
+    }
+  };
+
+  // 专门化规则编辑器的取消处理
+  const handleSpecializedRuleCancel = () => {
+    console.log('handleSpecializedRuleCancel 被调用，当前状态:');
+    console.log('- visualEditorVisible:', visualEditorVisible);
+    console.log('- geospatialEditorVisible:', geospatialEditorVisible);
+    console.log('- vector3dEditorVisible:', vector3dEditorVisible);
+    
+    setGeospatialEditorVisible(false);
+    setVector3dEditorVisible(false);
+    setGenericVectorEditorVisible(false);
+    setVisualEditorVisible(false);
+    setComplexRuleEditorVisible(false);
+    setSelectedDataType(null);
+    setSelectedRule(null);
+    setIsEditing(false);
+    
+    console.log('已设置所有编辑器为不可见');
+  };
+
+  // 检测规则是否为复合数据规则 - 增强版本
+  const isComplexDataRule = (rule: Rule): boolean => {
+    // 优先级1: 检查规则的数据类型标记 (最准确的识别方式)
+    // 检查根级别data_type字段和tags中的数据类型
+    const rootDataType = rule.data_type;
+    const tagDataType = rule.tags ? (rule.tags['data_type'] || rule.tags['data_category']) : null;
+    const dataType = rootDataType || tagDataType;
+    
+    // 扩展支持的复合数据类型
+    const supportedTypes = [
+      'geospatial', 'vector', 'visual', 'array', 'matrix', 'timeseries',
+      'location', 'vector3d', 'color', 'gps', 'vector_generic', 'mixed'  // 支持具体的数据类型
+    ];
+    
+    if (dataType && supportedTypes.includes(dataType)) {
+      console.log(`检测到复合数据规则 [${rule.name}]: 数据类型标记 = ${dataType}`);
+      return true;
+    }
+    
+    // 优先级2: 检查动作类型是否包含复合数据特有的动作
+    const complexActionTypes = [
+      // 地理空间动作
+      'geo_transform', 'geo_aggregate', 'geo_filter', 'geospatial_transform',
+      // 向量数据动作  
+      'vector_transform', 'vector_aggregate', 'vector_filter',
+      // 颜色/视觉数据动作
+      'color_transform', 'color_aggregate', 'color_filter', 'visual_transform',
+      // 数组数据动作
+      'array_transform', 'array_aggregate', 'array_filter',
+      // 矩阵数据动作
+      'matrix_transform', 'matrix_aggregate', 'matrix_filter',
+      // 时间序列数据动作
+      'timeseries_transform', 'timeseries_aggregate', 'timeseries_filter'
+    ];
+    
+    if (rule.actions && rule.actions.some(action => complexActionTypes.includes(action.type))) {
+      const actionType = rule.actions.find(action => complexActionTypes.includes(action.type))?.type;
+      console.log(`检测到复合数据规则 [${rule.name}]: 复合动作类型 = ${actionType}`);
+      return true;
+    }
+    
+    // 优先级3: 检查条件中是否包含复合数据字段
+    const complexFields = [
+      // GPS/地理数据字段
+      'latitude', 'longitude', 'altitude', 'lat', 'lng', 'coord', 'location',
+      // 向量数据字段
+      'x', 'y', 'z', 'magnitude', 'direction', 'velocity', 'acceleration',
+      // 颜色数据字段  
+      'r', 'g', 'b', 'hue', 'saturation', 'lightness', 'alpha', 'rgb', 'hsl',
+      // 数组/矩阵字段
+      'rows', 'cols', 'size', 'length', 'dimensions', 'matrix', 'array',
+      // 时间序列字段
+      'duration', 'data_points', 'timestamps', 'series', 'trend'
+    ];
+    
+    if (rule.conditions) {
+      const checkConditionFields = (condition: Condition): boolean => {
+        if (condition.field && complexFields.includes(condition.field)) {
+          return true;
+        }
+        // 递归检查复合条件
+        if (condition.and && condition.and.some(checkConditionFields)) {
+          return true;
+        }
+        if (condition.or && condition.or.some(checkConditionFields)) {
+          return true;
+        }
+        return false;
+      };
+      
+      if (checkConditionFields(rule.conditions)) {
+        const fieldName = extractComplexField(rule.conditions);
+        console.log(`检测到复合数据规则 [${rule.name}]: 复合字段 = ${fieldName}`);
+        return true;
+      }
+    }
+    
+    return false;
+  };
+
+  // 辅助函数：提取复合数据字段名称
+  const extractComplexField = (condition: Condition): string => {
+    const complexFields = [
+      'latitude', 'longitude', 'altitude', 'lat', 'lng', 'coord', 'location',
+      'x', 'y', 'z', 'magnitude', 'direction', 'velocity', 'acceleration',
+      'r', 'g', 'b', 'hue', 'saturation', 'lightness', 'alpha', 'rgb', 'hsl',
+      'rows', 'cols', 'size', 'length', 'dimensions', 'matrix', 'array',
+      'duration', 'data_points', 'timestamps', 'series', 'trend'
+    ];
+    
+    if (condition.field && complexFields.includes(condition.field)) {
+      return condition.field;
+    }
+    
+    if (condition.and) {
+      for (const subCondition of condition.and) {
+        const field = extractComplexField(subCondition);
+        if (field) return field;
+      }
+    }
+    
+    if (condition.or) {
+      for (const subCondition of condition.or) {
+        const field = extractComplexField(subCondition);
+        if (field) return field;
+      }
+    }
+    
+    return '未知复合字段';
+  };
+
+  // 智能推断数据类型
+  const inferDataCategory = (rule: Rule): string => {
+    // 优先级0: 检查根级别data_type字段
+    const rootDataType = rule.data_type;
+    if (rootDataType) {
+      console.log(`规则 [${rule.name}] 检测到 data_type 字段:`, rootDataType);
+      // 将具体类型映射到类别
+      const typeMapping: Record<string, string> = {
+        'location': 'geospatial',
+        'vector3d': 'vector',
+        'vector_generic': 'vector_generic',
+        'gps': 'geospatial',
+        'color': 'visual',
+        'array': 'array',
+        'matrix': 'matrix',
+        'timeseries': 'timeseries',
+        'mixed': 'mixed'
+      };
+      const mappedCategory = typeMapping[rootDataType] || rootDataType;
+      console.log(`数据类型 ${rootDataType} 映射到类别:`, mappedCategory);
+      return mappedCategory;
+    }
+    
+    // 优先级1: 从tags中获取
+    if (rule.tags && rule.tags['data_category']) {
+      return rule.tags['data_category'];
+    }
+    
+    // 优先级2: 从动作类型推断
+    if (rule.actions && rule.actions.length > 0) {
+      const actionType = rule.actions[0].type;
+      if (actionType.includes('geo')) return 'geospatial';
+      if (actionType.includes('vector')) return 'vector';
+      if (actionType.includes('color') || actionType.includes('visual')) return 'visual';
+      if (actionType.includes('array')) return 'array';
+      if (actionType.includes('matrix')) return 'matrix';
+      if (actionType.includes('timeseries') || actionType.includes('time')) return 'timeseries';
+    }
+    
+    // 优先级3: 从条件字段推断
+    if (rule.conditions) {
+      const field = extractComplexField(rule.conditions);
+      if (['latitude', 'longitude', 'altitude', 'lat', 'lng', 'coord', 'location'].includes(field)) {
+        return 'geospatial';
+      }
+      if (['x', 'y', 'z', 'magnitude', 'direction', 'velocity', 'acceleration'].includes(field)) {
+        return 'vector';
+      }
+      if (['r', 'g', 'b', 'hue', 'saturation', 'lightness', 'alpha', 'rgb', 'hsl'].includes(field)) {
+        return 'visual';
+      }
+      if (['rows', 'cols', 'dimensions', 'matrix'].includes(field)) {
+        return 'matrix';
+      }
+      if (['size', 'length', 'array'].includes(field)) {
+        return 'array';
+      }
+      if (['duration', 'data_points', 'timestamps', 'series', 'trend'].includes(field)) {
+        return 'timeseries';
+      }
+    }
+    
+    // 默认值
+    return 'geospatial';
+  };
+
+  // 获取数据类型友好名称
+  const getDataTypeFriendlyName = (category: string): string => {
+    const nameMap: Record<string, string> = {
+      'geospatial': 'GPS位置数据',
+      'vector': '向量数据', 
+      'visual': '颜色数据',
+      'array': '数组数据',
+      'matrix': '矩阵数据',
+      'timeseries': '时间序列数据'
+    };
+    return nameMap[category] || '复合数据';
+  };
+
+  // 获取数据类型图标
+  const getDataTypeIcon = (category: string) => {
+    const iconMap: Record<string, React.ReactNode> = {
+      'geospatial': <BookOutlined />,
+      'vector': <FormOutlined />,
+      'visual': <EyeOutlined />,
+      'array': <CodeOutlined />,
+      'matrix': <SettingOutlined />,
+      'timeseries': <PlayCircleOutlined />
+    };
+    return iconMap[category] || <FormOutlined />;
+  };
+
+  // 获取数据类型颜色
+  const getDataTypeColor = (category: string): string => {
+    const colorMap: Record<string, string> = {
+      'geospatial': '#52c41a',  // 绿色 - GPS
+      'vector': '#1890ff',      // 蓝色 - 向量
+      'visual': '#fa541c',      // 橙色 - 视觉
+      'array': '#722ed1',       // 紫色 - 数组
+      'matrix': '#eb2f96',      // 粉色 - 矩阵
+      'timeseries': '#13c2c2'   // 青色 - 时间序列
+    };
+    return colorMap[category] || '#722ed1';
+  };
+
+  // 智能处理规则编辑
+  const handleEditRule = (rule: Rule) => {
+    if (isComplexDataRule(rule)) {
+      // 复合数据规则，智能选择专门化编辑器
+      setSelectedRule(rule);
+      setIsEditing(true);
+      
+      // 智能推断数据类型
+      let dataCategory = inferDataCategory(rule);
+      let dataTypeName = getDataTypeFriendlyName(dataCategory);
+      let dataTypeKey = rule.tags?.['data_type'] || `${dataCategory}_data`;
+      
+      // 创建临时数据类型选项
+      const tempDataType: DataTypeOption = {
+        type: 'complex',
+        category: dataCategory,
+        key: dataTypeKey,
+        name: dataTypeName,
+        icon: getDataTypeIcon(dataCategory),
+        description: `检测到的${dataTypeName}规则`,
+        examples: [],
+        color: getDataTypeColor(dataCategory)
+      };
+      
+      setSelectedDataType(tempDataType);
+      
+      // 根据数据类别选择对应的专门化编辑器
+      console.log(`为规则 [${rule.name}] 选择编辑器，数据类别:`, dataCategory);
+      switch (dataCategory) {
+        case 'geospatial':
+          console.log('使用地理数据专门编辑器');
+          setGeospatialEditorVisible(true);
+          break;
+        case 'vector':
+          console.log('使用3D向量专门编辑器');
+          setVector3dEditorVisible(true);
+          break;
+        case 'vector_generic':
+          console.log('使用通用向量专门编辑器');
+          setGenericVectorEditorVisible(true);
+          break;
+        case 'visual':
+          console.log('使用颜色数据专门编辑器');
+          setVisualEditorVisible(true);
+          break;
+        case 'array':
+        case 'matrix':
+        case 'timeseries':
+        case 'mixed':
+          console.log('使用复合数据通用编辑器');
+          setComplexRuleEditorVisible(true);
+          break;
+        default:
+          console.log('使用复合数据通用编辑器（默认）');
+          // 其他复合数据类型使用通用编辑器
+          setComplexRuleEditorVisible(true);
+          break;
+      }
+    } else {
+      // 简单数据规则，使用原有编辑器
+      showEditModal(rule);
+    }
+  };
+
   // 工具函数
   const getPriorityColor = (priority: number) => {
     if (priority >= 150) return 'red';
@@ -411,18 +956,86 @@ const RulesPage: React.FC = () => {
     return <Tag color={colors[type] || 'default'}>{type}</Tag>;
   };
 
+  // 格式化动作配置显示
+  const formatActionConfig = (action: Action): string => {
+    const { type, config } = action;
+    
+    switch (type) {
+      case 'aggregate':
+        return `窗口大小: ${config.size || config.window_size || 'N/A'} 个数据点
+聚合函数: ${Array.isArray(config.functions) ? config.functions.join(', ') : 'N/A'}
+分组字段: ${Array.isArray(config.group_by) ? config.group_by.join(', ') : 'N/A'}
+输出字段: ${config.output_key || 'N/A'}
+转发结果: ${config.forward ? '是' : '否'}`;
+      
+      case 'transform':
+        return `转换类型: ${config.type || 'N/A'}
+目标字段: ${config.field || 'N/A'}
+输出字段: ${config.output_key || 'N/A'}
+缩放因子: ${config.factor || config.scale_factor || 'N/A'}
+偏移量: ${config.offset || 'N/A'}
+精度: ${config.precision || 'N/A'}
+添加标签: ${config.add_tags ? JSON.stringify(config.add_tags) : 'N/A'}`;
+      
+      case 'alert':
+        return `告警级别: ${config.level || 'N/A'}
+告警消息: ${config.message || 'N/A'}
+限流时间: ${config.throttle || 'N/A'}
+通知渠道: ${Array.isArray(config.channels) ? config.channels.join(', ') : 'N/A'}`;
+      
+      case 'filter':
+        return `过滤类型: ${config.type || 'N/A'}
+最小值: ${config.min !== undefined ? config.min : 'N/A'}
+最大值: ${config.max !== undefined ? config.max : 'N/A'}
+匹配动作: ${config.drop_on_match ? '丢弃' : '通过'}
+速率限制: ${config.rate || 'N/A'}
+时间窗口: ${config.window || 'N/A'}`;
+      
+      case 'forward':
+        return `转发目标: ${config.target_type || 'N/A'}
+URL地址: ${config.url || 'N/A'}
+HTTP方法: ${config.method || 'N/A'}
+MQTT代理: ${config.broker || 'N/A'}
+主题模板: ${config.topic || 'N/A'}
+文件路径: ${config.path || 'N/A'}
+批处理大小: ${config.batch_size || 'N/A'}
+超时时间: ${config.timeout || 'N/A'}`;
+      
+      default:
+        return JSON.stringify(config, null, 2);
+    }
+  };
+
   // 表格列定义
   const columns: ColumnsType<Rule> = [
     {
       title: '规则名称',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string, record: Rule) => (
-        <div>
-          <div><strong>{name}</strong></div>
-          <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>
-        </div>
-      )
+      sorter: (a, b) => a.name.localeCompare(b.name),
+      render: (name: string, record: Rule) => {
+        const isComplex = isComplexDataRule(record);
+        const dataCategory = isComplex ? inferDataCategory(record) : null;
+        
+        return (
+          <div>
+            <div>
+              <strong>{name}</strong>
+              {isComplex && (
+                <Tag 
+                  size="small" 
+                  color={getDataTypeColor(dataCategory!)} 
+                  icon={getDataTypeIcon(dataCategory!)}
+                  style={{ marginLeft: 8 }}
+                >
+                  {getDataTypeFriendlyName(dataCategory!)}
+                </Tag>
+              )}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>
+          </div>
+        );
+      }
     },
     {
       title: '优先级',
@@ -432,7 +1045,15 @@ const RulesPage: React.FC = () => {
       render: (priority: number) => (
         <Tag color={getPriorityColor(priority)}>{priority}</Tag>
       ),
-      sorter: (a, b) => a.priority - b.priority
+      sorter: (a, b) => {
+        // 首先按优先级排序（降序）
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority;
+        }
+        // 优先级相同时按规则名称排序（升序）
+        return a.name.localeCompare(b.name);
+      },
+      defaultSortOrder: 'ascend'
     },
     {
       title: '状态',
@@ -462,7 +1083,7 @@ const RulesPage: React.FC = () => {
           {actions && actions.length > 0 ? (
             <>
               {actions.slice(0, 2).map((action, index) => (
-                <Tooltip key={index} title={JSON.stringify(action.config, null, 2)}>
+                <Tooltip key={index} title={formatActionConfig(action)} overlayStyle={{ maxWidth: '400px' }}>
                   {getActionTypeTag(action.type)}
                 </Tooltip>
               ))}
@@ -497,11 +1118,15 @@ const RulesPage: React.FC = () => {
             />
           </Tooltip>
           
-          <Tooltip title="编辑">
+          <Tooltip title={
+            isComplexDataRule(record) 
+              ? `编辑复合规则 (${getDataTypeFriendlyName(inferDataCategory(record))})` 
+              : "编辑规则"
+          }>
             <Button
               type="link"
               icon={<EditOutlined />}
-              onClick={() => showEditModal(record)}
+              onClick={() => handleEditRule(record)}
             />
           </Tooltip>
           
@@ -596,7 +1221,7 @@ const RulesPage: React.FC = () => {
               >
                 模板库
               </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => showEditModal()}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={showDataTypeSelector}>
                 创建规则
               </Button>
             </Space>
@@ -723,7 +1348,7 @@ const RulesPage: React.FC = () => {
         width={1200}
         okText="保存"
         cancelText="取消"
-        bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
       >
         <Row gutter={16}>
           <Col span={formMode === 'visual' ? 24 : 14}>
@@ -911,6 +1536,56 @@ const RulesPage: React.FC = () => {
         visible={templatesVisible}
         onClose={() => setTemplatesVisible(false)}
         onSelect={handleTemplateSelect}
+      />
+
+      {/* 数据类型选择器 */}
+      <DataTypeSelector
+        visible={dataTypeSelectorVisible}
+        onTypeSelect={handleDataTypeSelect}
+        onCancel={() => setDataTypeSelectorVisible(false)}
+      />
+
+      {/* 复合数据规则编辑器 */}
+      <ComplexDataRuleEditor
+        visible={complexRuleEditorVisible}
+        dataType={selectedDataType}
+        rule={selectedRule}
+        onSave={handleComplexRuleSave}
+        onClose={handleComplexRuleCancel}
+      />
+
+      {/* GPS/地理数据专用规则编辑器 */}
+      <GeospatialRuleEditor
+        visible={geospatialEditorVisible}
+        rule={selectedRule}
+        onSave={handleSpecializedRuleSave}
+        onClose={handleSpecializedRuleCancel}
+      />
+
+      {/* 3D向量数据专用规则编辑器 */}
+      <Vector3DRuleEditor
+        visible={vector3dEditorVisible}
+        rule={selectedRule}
+        mode={isEditing ? 'edit' : 'create'}
+        onSave={handleSpecializedRuleSave}
+        onClose={() => setVector3dEditorVisible(false)}
+      />
+
+      {/* 通用向量数据专用规则编辑器 */}
+      <GenericVectorRuleEditor
+        visible={genericVectorEditorVisible}
+        rule={selectedRule}
+        mode={isEditing ? 'edit' : 'create'}
+        onSave={handleSpecializedRuleSave}
+        onClose={() => setGenericVectorEditorVisible(false)}
+      />
+
+      {/* 颜色数据专用规则编辑器 */}
+      <VisualRuleEditor
+        visible={visualEditorVisible}
+        rule={selectedRule}
+        onSave={handleSpecializedRuleSave}
+        onClose={handleSpecializedRuleCancel}
       />
     </div>
   );

@@ -32,7 +32,7 @@ import { settingsService } from '../../services/settingsService';
 import type { AuditConfig, AuditLog } from '../../types/settings';
 
 const { Option } = Select;
-const { Title, Text } = Typography;
+const { Title } = Typography;
 const { RangePicker } = DatePicker;
 
 const AuditSettings: React.FC = () => {
@@ -69,7 +69,7 @@ const AuditSettings: React.FC = () => {
     try {
       const response = await settingsService.getAuditLogs({ page, size, ...filters });
       if (response.success) {
-        setAuditLogs(response.data.logs);
+        setAuditLogs(response.data.data);
         setTotalLogs(response.data.total);
         setCurrentPage(page);
         setPageSize(size);

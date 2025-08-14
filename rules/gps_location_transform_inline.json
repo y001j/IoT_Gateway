@@ -1,0 +1,28 @@
+{
+  "id": "gps_location_transform_inline",
+  "name": "GPS位置数据转换（内联）",
+  "description": "将GPS数据转发到专用主题",
+  "enabled": true,
+  "priority": 80,
+  "version": 73,
+  "conditions": {
+    "type": "simple",
+    "field": "device_id",
+    "operator": "eq",
+    "value": "gps_tracker_01"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "driver": "张三",
+          "gps_component": "true",
+          "vehicle_id": "truck_001"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-13T19:40:21.4213696+08:00",
+  "updated_at": "2025-08-14T20:58:48.3809163+08:00"
+}

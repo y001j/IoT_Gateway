@@ -1,0 +1,43 @@
+{
+  "id": "network_latency_trend_analysis",
+  "name": "网络延迟趋势分析",
+  "description": "分析网络延迟趋势，预测性能下降",
+  "enabled": false,
+  "priority": 45,
+  "version": 2,
+  "conditions": {
+    "type": "simple",
+    "field": "key",
+    "operator": "eq",
+    "value": "network_latency"
+  },
+  "actions": [
+    {
+      "type": "aggregate",
+      "config": {
+        "add_tags": {
+          "analysis_type": "network_trend",
+          "prediction_enabled": "true",
+          "trend_window": "60s_sliding"
+        },
+        "functions": [
+          "count",
+          "avg",
+          "p50",
+          "p90",
+          "p95",
+          "p99",
+          "change",
+          "change_rate",
+          "volatility",
+          "cv"
+        ],
+        "output_key": "network_trend",
+        "window": "60s",
+        "window_type": "time"
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-13T02:36:51.2614125+08:00"
+}

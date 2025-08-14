@@ -14,11 +14,9 @@ import {
   Alert
 } from 'antd';
 import {
-  FireOutlined,
   SwapOutlined,
   FilterOutlined,
   FunctionOutlined,
-  ForwardOutlined,
   ThunderboltOutlined,
   SafetyOutlined,
   MonitorOutlined,
@@ -27,7 +25,7 @@ import {
 } from '@ant-design/icons';
 import type { Rule, Condition, Action } from '../types/rule';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Search } = Input;
 const { Option } = Select;
 
@@ -168,7 +166,7 @@ const RuleTemplates: React.FC<RuleTemplatesProps> = ({ visible, onClose, onSelec
           type: 'simple',
           field: 'key',
           operator: 'in',
-          value: ['temperature', 'humidity', 'pressure']
+          value: ['temperature', 'humidity', 'pressure'] as any
         } as Condition,
         actions: [
           {
@@ -482,7 +480,7 @@ const RuleTemplates: React.FC<RuleTemplatesProps> = ({ visible, onClose, onSelec
       onCancel={onClose}
       footer={null}
       width={1000}
-      bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
+      styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}
     >
       <Alert
         message="规则模板库"
@@ -571,7 +569,7 @@ const RuleTemplates: React.FC<RuleTemplatesProps> = ({ visible, onClose, onSelec
               
               <Space wrap style={{ marginBottom: 8 }}>
                 {template.tags.map(tag => (
-                  <Tag key={tag} size="small">{tag}</Tag>
+                  <Tag key={tag}>{tag}</Tag>
                 ))}
               </Space>
               

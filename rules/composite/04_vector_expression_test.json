@@ -1,0 +1,53 @@
+{
+  "id": "vector_expression",
+  "name": "向量表达式函数测试",
+  "description": "使用表达式引擎中的向量函数进行计算",
+  "enabled": true,
+  "priority": 40,
+  "data_type": "vector3d",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "accel_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "acceleration"
+      },
+      {
+        "type": "expression",
+        "expression": "vectorMagnitude(acceleration.x, acceleration.y, acceleration.z) > 5.0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "type": "console",
+        "message": "高加速度检测: X={{acceleration.x}}, Y={{acceleration.y}}, Z={{acceleration.z}}, 模长={{acceleration.magnitude}}"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "extract_field",
+        "parameters": {
+          "field": "magnitude"
+        },
+        "output_key": "extracted_magnitude",
+        "output_type": "float",
+        "add_tags": {
+          "extracted_from": "vector3d",
+          "field_name": "magnitude"
+        }
+      }
+    }
+  ]
+}

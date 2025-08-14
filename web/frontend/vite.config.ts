@@ -17,7 +17,7 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: process.env.WEB_API_URL || 'http://localhost:8081',  // Web API服务的端口
+        target: process.env.WEB_API_URL || 'http://localhost:8081',  // Web API服务端口
         changeOrigin: true,
         secure: false,
         configure: (proxy, options) => {
@@ -41,7 +41,7 @@ export default defineConfig({
         secure: false,
       },
       '/metrics': {
-        target: process.env.GATEWAY_URL || 'http://localhost:8080',  // 网关主服务的端口
+        target: process.env.GATEWAY_URL || 'http://localhost:8080',  // 根据配置文件更新：网关主服务的端口
         changeOrigin: true,
         secure: false,
         configure: (proxy, options) => {

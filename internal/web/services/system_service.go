@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/y001j/iot-gateway/internal/metrics"
+	"github.com/y001j/iot-gateway/internal/monitoring"
 	"github.com/y001j/iot-gateway/internal/web/models"
 	"gopkg.in/yaml.v2"
 )
@@ -24,36 +25,48 @@ type SystemService interface {
 
 // systemService 系统服务实现
 type systemService struct {
-	startTime      time.Time
-	authConfig     *models.AuthConfig
-	configService  ConfigService
-	mainConfigPath string // 主配置文件路径
+	startTime        time.Time
+	authConfig       *models.AuthConfig
+	configService    ConfigService
+	mainConfigPath   string // 主配置文件路径
+	monitoringService *monitoring.Service // 监控服务
 }
 
 // NewSystemService 创建系统服务
 func NewSystemService(authConfig *models.AuthConfig, configService ConfigService) SystemService {
+	// 创建监控服务
+	monitoringService := monitoring.NewService(monitoring.DefaultServiceConfig())
+	
 	return &systemService{
-		startTime:     time.Now(),
-		authConfig:    authConfig,
-		configService: configService,
+		startTime:         time.Now(),
+		authConfig:        authConfig,
+		configService:     configService,
+		monitoringService: monitoringService,
 	}
 }
 
 // NewSystemServiceWithMainConfig 创建系统服务并指定主配置文件路径
 func NewSystemServiceWithMainConfig(authConfig *models.AuthConfig, configService ConfigService, mainConfigPath string) SystemService {
+	// 创建监控服务
+	monitoringService := monitoring.NewService(monitoring.DefaultServiceConfig())
+	
+	// 启动监控服务
+	if err := monitoringService.Start(); err != nil {
+		// 记录错误但继续创建服务
+		fmt.Printf("Warning: Failed to start monitoring service: %v\n", err)
+	}
+	
 	return &systemService{
-		startTime:      time.Now(),
-		authConfig:     authConfig,
-		configService:  configService,
-		mainConfigPath: mainConfigPath,
+		startTime:         time.Now(),
+		authConfig:        authConfig,
+		configService:     configService,
+		mainConfigPath:    mainConfigPath,
+		monitoringService: monitoringService,
 	}
 }
 
 // GetStatus 获取系统状态
 func (s *systemService) GetStatus() (*models.SystemStatus, error) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
 	uptime := time.Since(s.startTime)
 
 	status := &models.SystemStatus{
@@ -61,13 +74,37 @@ func (s *systemService) GetStatus() (*models.SystemStatus, error) {
 		Uptime:      uptime.String(),
 		Version:     "1.0.0",
 		StartTime:   s.startTime,
-		CPUUsage:    25.5, // 模拟数据
-		MemoryUsage: float64(m.Alloc) / float64(m.Sys) * 100,
-		DiskUsage:   45.8,             // 模拟数据
-		NetworkIn:   1024 * 1024 * 50, // 模拟数据
-		NetworkOut:  1024 * 1024 * 30, // 模拟数据
-		ActiveConns: 15,
-		TotalConns:  1250,
+		ActiveConns: 15,   // 这些需要从实际连接管理器获取
+		TotalConns:  1250, // 这些需要从实际连接管理器获取
+	}
+
+	// 获取真实的系统指标
+	if s.monitoringService != nil && s.monitoringService.IsStarted() {
+		if metrics, err := s.monitoringService.GetSystemMetrics(); err == nil {
+			status.CPUUsage = metrics.CPUUsage
+			status.MemoryUsage = metrics.MemoryUsage
+			status.DiskUsage = metrics.DiskUsage
+			status.NetworkIn = int64(metrics.NetworkInBytes)
+			status.NetworkOut = int64(metrics.NetworkOutBytes)
+		} else {
+			// 如果获取指标失败，使用默认值
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			status.CPUUsage = 0.0 // 无法获取时设为0
+			status.MemoryUsage = float64(m.Alloc) / float64(m.Sys) * 100
+			status.DiskUsage = 0.0
+			status.NetworkIn = 0
+			status.NetworkOut = 0
+		}
+	} else {
+		// 监控服务未启动，使用基础指标
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		status.CPUUsage = 0.0
+		status.MemoryUsage = float64(m.Alloc) / float64(m.Sys) * 100
+		status.DiskUsage = 0.0
+		status.NetworkIn = 0
+		status.NetworkOut = 0
 	}
 
 	return status, nil
@@ -78,36 +115,68 @@ func (s *systemService) GetMetrics() (*models.SystemMetrics, error) {
 	// 尝试获取轻量级指标
 	lightweightMetrics := s.getLightweightMetrics()
 	if lightweightMetrics != nil {
-		// 使用轻量级指标系统的真实数据
-		return &models.SystemMetrics{
+		// 使用轻量级指标系统的真实数据，并结合监控服务的系统指标
+		metrics := &models.SystemMetrics{
 			Timestamp:           lightweightMetrics.LastUpdated,
-			DataPointsPerSecond: int(lightweightMetrics.DataMetrics.DataPointsPerSecond), // 转换为int
+			DataPointsPerSecond: int(lightweightMetrics.DataMetrics.DataPointsPerSecond),
 			ActiveConnections:   lightweightMetrics.ConnectionMetrics.ActiveConnections,
 			ErrorRate:           lightweightMetrics.ErrorMetrics.ErrorRate,
 			ResponseTimeAvg:     lightweightMetrics.ConnectionMetrics.AverageResponseTimeMS,
 			MemoryUsage:         float64(lightweightMetrics.SystemMetrics.MemoryUsageBytes) / float64(lightweightMetrics.SystemMetrics.HeapSizeBytes) * 100,
 			CPUUsage:            lightweightMetrics.SystemMetrics.CPUUsagePercent,
-			DiskUsage:           45.8, // 暂时使用模拟数据，后续可以添加磁盘使用率监控
 			NetworkInBytes:      lightweightMetrics.DataMetrics.TotalBytesProcessed,
-			NetworkOutBytes:     lightweightMetrics.DataMetrics.TotalBytesProcessed, // 假设输入输出大致相等
-		}, nil
+			NetworkOutBytes:     lightweightMetrics.DataMetrics.TotalBytesProcessed,
+			DiskUsage:           0.0, // 默认值，将从监控服务获取
+		}
+		
+		// 尝试从监控服务获取更详细的系统指标
+		if s.monitoringService != nil && s.monitoringService.IsStarted() {
+			if sysMetrics, err := s.monitoringService.GetSystemMetrics(); err == nil {
+				// 使用监控服务的更准确的系统指标
+				metrics.CPUUsage = sysMetrics.CPUUsage
+				metrics.MemoryUsage = sysMetrics.MemoryUsage
+				metrics.DiskUsage = sysMetrics.DiskUsage
+				metrics.NetworkInBytes = int64(sysMetrics.NetworkInBytes)
+				metrics.NetworkOutBytes = int64(sysMetrics.NetworkOutBytes)
+			}
+		}
+		
+		return metrics, nil
 	}
 
-	// 回退到使用原始方法
+	// 回退到使用监控服务
+	if s.monitoringService != nil && s.monitoringService.IsStarted() {
+		if sysMetrics, err := s.monitoringService.GetSystemMetrics(); err == nil {
+			return &models.SystemMetrics{
+				Timestamp:           sysMetrics.Timestamp,
+				DataPointsPerSecond: 0, // 这些需要从实际数据源获取
+				ActiveConnections:   0,
+				ErrorRate:           0.0,
+				ResponseTimeAvg:     0.0,
+				MemoryUsage:         sysMetrics.MemoryUsage,
+				CPUUsage:            sysMetrics.CPUUsage,
+				DiskUsage:           sysMetrics.DiskUsage,
+				NetworkInBytes:      int64(sysMetrics.NetworkInBytes),
+				NetworkOutBytes:     int64(sysMetrics.NetworkOutBytes),
+			}, nil
+		}
+	}
+
+	// 最后回退到基础指标
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
 	metrics := &models.SystemMetrics{
 		Timestamp:           time.Now(),
-		DataPointsPerSecond: 1250,
-		ActiveConnections:   15,
-		ErrorRate:           0.02,
-		ResponseTimeAvg:     45.2,
+		DataPointsPerSecond: 0,
+		ActiveConnections:   0,
+		ErrorRate:           0.0,
+		ResponseTimeAvg:     0.0,
 		MemoryUsage:         float64(m.Alloc) / float64(m.Sys) * 100,
-		CPUUsage:            25.5, // 模拟数据
-		DiskUsage:           45.8, // 模拟数据
-		NetworkInBytes:      1024 * 1024 * 50,
-		NetworkOutBytes:     1024 * 1024 * 30,
+		CPUUsage:            0.0,
+		DiskUsage:           0.0,
+		NetworkInBytes:      0,
+		NetworkOutBytes:     0,
 	}
 
 	return metrics, nil
@@ -413,4 +482,25 @@ func (s *systemService) getLightweightMetrics() *metrics.LightweightMetrics {
 	// 由于系统服务无法直接访问Runtime实例，这里返回nil
 	// 在实际部署中，可以通过依赖注入或全局变量来获取指标
 	return nil
+}
+
+// GetMonitoringService 获取监控服务
+func (s *systemService) GetMonitoringService() *monitoring.Service {
+	return s.monitoringService
+}
+
+// StartMonitoring 启动监控服务
+func (s *systemService) StartMonitoring() error {
+	if s.monitoringService == nil {
+		return fmt.Errorf("monitoring service is not initialized")
+	}
+	return s.monitoringService.Start()
+}
+
+// StopMonitoring 停止监控服务
+func (s *systemService) StopMonitoring() error {
+	if s.monitoringService == nil {
+		return nil
+	}
+	return s.monitoringService.Stop()
 }

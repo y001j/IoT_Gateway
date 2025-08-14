@@ -232,6 +232,9 @@ func (s *RedisSink) formatKey(config PointConfig, point model.Point) string {
 
 // storeAsJSON 将数据点作为JSON存储
 func (s *RedisSink) storeAsJSON(ctx context.Context, key string, point model.Point, expiry time.Duration) error {
+	// 创建安全的Tags副本 - 使用GetTagsCopy()
+	safeTags := point.GetTagsCopy()
+
 	// 创建包含所有信息的JSON对象
 	data := map[string]interface{}{
 		"key":       point.Key,
@@ -239,7 +242,7 @@ func (s *RedisSink) storeAsJSON(ctx context.Context, key string, point model.Poi
 		"value":     s.convertValue(point),
 		"type":      string(point.Type),
 		"timestamp": time.Now().UnixNano() / int64(time.Millisecond),
-		"tags":      point.Tags,
+		"tags":      safeTags,
 	}
 
 	// 序列化为JSON
@@ -283,13 +286,15 @@ func (s *RedisSink) storeAsHash(ctx context.Context, key string, point model.Poi
 	// 添加指定的标签字段
 	if len(fields) > 0 {
 		for _, field := range fields {
-			if value, ok := point.Tags[field]; ok {
+			// Go 1.24安全：使用GetTag方法替代直接Tags[]访问
+			if value, exists := point.GetTag(field); exists {
 				hash[field] = value
 			}
 		}
 	} else {
-		// 如果未指定字段，添加所有标签
-		for k, v := range point.Tags {
+		// 如果未指定字段，添加所有标签（使用安全方式）
+		pointTags := point.GetTagsCopy()
+		for k, v := range pointTags {
 			hash[k] = v
 		}
 	}

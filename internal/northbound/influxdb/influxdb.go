@@ -198,8 +198,9 @@ func (s *InfluxDBSink) Publish(batch []model.Point) error {
 			// 添加设备ID作为标签
 			p.AddTag("device_id", point.DeviceID)
 
-			// 添加所有原始标签
-			for k, v := range point.Tags {
+			// Go 1.24安全：添加所有原始标签
+			pointTags := point.GetTagsSafe()
+			for k, v := range pointTags {
 				// 检查是否应该作为字段而不是标签
 				if contains(config.Fields, k) {
 					p.AddField(k, v)

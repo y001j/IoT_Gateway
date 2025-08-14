@@ -4,7 +4,7 @@
   "description": "检查压力是否在正常范围内",
   "enabled": true,
   "priority": 75,
-  "version": 1,
+  "version": 194,
   "conditions": {
     "or": [
       {
@@ -38,15 +38,11 @@
           "validated": "true"
         },
         "field": "value",
-        "transforms": [
-          {
-            "precision": 1,
-            "type": "round"
-          }
-        ]
+        "precision": 1,
+        "type": "round"
       }
     }
   ],
-  "created_at": "2025-07-17T05:07:31.697970319+08:00",
-  "updated_at": "2025-07-17T05:07:31.69797039+08:00"
+  "created_at": "2025-08-10T01:49:19.1633283+08:00",
+  "updated_at": "2025-08-15T01:54:19.911693+08:00"
 }

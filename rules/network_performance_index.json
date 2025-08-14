@@ -1,0 +1,33 @@
+{
+  "id": "network_performance_index",
+  "name": "网络性能指数计算",
+  "description": "计算网络性能综合指数，包括延迟归一化和等级评分",
+  "enabled": true,
+  "priority": 30,
+  "version": 1,
+  "conditions": {
+    "type": "simple",
+    "field": "key",
+    "operator": "eq",
+    "value": "network_latency"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "expression",
+        "expression": "max(0, 100 - (x / 2))",
+        "output_key": "network_performance_score",
+        "output_type": "float",
+        "precision": 1,
+        "add_tags": {
+          "transform_type": "performance_scoring",
+          "algorithm": "inverse_latency_mapping",
+          "score_range": "0-100"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

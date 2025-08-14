@@ -1,0 +1,59 @@
+{
+  "id": "composite_data_monitor",
+  "name": "复合数据综合监控",
+  "description": "监控所有复合数据类型的健康状态",
+  "enabled": true,
+  "priority": 50,
+  "version": 8,
+  "conditions": {
+    "or": [
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "location"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "acceleration"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "color_reading"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "signal_vector"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "measurement_array"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "composite_data": "true",
+          "monitoring": "active"
+        },
+        "field": "timestamp",
+        "format": "2006-01-02 15:04:05",
+        "output_key": "formatted_time",
+        "type": "format"
+      }
+    }
+  ],
+  "created_at": "2025-08-14T21:46:15.5870808+08:00",
+  "updated_at": "2025-08-15T01:54:19.9412553+08:00"
+}

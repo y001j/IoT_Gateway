@@ -47,19 +47,18 @@ func NewRuleService(manager rules.RuleManager) (RuleService, error) {
 // convertToWebRule converts a manager rule to a web model rule.
 func convertToWebRule(managerRule *rules.Rule) models.Rule {
 	return models.Rule{
-		BaseModel: models.BaseModel{
-			ID:        0, // Web model uses int, manager uses string. Reconcile this.
-			CreatedAt: managerRule.CreatedAt,
-			UpdatedAt: managerRule.UpdatedAt,
-		},
+		ID:          managerRule.ID,    // String ID from rule manager
 		Name:        managerRule.Name,
 		Description: managerRule.Description,
 		Enabled:     managerRule.Enabled,
 		Priority:    managerRule.Priority,
 		Version:     managerRule.Version,
+		DataType:    managerRule.DataType, // 传递数据类型字段
 		Conditions:  convertCondition(managerRule.Conditions),
 		Actions:     convertActions(managerRule.Actions),
 		Tags:        managerRule.Tags,
+		CreatedAt:   managerRule.CreatedAt,
+		UpdatedAt:   managerRule.UpdatedAt,
 	}
 }
 
@@ -127,12 +126,17 @@ func convertActions(actions []rules.Action) []models.RuleAction {
 }
 
 func (s *ruleService) GetRules(req *models.RuleListRequest) ([]models.Rule, int, error) {
+	if s.manager == nil {
+		log.Error().Msg("RuleService: manager为nil")
+		return []models.Rule{}, 0, fmt.Errorf("rule manager is nil")
+	}
+	
 	managerRules := s.manager.ListRules()
-	log.Debug().Int("rule_count", len(managerRules)).Msg("获取规则列表")
+	log.Info().Int("rule_count", len(managerRules)).Msg("RuleService: 获取规则列表")
 	
 	webRules := make([]models.Rule, 0, len(managerRules))
 	for _, r := range managerRules {
-		log.Debug().Str("rule_id", r.ID).Str("rule_name", r.Name).Msg("转换规则")
+		log.Info().Str("rule_id", r.ID).Str("rule_name", r.Name).Msg("RuleService: 转换规则")
 		// TODO: Implement filtering based on req.Type, req.Status, etc.
 		webRules = append(webRules, convertToWebRule(r))
 	}
@@ -164,15 +168,30 @@ func (s *ruleService) GetRule(id string) (*models.Rule, error) {
 }
 
 func (s *ruleService) CreateRule(req *models.RuleCreateRequest) (*models.Rule, error) {
-	// This requires a function to convert web create request to manager rule model.
-	// Placeholder implementation:
+	// Convert web condition to manager condition
+	managerCondition, err := convertToManagerCondition(req.Conditions)
+	if err != nil {
+		return nil, fmt.Errorf("invalid conditions: %w", err)
+	}
+	
+	// Convert web actions to manager actions
+	managerActions, err := convertToManagerActions(req.Actions)
+	if err != nil {
+		return nil, fmt.Errorf("invalid actions: %w", err)
+	}
+	
 	newRule := &rules.Rule{
 		ID:          fmt.Sprintf("rule-%d", time.Now().UnixNano()), // Generate a unique ID
 		Name:        req.Name,
 		Description: req.Description,
 		Enabled:     req.Enabled,
 		Priority:    req.Priority,
-		// Conditions & Actions need conversion
+		Version:     1,
+		Conditions:  managerCondition,
+		Actions:     managerActions,
+		Tags:        req.Tags,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	if err := s.manager.SaveRule(newRule); err != nil {
@@ -196,7 +215,39 @@ func (s *ruleService) UpdateRule(id string, req *models.RuleUpdateRequest) (*mod
 	if req.Description != "" {
 		managerRule.Description = req.Description
 	}
-	// ... and so on for other fields
+	if req.Priority > 0 {
+		managerRule.Priority = req.Priority
+	}
+	if req.Enabled != nil {
+		managerRule.Enabled = *req.Enabled
+	}
+	if req.Tags != nil {
+		managerRule.Tags = req.Tags
+	}
+	
+	// Update conditions if provided
+	if req.Conditions != nil {
+		// Convert web condition to manager condition
+		managerCondition, err := convertToManagerCondition(req.Conditions)
+		if err != nil {
+			return nil, fmt.Errorf("invalid conditions: %w", err)
+		}
+		managerRule.Conditions = managerCondition
+	}
+	
+	// Update actions if provided
+	if req.Actions != nil && len(req.Actions) > 0 {
+		// Convert web actions to manager actions
+		managerActions, err := convertToManagerActions(req.Actions)
+		if err != nil {
+			return nil, fmt.Errorf("invalid actions: %w", err)
+		}
+		managerRule.Actions = managerActions
+	}
+
+	// Update version and timestamp
+	managerRule.Version++
+	managerRule.UpdatedAt = time.Now()
 
 	if err := s.manager.SaveRule(managerRule); err != nil {
 		return nil, err
@@ -270,7 +321,7 @@ func (s *ruleService) ValidateRule(rule *models.Rule) (*models.RuleValidationRes
 }
 
 // validateCondition 验证条件
-func (s *ruleService) validateCondition(condition *models.Condition) error {
+func (s *ruleService) validateCondition(condition *models.RuleCondition) error {
 	if condition.Type == "" {
 		return fmt.Errorf("条件类型不能为空")
 	}
@@ -312,7 +363,7 @@ func (s *ruleService) validateCondition(condition *models.Condition) error {
 }
 
 // validateAction 验证动作
-func (s *ruleService) validateAction(action *models.Action) error {
+func (s *ruleService) validateAction(action *models.RuleAction) error {
 	if action.Type == "" {
 		return fmt.Errorf("动作类型不能为空")
 	}
@@ -395,7 +446,7 @@ func (s *ruleService) TestRule(req *models.RuleTestRequestExtended) (*models.Rul
 }
 
 // evaluateCondition 简化的条件评估
-func (s *ruleService) evaluateCondition(condition *models.Condition, data map[string]interface{}) (bool, error) {
+func (s *ruleService) evaluateCondition(condition *models.RuleCondition, data map[string]interface{}) (bool, error) {
 	switch condition.Type {
 	case "simple":
 		fieldValue, exists := data[condition.Field]
@@ -698,4 +749,80 @@ func (s *ruleService) CreateRuleFromTemplate(templateID string, req *models.Rule
 	}
 
 	return s.CreateRule(createReq)
+}
+
+// convertToManagerCondition converts models.RuleCondition to rules.Condition
+func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition, error) {
+	if webCond == nil {
+		return nil, nil
+	}
+	
+	managerCond := &rules.Condition{
+		Type:       webCond.Type,
+		Field:      webCond.Field,
+		Operator:   webCond.Operator,
+		Value:      webCond.Value,
+		Expression: webCond.Expression,
+		Script:     webCond.Script,
+	}
+	
+	// Convert And conditions
+	if len(webCond.And) > 0 {
+		managerCond.And = make([]*rules.Condition, len(webCond.And))
+		for i, andCond := range webCond.And {
+			converted, err := convertToManagerCondition(&andCond)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert and condition %d: %w", i, err)
+			}
+			managerCond.And[i] = converted
+		}
+	}
+	
+	// Convert Or conditions
+	if len(webCond.Or) > 0 {
+		managerCond.Or = make([]*rules.Condition, len(webCond.Or))
+		for i, orCond := range webCond.Or {
+			converted, err := convertToManagerCondition(&orCond)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert or condition %d: %w", i, err)
+			}
+			managerCond.Or[i] = converted
+		}
+	}
+	
+	// Convert Not condition
+	if webCond.Not != nil {
+		converted, err := convertToManagerCondition(webCond.Not)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert not condition: %w", err)
+		}
+		managerCond.Not = converted
+	}
+	
+	return managerCond, nil
+}
+
+// convertToManagerActions converts []models.RuleAction to []rules.Action
+func convertToManagerActions(webActions []models.RuleAction) ([]rules.Action, error) {
+	if len(webActions) == 0 {
+		return []rules.Action{}, nil
+	}
+	
+	managerActions := make([]rules.Action, len(webActions))
+	for i, webAction := range webActions {
+		timeout, err := time.ParseDuration(webAction.Timeout)
+		if err != nil && webAction.Timeout != "" {
+			return nil, fmt.Errorf("invalid timeout for action %d: %w", i, err)
+		}
+		
+		managerActions[i] = rules.Action{
+			Type:    webAction.Type,
+			Config:  webAction.Config,
+			Async:   webAction.Async,
+			Timeout: timeout,
+			Retry:   webAction.Retry,
+		}
+	}
+	
+	return managerActions, nil
 }

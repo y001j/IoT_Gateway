@@ -31,13 +31,18 @@ class WebSocketService {
   private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor() {
-    // 直接连接到后端，避免 Vite 代理层的疯狂重连
+    // 优化的URL配置，支持环境变量
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const isDev = process.env.NODE_ENV === 'development';
+    const isDev = import.meta.env.DEV;
     
     if (isDev) {
-      // 开发环境直接连接后端端口
-      this.url = `${protocol}//localhost:8081/api/v1/ws/realtime`;
+      // 开发环境：优先使用环境变量，否则使用默认配置
+      const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL;
+      if (wsBaseUrl) {
+        this.url = `${wsBaseUrl}/realtime`;
+      } else {
+        this.url = `${protocol}//localhost:8081/api/v1/ws/realtime`;
+      }
     } else {
       // 生产环境使用当前域名
       const host = window.location.host;
@@ -45,7 +50,13 @@ class WebSocketService {
     }
     
     this.connectionId = this.generateConnectionId();
-    console.log('🔧 WebSocket服务初始化，URL:', this.url, 'ConnectionID:', this.connectionId);
+    console.log('🔧 WebSocket服务初始化', {
+      url: this.url,
+      connectionId: this.connectionId,
+      isDev,
+      wsBaseUrl: import.meta.env.VITE_WS_BASE_URL,
+      debugWs: import.meta.env.VITE_DEBUG_WS
+    });
   }
 
   /**
@@ -71,10 +82,32 @@ class WebSocketService {
   }
 
   /**
+   * 测试WebSocket端点是否可用
+   */
+  async testWebSocketEndpoint(): Promise<boolean> {
+    try {
+      // 尝试访问WebSocket端点的HTTP版本（如果有的话）
+      const httpUrl = this.url.replace('ws:', 'http:').replace('wss:', 'https:');
+      console.log('🧪 测试WebSocket端点可达性:', httpUrl);
+      
+      const response = await fetch(httpUrl.split('?')[0], { 
+        method: 'GET',
+        headers: { 'Connection': 'upgrade' }
+      });
+      
+      console.log('🧪 WebSocket端点测试结果:', response.status, response.statusText);
+      return true; // 即使返回错误状态，至少端点是可达的
+    } catch (error) {
+      console.error('🧪 WebSocket端点不可达:', error);
+      return false;
+    }
+  }
+
+  /**
    * 连接到 WebSocket 服务器
    */
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // 严格的连接控制
       const now = Date.now();
       
@@ -118,6 +151,16 @@ class WebSocketService {
       this.lastConnectAttempt = now;
       
       console.log(`🔌 开始建立WebSocket连接... [${this.connectionId}]`);
+      
+      // 先测试端点是否可达
+      const isEndpointReachable = await this.testWebSocketEndpoint();
+      if (!isEndpointReachable) {
+        const error = new Error(`WebSocket端点不可达: ${this.url}`);
+        console.error('❌ WebSocket端点测试失败');
+        this.isConnecting = false;
+        reject(error);
+        return;
+      }
 
       try {
         // 在 URL 中传递 JWT 令牌（通过查询参数）
@@ -172,10 +215,16 @@ class WebSocketService {
         };
 
         this.ws.onerror = (error) => {
-          console.error(`❌ WebSocket错误 [${this.connectionId}]:`, error);
+          console.error(`❌ WebSocket连接错误 [${this.connectionId}]:`, {
+            error,
+            url: this.url,
+            token: this.token ? `${this.token.substring(0, 20)}...` : 'null',
+            readyState: this.ws?.readyState,
+            timestamp: new Date().toISOString()
+          });
           this.isConnecting = false;
           this.callbacks.onError?.(error);
-          reject(error);
+          reject(new Error(`WebSocket连接失败: 无法连接到 ${this.url}`));
         };
 
       } catch (error) {

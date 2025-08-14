@@ -1,0 +1,42 @@
+{
+  "id": "vibration_energy_calculation",
+  "name": "振动能量计算",
+  "description": "基于振动幅度和转速计算设备振动能量和功率指标",
+  "enabled": true,
+  "priority": 35,
+  "version": 5,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "vibration_sensor_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "vibration"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "algorithm": "kinetic_energy_formula",
+          "calculation_type": "vibration_energy",
+          "units": "joules_per_kg"
+        },
+        "output_key": "vibration_energy",
+        "type": "expression",
+        "expression": "pow(value, 2) * 0.5"
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-13T02:32:02.3676393+08:00"
+}

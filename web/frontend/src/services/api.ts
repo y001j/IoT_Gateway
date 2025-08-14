@@ -12,19 +12,27 @@ const api = axios.create({
 // Request interceptor to add the auth token to headers
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const { accessToken } = useAuthStore.getState();
-    console.log('发送API请求:', config.url);
-    console.log('当前accessToken:', accessToken ? `${accessToken.substring(0, 20)}...` : 'null');
+    const authState = useAuthStore.getState();
+    const { accessToken, isAuthenticated, isInitialized } = authState;
+    
+    console.log('📤 发送API请求:', config.method?.toUpperCase(), config.url);
+    console.log('🔍 认证状态:', {
+      isAuthenticated,
+      isInitialized,
+      hasAccessToken: !!accessToken,
+      accessTokenPrefix: accessToken ? `${accessToken.substring(0, 20)}...` : 'null'
+    });
     
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
-      console.log('已添加Authorization header');
+      console.log('✅ 已添加Authorization header');
     } else {
-      console.log('没有accessToken，未添加Authorization header');
+      console.log('❌ 没有accessToken，未添加Authorization header');
     }
     return config;
   },
   (error: AxiosError) => {
+    console.error('❌ API请求拦截器错误:', error);
     return Promise.reject(error);
   }
 );
@@ -67,6 +75,27 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // 网络错误处理
+    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+      console.warn('🌐 网络连接错误，后端服务可能未启动');
+      const networkError = new Error('网络连接失败，请检查后端服务是否运行');
+      networkError.name = 'NetworkError';
+      return Promise.reject(networkError);
+    }
+
+    // 400 Bad Request 特殊处理
+    if (error.response?.status === 400) {
+      const errorData = error.response.data as any;
+      if (errorData?.message && errorData.message.includes('RefreshToken')) {
+        console.warn('⚠️ Refresh token 验证失败，需要重新登录');
+        const { logout } = useAuthStore.getState();
+        logout();
+        const authError = new Error('认证已过期，请重新登录');
+        authError.name = 'AuthExpiredError';
+        return Promise.reject(authError);
+      }
+    }
+
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
         return new Promise(function(resolve, reject) {
@@ -92,10 +121,14 @@ api.interceptors.response.use(
       }
 
       try {
-        const { data } = await axios.post('/api/v1/auth/refresh', { refreshToken });
-        const { accessToken: newAccessToken, refreshToken: newRefreshToken } = data;
+        // 后端期望字段名为 refresh_token（小写下划线）
+        const { data } = await axios.post('/api/v1/auth/refresh', { refresh_token: refreshToken });
+        const { token: newAccessToken, refresh_token: newRefreshToken } = data.data || data;
         
-        setTokens(newAccessToken, newRefreshToken);
+        // 如果没有新refresh token，使用access token
+        const newRefresh = newRefreshToken || newAccessToken;
+        
+        setTokens(newAccessToken, newRefresh);
         if (api.defaults.headers.common)
             api.defaults.headers.common['Authorization'] = 'Bearer ' + newAccessToken;
         originalRequest.headers['Authorization'] = 'Bearer ' + newAccessToken;
@@ -103,15 +136,37 @@ api.interceptors.response.use(
         processQueue(null, newAccessToken);
         return api(originalRequest);
       } catch (refreshError) {
+        console.error('❌ Token 刷新失败:', refreshError);
         const error = refreshError instanceof Error ? refreshError : new Error(String(refreshError));
         processQueue(error, null);
         logout();
-        // Optionally redirect to login page
-        // window.location.href = '/login';
-        return Promise.reject(refreshError);
+        
+        // 创建更友好的错误消息
+        const authError = new Error('会话已过期，请重新登录');
+        authError.name = 'AuthExpiredError';
+        return Promise.reject(authError);
       } finally {
         isRefreshing = false;
       }
+    }
+
+    // 其他HTTP错误的友好处理
+    if (error.response?.status === 403) {
+      const permissionError = new Error('权限不足，无法执行此操作');
+      permissionError.name = 'PermissionError';
+      return Promise.reject(permissionError);
+    }
+
+    if (error.response?.status === 404) {
+      const notFoundError = new Error('请求的资源不存在');
+      notFoundError.name = 'NotFoundError';
+      return Promise.reject(notFoundError);
+    }
+
+    if (error.response?.status >= 500) {
+      const serverError = new Error('服务器内部错误，请稍后重试');
+      serverError.name = 'ServerError';
+      return Promise.reject(serverError);
     }
 
     return Promise.reject(error);

@@ -46,5 +46,25 @@ export const systemService = {
   // 重启系统
   async restart(delay?: number): Promise<void> {
     await api.post('/system/restart', { delay: delay || 0 });
+  },
+
+  // 获取轻量级指标 (代理到Gateway主服务)
+  async getLightweightMetrics(format: 'json' | 'text' = 'json'): Promise<any> {
+    try {
+      // 使用环境变量中配置的Gateway URL
+      const gatewayUrl = import.meta.env.VITE_GATEWAY_URL || 'http://localhost:8080';
+      const response = await fetch(`${gatewayUrl}/metrics${format === 'text' ? '?format=text' : ''}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      if (format === 'text') {
+        return await response.text();
+      } else {
+        return await response.json();
+      }
+    } catch (error) {
+      console.error('Failed to fetch lightweight metrics:', error);
+      throw error;
+    }
   }
 };

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { Card, Select, Row, Col, Typography, Button, Alert, Space, Statistic } from 'antd';
 import { LineChartOutlined, ReloadOutlined, BarChartOutlined } from '@ant-design/icons';
 import * as echarts from 'echarts';
@@ -35,7 +35,7 @@ interface ChartData {
 const DataFlowChart: React.FC<DataFlowChartProps> = ({
   height = 400,
   autoRefresh = true,
-  refreshInterval = 10000,
+  refreshInterval = 3000,
 }) => {
   // 状态管理
   const [chartData, setChartData] = useState<ChartData>({
@@ -77,11 +77,8 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
         if (metrics.metrics && metrics.metrics.length > 0) {
           const processedData = processChartData(metrics.metrics);
           setChartData(processedData);
-          console.log('DataFlowChart: 使用监控API真实数据，共', metrics.metrics.length, '个数据流');
-          console.log('DataFlowChart: 数据流详情:', metrics.metrics);
         } else {
           // 如果没有真实数据流，尝试轻量级指标作为后备
-          console.log('DataFlowChart: 没有真实数据流，尝试轻量级指标');
           const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
           
           const fallbackDataFlowMetrics: DataFlowMetrics[] = [
@@ -100,11 +97,10 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
           
           const processedData = processChartData(fallbackDataFlowMetrics);
           setChartData(processedData);
-          console.log('DataFlowChart: 使用轻量级指标后备数据');
         }
         
       } catch (monitoringError) {
-        console.warn('监控API不可用，尝试轻量级指标:', monitoringError);
+        console.warn('监控API不可用:', monitoringError);
         
         // 如果监控API失败，尝试轻量级指标
         const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
@@ -125,7 +121,6 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
         
         const processedData = processChartData(fallbackDataFlowMetrics);
         setChartData(processedData);
-        console.log('DataFlowChart: 使用轻量级指标后备数据');
       }
       
     } catch (err: unknown) {
@@ -144,6 +139,36 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
       setLoading(false);
     }
   };
+
+  // 计算实时统计数据
+  const realtimeStats = useMemo(() => {
+    if (!chartData || chartData.throughput.length === 0) {
+      return { currentThroughput: 0, currentLatency: 0, currentErrorRate: 0, deviceCount: 0 };
+    }
+    
+    // 取最新的实时值（应该是数组最后几个值的平均）
+    const recentValues = 3; // 取最近3个值求平均
+    const throughputValues = chartData.throughput.slice(-recentValues);
+    const latencyValues = chartData.latency.slice(-recentValues);
+    const errorRateValues = chartData.errorRate.slice(-recentValues);
+    
+    const currentThroughput = throughputValues.length > 0 
+      ? throughputValues.reduce((sum, val) => sum + val, 0) / throughputValues.length 
+      : 0;
+    const currentLatency = latencyValues.length > 0 
+      ? latencyValues.reduce((sum, val) => sum + val, 0) / latencyValues.length 
+      : 0;
+    const currentErrorRate = errorRateValues.length > 0 
+      ? errorRateValues.reduce((sum, val) => sum + val, 0) / errorRateValues.length 
+      : 0;
+    
+    return {
+      currentThroughput,
+      currentLatency,
+      currentErrorRate,
+      deviceCount: chartData.devices.length
+    };
+  }, [chartData]);
 
   // 处理图表数据
   const processChartData = (metrics: DataFlowMetrics[]) => {
@@ -176,19 +201,20 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
     if (metrics.length > 0) {
       // 对于真实数据，我们直接使用现有的指标值
       // 因为后端已经计算了每秒的数据点、字节数等
-      const currentTime = new Date().toLocaleTimeString();
+      // const currentTime = new Date().toLocaleTimeString();
       
-      // 计算聚合指标
-      const totalThroughput = metrics.reduce((sum, metric) => sum + metric.data_points_per_sec, 0);
-      const avgLatency = metrics.reduce((sum, metric) => sum + metric.latency_ms, 0) / metrics.length;
-      const avgErrorRate = metrics.reduce((sum, metric) => sum + metric.error_rate, 0) / metrics.length;
+      // 计算聚合指标 - 修复计算逻辑
+      const totalThroughput = metrics.reduce((sum, metric) => sum + (metric.data_points_per_sec || 0), 0);
+      const avgLatency = metrics.length > 0 ? metrics.reduce((sum, metric) => sum + (metric.latency_ms || 0), 0) / metrics.length : 0;
+      const avgErrorRate = metrics.length > 0 ? metrics.reduce((sum, metric) => sum + (metric.error_rate || 0), 0) / metrics.length : 0;
+      
       
       // 创建时间序列（最近24个5分钟点）
       for (let i = 23; i >= 0; i--) {
         const time = new Date(now.getTime() - i * 300000);
         timePoints.push(time.toLocaleTimeString());
         
-        // 对于最近的数据点，使用真实值，对于较早的点使用模拟的变化
+        // 对于最近的数据点，使用真实值，对于较早的点使用基于真实数据的模拟值
         if (i <= 2) { // 最近15分钟使用真实数据
           throughputData.push(totalThroughput);
           latencyData.push(avgLatency);
@@ -459,12 +485,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
   }, [autoRefresh, refreshInterval, timeRange]);
 
   // 计算总体指标
-  const totalThroughput = chartData.throughput.reduce((sum, value) => sum + value, 0);
-  const avgLatency = chartData.latency.length > 0 ? 
-    chartData.latency.reduce((sum, value) => sum + value, 0) / chartData.latency.length : 0;
-  const avgErrorRate = chartData.errorRate.length > 0 ? 
-    chartData.errorRate.reduce((sum, value) => sum + value, 0) / chartData.errorRate.length : 0;
-  const activeDevices = chartData.devices.length;
+  // 统计信息现在使用 realtimeStats
 
   return (
     <div>
@@ -510,7 +531,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
           <Card size="small">
             <Statistic
               title="当前吞吐量"
-              value={chartData.throughput.length > 0 ? chartData.throughput[chartData.throughput.length - 1].toFixed(1) : '0'}
+              value={realtimeStats.currentThroughput.toFixed(1)}
               suffix="点/秒"
               valueStyle={{ color: '#1890ff', fontSize: '18px' }}
               prefix="📊"
@@ -521,10 +542,10 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
           <Card size="small">
             <Statistic
               title="平均延迟"
-              value={avgLatency.toFixed(1)}
+              value={realtimeStats.currentLatency.toFixed(1)}
               suffix="ms"
               valueStyle={{ 
-                color: avgLatency > 100 ? '#f5222d' : avgLatency > 50 ? '#faad14' : '#52c41a',
+                color: realtimeStats.currentLatency > 100 ? '#f5222d' : realtimeStats.currentLatency > 50 ? '#faad14' : '#52c41a',
                 fontSize: '18px' 
               }}
               prefix="⏱️"
@@ -535,10 +556,10 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
           <Card size="small">
             <Statistic
               title="错误率"
-              value={avgErrorRate.toFixed(2)}
+              value={realtimeStats.currentErrorRate.toFixed(2)}
               suffix="%"
               valueStyle={{ 
-                color: avgErrorRate > 5 ? '#f5222d' : avgErrorRate > 1 ? '#faad14' : '#52c41a',
+                color: realtimeStats.currentErrorRate > 5 ? '#f5222d' : realtimeStats.currentErrorRate > 1 ? '#faad14' : '#52c41a',
                 fontSize: '18px' 
               }}
               prefix="⚠️"
@@ -549,7 +570,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
           <Card size="small">
             <Statistic
               title="数据源"
-              value={activeDevices}
+              value={realtimeStats.deviceCount}
               suffix="个"
               valueStyle={{ color: '#722ed1', fontSize: '18px' }}
               prefix="🔗"

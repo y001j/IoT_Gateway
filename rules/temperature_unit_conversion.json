@@ -1,0 +1,45 @@
+{
+  "id": "temperature_unit_conversion",
+  "name": "温度单位转换",
+  "description": "将摄氏度温度转换为华氏度，并添加温度等级标签",
+  "enabled": true,
+  "priority": 40,
+  "version": 1,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "temperature"
+      },
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "startswith",
+        "value": "temp_sensor"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "unit_convert",
+        "from": "C",
+        "to": "F",
+        "output_key": "temperature_f",
+        "output_type": "float",
+        "precision": 2,
+        "add_tags": {
+          "transform_type": "unit_conversion",
+          "original_unit": "celsius",
+          "converted_unit": "fahrenheit"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

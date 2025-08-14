@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Card,
   Row,
@@ -26,7 +26,9 @@ import {
   WarningOutlined,
   DashboardOutlined,
   DatabaseOutlined,
-  LineChartOutlined
+  LineChartOutlined,
+  BugOutlined,
+  FireOutlined
 } from '@ant-design/icons';
 import { useAuthStore } from '../store/authStore';
 import { pluginService } from '../services/pluginService';
@@ -34,6 +36,7 @@ import { alertService } from '../services/alertService';
 import { SystemMonitorChart } from '../components/charts/SystemMonitorChart';
 import { IoTDataChart } from '../components/charts/IoTDataChart';
 import { useRealTimeData } from '../hooks/useRealTimeData';
+import { lightweightMetricsService, type LightweightMetrics } from '../services/lightweightMetricsService';
 import type { Plugin } from '../types/plugin';
 import type { Alert } from '../types/alert';
 import { authService } from '../services/authService';
@@ -51,7 +54,6 @@ interface SystemStats {
 
 
 const Dashboard: React.FC = () => {
-  console.log('Dashboard组件开始渲染');
   
   const { user } = useAuthStore();
   const [plugins, setPlugins] = useState<Plugin[]>([]);
@@ -66,44 +68,58 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
+  const [metricsData, setMetricsData] = useState<LightweightMetrics | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+  
+  // 防抖和缓存相关
+  const metricsIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastUpdateTime = useRef<string>('');
+  const isFirstLoad = useRef(true);
   
   // 使用实时数据Hook
   const { data: realtimeData, isConnected, connectionState, reconnect } = useRealTimeData();
 
-  console.log('Dashboard状态:', {
-    user,
-    pluginsCount: plugins.length,
-    recentAlertsCount: recentAlerts.length,
-    loading,
-    error,
-    connectionState,
-    isConnected,
-    realtimeDataKeys: Object.keys(realtimeData || {}),
-    systemStatus: realtimeData?.systemStatus,
-    systemMetrics: realtimeData?.systemMetrics,
-    systemMetricsHistory: realtimeData?.systemMetricsHistory?.length || 0,
-    iotDataCount: realtimeData?.iotData?.length || 0,
-    dataRecovery: {
-      hasSystemStatus: !!realtimeData?.systemStatus,
-      hasSystemMetrics: !!realtimeData?.systemMetrics,
-      hasHistoryData: (realtimeData?.systemMetricsHistory?.length || 0) > 0,
-      hasIoTData: (realtimeData?.iotData?.length || 0) > 0,
-    }
-  });
 
-  const fetchPlugins = async () => {
+  const fetchPlugins = useCallback(async () => {
     try {
       const response = await pluginService.getPlugins({ page: 1, page_size: 50 });
       setPlugins(response.data || []);
     } catch (error) {
-      console.error('获取插件列表失败:', error);
+      console.error('❌ 获取插件列表失败:', error);
     }
-  };
+  }, []);
 
-  const fetchStats = async () => {
+  // 获取轻量级指标数据 - 优化版本，避免频繁loading状态切换
+  const fetchLightweightMetrics = useCallback(async (showLoading: boolean = false) => {
+    try {
+      if (showLoading) {
+        setMetricsLoading(true);
+      }
+      
+      const data = await lightweightMetricsService.getLightweightMetrics();
+      
+      // 检查数据是否真的有变化，避免无意义的状态更新
+      const newUpdateTime = data.last_updated;
+      if (newUpdateTime !== lastUpdateTime.current || isFirstLoad.current) {
+        setMetricsData(data);
+        lastUpdateTime.current = newUpdateTime;
+      }
+      
+      if (isFirstLoad.current) {
+        isFirstLoad.current = false;
+      }
+    } catch (error) {
+      console.error('❌ Dashboard获取轻量级指标失败:', error);
+    } finally {
+      if (showLoading) {
+        setMetricsLoading(false);
+      }
+    }
+  }, []);
+
+  const fetchStats = useCallback(async () => {
     // 从实时数据更新统计信息
     if (realtimeData?.systemStatus) {
-      console.log('处理系统状态数据:', realtimeData.systemStatus);
       
       const systemStatus = realtimeData.systemStatus;
       let uptime = '0h 0m';
@@ -123,49 +139,84 @@ const Dashboard: React.FC = () => {
         }
       }
 
-      setStats({
-        uptime: uptime,
-        activeDevices: systemStatus.active_connections || systemStatus.active_plugins || 0,
-        dataPoints: realtimeData.iotData?.length || 0,
-        errorRate: systemStatus.error_rate || 0,
-        cpuUsage: systemStatus.cpu_usage || 0,
-        memoryUsage: systemStatus.memory_usage || 0
+      setStats(prevStats => {
+        const newStats = {
+          uptime: uptime,
+          activeDevices: systemStatus.active_connections || systemStatus.active_plugins || 0,
+          dataPoints: realtimeData.iotData?.length || 0,
+          errorRate: systemStatus.error_rate || 0,
+          cpuUsage: systemStatus.cpu_usage || 0,
+          memoryUsage: systemStatus.memory_usage || 0
+        };
+        
+        // 只有数据真正改变时才更新状态
+        if (JSON.stringify(prevStats) !== JSON.stringify(newStats)) {
+          return newStats;
+        }
+        return prevStats;
       });
     } else {
       // 如果没有实时数据，尝试从API获取基本统计
       try {
-        console.log('实时数据不可用，使用默认统计数据');
         // 这里可以调用API获取系统状态
       } catch (error) {
         console.error('获取系统统计失败:', error);
       }
     }
-  };
+  }, [realtimeData?.systemStatus, realtimeData?.iotData]);
 
   // 获取告警数据
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async () => {
     try {
       const alertsResponse = await alertService.getAlerts({ page: 1, pageSize: 5 });
       setRecentAlerts(alertsResponse.alerts);
     } catch (error) {
-      console.error('获取告警数据失败:', error);
+      console.error('❌ 获取告警数据失败:', error);
     }
-  };
+  }, []);
 
+  // 初始化数据加载
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchPlugins(), fetchStats(), fetchAlerts()]);
+      await Promise.all([
+        fetchPlugins(), 
+        fetchStats(), 
+        fetchAlerts(),
+        fetchLightweightMetrics(true) // 第一次显示loading
+      ]);
       setLoading(false);
     };
 
     loadData();
-  }, []);
+  }, []); // 只在组件挂载时执行一次
 
-  // 监听实时数据变化
+  // 监听实时数据变化 - 使用防抖
   useEffect(() => {
-    fetchStats();
-  }, [realtimeData?.systemStatus, realtimeData?.iotData]);
+    if (realtimeData?.systemStatus || realtimeData?.iotData) {
+      fetchStats();
+    }
+  }, [fetchStats]); // 依赖fetchStats而不是具体的实时数据
+
+  // 定期更新轻量级指标 - 优化版本，避免频繁创建定时器
+  useEffect(() => {
+    // 清理之前的定时器
+    if (metricsIntervalRef.current) {
+      clearInterval(metricsIntervalRef.current);
+    }
+
+    // 创建新的定时器，但不显示loading状态
+    metricsIntervalRef.current = setInterval(() => {
+      fetchLightweightMetrics(false); // 后续更新不显示loading
+    }, 8000); // 增加到8秒，减少更新频率
+
+    return () => {
+      if (metricsIntervalRef.current) {
+        clearInterval(metricsIntervalRef.current);
+        metricsIntervalRef.current = null;
+      }
+    };
+  }, [fetchLightweightMetrics]);
 
   const getAlertIcon = (level: string) => {
     switch (level) {
@@ -191,31 +242,61 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const refreshData = async () => {
+  const refreshData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchPlugins(), fetchStats(), fetchAlerts()]);
+    await Promise.all([
+      fetchPlugins(), 
+      fetchStats(), 
+      fetchAlerts(),
+      fetchLightweightMetrics(true) // 手动刷新时显示loading
+    ]);
     if (!isConnected) {
       await reconnect();
     }
     setLoading(false);
-  };
+  }, [fetchPlugins, fetchStats, fetchAlerts, fetchLightweightMetrics, isConnected, reconnect]);
 
   const testWebSocketConnection = async () => {
-    console.log('🔧 测试WebSocket连接...');
-    console.log('当前认证token:', authService.getToken()?.substring(0, 20) + '...');
     
     try {
       // 测试API连接
       const response = await fetch('/api/v1/system/status');
       const data = await response.json();
-      console.log('✅ API连接正常，系统状态:', data);
     } catch (error) {
       console.error('❌ API连接失败:', error);
     }
     
     // 手动重连WebSocket
-    console.log('🔄 尝试重连WebSocket...');
     reconnect();
+  };
+
+  const clearAuthAndReload = () => {
+    const { logout } = useAuthStore.getState();
+    logout();
+    window.location.reload();
+  };
+
+  // 手动刷新认证token
+  const refreshAuth = async () => {
+    try {
+      const newToken = await authService.refreshToken();
+      
+      // 更新WebSocket服务的token
+      const { webSocketService } = await import('../services/websocketService');
+      webSocketService.setToken(newToken);
+      
+      // 如果WebSocket未连接，尝试重连
+      if (!isConnected) {
+        reconnect();
+      }
+      
+      // 重新加载数据
+      await refreshData();
+    } catch (error) {
+      console.error('❌ 刷新认证token失败:', error);
+      // 如果刷新失败，清除认证状态
+      clearAuthAndReload();
+    }
   };
 
   // 在组件加载时测试连接
@@ -229,7 +310,30 @@ const Dashboard: React.FC = () => {
     return () => clearTimeout(timer);
   }, [isConnected, reconnect]);
 
-  const tabItems = [
+  // 使用useMemo缓存计算结果，避免每次渲染都重新计算
+  const formattedMetrics = useMemo(() => {
+    if (!metricsData) return null;
+    
+    return {
+      uptime: lightweightMetricsService.formatUptime(metricsData.system.uptime_seconds),
+      activeAdapters: `${metricsData.gateway.running_adapters}/${metricsData.gateway.total_adapters}`,
+      dataPointsPerSecond: metricsData.data.data_points_per_second.toFixed(1),
+      rulesEnabled: `${metricsData.rules.enabled_rules}/${metricsData.rules.total_rules}`,
+      rulesMatched: lightweightMetricsService.formatNumber(metricsData.rules.rules_matched),
+      actionsExecuted: lightweightMetricsService.formatNumber(metricsData.rules.actions_executed),
+      successRate: metricsData.rules.actions_executed > 0 
+        ? `${((metricsData.rules.actions_succeeded / metricsData.rules.actions_executed) * 100).toFixed(1)}%`
+        : '0%',
+      cpuUsage: metricsData.system.cpu_usage_percent,
+      memoryUsagePercent: Math.round((metricsData.system.memory_usage_bytes / 1024 / 1024 / 1024) * 10),
+      hasActionsFailed: metricsData.rules.actions_failed > 0
+    };
+  }, [metricsData]);
+
+  // 缓存当前时间字符串，避免每秒都重新计算
+  const currentTime = useMemo(() => new Date().toLocaleTimeString(), []);
+
+  const tabItems = useMemo(() => [
     {
       key: 'overview',
       label: (
@@ -239,110 +343,169 @@ const Dashboard: React.FC = () => {
         </span>
       ),
       children: (
-        <Row gutter={[24, 24]}>
-          {/* 系统统计卡片 */}
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
+        <Row gutter={[12, 12]}>
+          {/* 系统统计卡片 - 紧凑布局 */}
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
               <Statistic
                 title="系统运行时间"
-                value={stats.uptime}
+                value={formattedMetrics?.uptime || stats.uptime}
                 prefix={<ThunderboltOutlined />}
-                valueStyle={{ color: '#52c41a' }}
+                valueStyle={{ color: '#52c41a', fontSize: '16px' }}
               />
             </Card>
           </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
               <Statistic
-                title="活跃插件"
-                value={stats.activeDevices}
+                title="活跃适配器"
+                value={formattedMetrics?.activeAdapters || stats.activeDevices}
                 prefix={<DatabaseOutlined />}
-                valueStyle={{ color: '#1890ff' }}
+                valueStyle={{ color: '#1890ff', fontSize: '16px' }}
               />
             </Card>
           </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
               <Statistic
-                title="实时数据点"
-                value={stats.dataPoints}
+                title="数据点/秒"
+                value={formattedMetrics?.dataPointsPerSecond || stats.dataPoints}
                 prefix={<LineChartOutlined />}
-                valueStyle={{ color: '#722ed1' }}
+                valueStyle={{ color: '#722ed1', fontSize: '16px' }}
               />
             </Card>
           </Col>
-          <Col xs={24} sm={12} lg={6}>
-            <Card>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small">
               <Statistic
                 title="连接状态"
                 value={isConnected ? "已连接" : "断开"}
                 prefix={<ApiOutlined />}
-                valueStyle={{ color: isConnected ? '#52c41a' : '#f5222d' }}
+                valueStyle={{ color: isConnected ? '#52c41a' : '#f5222d', fontSize: '16px' }}
               />
             </Card>
           </Col>
 
-          {/* 系统资源使用 */}
-          <Col xs={24} md={12}>
-            <Card title="系统资源" extra={<Button icon={<ReloadOutlined />} onClick={refreshData} loading={loading} />}>
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <div>
-                  <Text>CPU 使用率</Text>
-                  <Progress
-                    percent={Math.round(stats.cpuUsage)}
-                    status={stats.cpuUsage > 80 ? 'exception' : 'active'}
-                    strokeColor={stats.cpuUsage > 80 ? '#f5222d' : '#1890ff'}
-                  />
-                </div>
-                <div>
-                  <Text>内存使用率</Text>
-                  <Progress
-                    percent={Math.round(stats.memoryUsage)}
-                    status={stats.memoryUsage > 85 ? 'exception' : 'active'}
-                    strokeColor={stats.memoryUsage > 85 ? '#f5222d' : '#52c41a'}
-                  />
-                </div>
-                <Divider />
-                <Row gutter={16}>
-                  <Col span={12}>
-                    <Statistic
-                      title="连接状态"
-                      value={connectionState}
-                      valueStyle={{ 
-                        fontSize: '14px',
-                        color: isConnected ? '#52c41a' : '#f5222d'
-                      }}
-                    />
-                  </Col>
-                  <Col span={12}>
-                    <Statistic
-                      title="最后更新"
-                      value={new Date().toLocaleTimeString()}
-                      valueStyle={{ fontSize: '14px' }}
-                    />
-                  </Col>
-                </Row>
-              </Space>
+          {/* 规则引擎统计卡片 - 紧凑布局 */}
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
+              <Statistic
+                title="启用规则"
+                value={formattedMetrics?.rulesEnabled || '0/0'}
+                prefix={<FireOutlined />}
+                valueStyle={{ color: '#fa8c16', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
+              <Statistic
+                title="规则匹配次数"
+                value={formattedMetrics?.rulesMatched || '0'}
+                prefix={<CheckCircleOutlined />}
+                valueStyle={{ color: '#52c41a', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
+              <Statistic
+                title="动作执行次数"
+                value={formattedMetrics?.actionsExecuted || '0'}
+                prefix={<ThunderboltOutlined />}
+                valueStyle={{ color: '#722ed1', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col xs={24} sm={12} md={8} lg={4} xl={3}>
+            <Card size="small" loading={metricsLoading}>
+              <Statistic
+                title="执行成功率"
+                value={formattedMetrics?.successRate || '0%'}
+                prefix={<BugOutlined />}
+                valueStyle={{ 
+                  color: formattedMetrics?.hasActionsFailed ? '#f5222d' : '#52c41a',
+                  fontSize: '16px'
+                }}
+              />
             </Card>
           </Col>
 
-          {/* 最近告警 */}
-          <Col xs={24} md={12}>
-            <Card title="最近告警" extra={<Badge count={recentAlerts.filter(a => a.level === 'error' || a.level === 'critical').length} />}>
+          {/* 系统资源使用 - 紧凑布局 */}
+          <Col xs={24} xl={12}>
+            <Card 
+              title="系统资源" 
+              size="small"
+              extra={<Button size="small" icon={<ReloadOutlined />} onClick={refreshData} loading={loading} />}
+            >
+              <Row gutter={[8, 8]}>
+                <Col xs={24} sm={12}>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text style={{ fontSize: '12px' }}>CPU 使用率</Text>
+                    <Progress
+                      size="small"
+                      percent={Math.round(formattedMetrics?.cpuUsage || stats.cpuUsage)}
+                      status={stats.cpuUsage > 80 ? 'exception' : 'active'}
+                      strokeColor={stats.cpuUsage > 80 ? '#f5222d' : '#1890ff'}
+                      showInfo={true}
+                    />
+                  </div>
+                </Col>
+                <Col xs={24} sm={12}>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text style={{ fontSize: '12px' }}>内存使用率</Text>
+                    <Progress
+                      size="small"
+                      percent={formattedMetrics?.memoryUsagePercent || Math.round(stats.memoryUsage)}
+                      status={stats.memoryUsage > 85 ? 'exception' : 'active'}
+                      strokeColor={stats.memoryUsage > 85 ? '#f5222d' : '#52c41a'}
+                      showInfo={true}
+                    />
+                  </div>
+                </Col>
+                <Col xs={12} sm={6}>
+                  <Statistic
+                    title="连接状态"
+                    value={connectionState}
+                    valueStyle={{ 
+                      fontSize: '12px',
+                      color: isConnected ? '#52c41a' : '#f5222d'
+                    }}
+                  />
+                </Col>
+                <Col xs={12} sm={6}>
+                  <Statistic
+                    title="最后更新"
+                    value={currentTime}
+                    valueStyle={{ fontSize: '12px' }}
+                  />
+                </Col>
+              </Row>
+            </Card>
+          </Col>
+
+          {/* 最近告警 - 紧凑布局 */}
+          <Col xs={24} xl={12}>
+            <Card 
+              title="最近告警" 
+              size="small"
+              extra={<Badge count={recentAlerts.filter(a => a.level === 'error' || a.level === 'critical').length} />}
+            >
               <List
-                dataSource={recentAlerts}
+                size="small"
+                dataSource={recentAlerts.slice(0, 3)}
                 renderItem={(alert) => (
-                  <List.Item>
+                  <List.Item style={{ padding: '8px 0' }}>
                     <List.Item.Meta
                       avatar={getAlertIcon(alert.level)}
                       title={
                         <Space>
-                          <Tag color={getAlertColor(alert.level)}>{alert.level.toUpperCase()}</Tag>
-                          <Text>{alert.title || alert.description}</Text>
+                          <Tag size="small" color={getAlertColor(alert.level)}>{alert.level.toUpperCase()}</Tag>
+                          <Text style={{ fontSize: '13px' }}>{alert.title || alert.description}</Text>
                         </Space>
                       }
                       description={
-                        <Space>
+                        <Space style={{ fontSize: '11px' }}>
                           <Text type="secondary">{alert.source}</Text>
                           <Text type="secondary">•</Text>
                           <Text type="secondary">{new Date(alert.createdAt).toLocaleString()}</Text>
@@ -355,28 +518,88 @@ const Dashboard: React.FC = () => {
             </Card>
           </Col>
 
-          {/* 插件状态 */}
+          {/* 插件状态 - 分组显示 */}
           <Col xs={24}>
-            <Card title="插件状态" loading={loading}>
-              <Row gutter={[16, 16]}>
-                {plugins.slice(0, 8).map((plugin, index) => (
-                  <Col xs={24} sm={12} md={8} lg={6} key={`plugin-${plugin.id || index}`}>
-                    <Card size="small">
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        <Space>
-                          <Badge
-                            status={plugin.status === 'running' ? 'success' : 'error'}
-                            text={plugin.name}
-                          />
-                        </Space>
-                        <Text type="secondary" style={{ fontSize: '12px' }}>
-                          {plugin.type} • v{plugin.version}
+            <Card title="插件状态" size="small" loading={loading}>
+              {(() => {
+                const adapterPlugins = plugins.filter(p => p.type === 'adapter').sort((a, b) => a.name.localeCompare(b.name));
+                const sinkPlugins = plugins.filter(p => p.type === 'sink').sort((a, b) => a.name.localeCompare(b.name));
+                
+                return (
+                  <>
+                    {/* Adapter 插件组 */}
+                    {adapterPlugins.length > 0 && (
+                      <div style={{ marginBottom: 16 }}>
+                        <Text strong style={{ fontSize: '14px', color: '#1890ff' }}>
+                          数据适配器 (Adapters) - {adapterPlugins.filter(p => p.status === 'running').length}/{adapterPlugins.length}
                         </Text>
-                      </Space>
-                    </Card>
-                  </Col>
-                ))}
-              </Row>
+                        <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
+                          {adapterPlugins.slice(0, 8).map((plugin, index) => (
+                            <Col xs={24} sm={12} md={8} lg={6} xl={4} key={`adapter-${plugin.id || index}`}>
+                              <div style={{ 
+                                border: '1px solid #e6f7ff', 
+                                borderRadius: '6px', 
+                                padding: '8px',
+                                backgroundColor: plugin.status === 'running' ? '#e6f7ff' : '#fff2f0',
+                                minHeight: '50px'
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
+                                  <Badge
+                                    status={plugin.status === 'running' ? 'success' : 'error'}
+                                    text={<Text style={{ fontSize: '12px', fontWeight: 500 }}>{plugin.name}</Text>}
+                                  />
+                                </div>
+                                <Text type="secondary" style={{ fontSize: '11px' }}>
+                                  {plugin.type} • v{plugin.version}
+                                </Text>
+                              </div>
+                            </Col>
+                          ))}
+                        </Row>
+                      </div>
+                    )}
+
+                    {/* Sink 插件组 */}
+                    {sinkPlugins.length > 0 && (
+                      <div>
+                        <Text strong style={{ fontSize: '14px', color: '#52c41a' }}>
+                          数据输出 (Sinks) - {sinkPlugins.filter(p => p.status === 'running').length}/{sinkPlugins.length}
+                        </Text>
+                        <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
+                          {sinkPlugins.slice(0, 8).map((plugin, index) => (
+                            <Col xs={24} sm={12} md={8} lg={6} xl={4} key={`sink-${plugin.id || index}`}>
+                              <div style={{ 
+                                border: '1px solid #f6ffed', 
+                                borderRadius: '6px', 
+                                padding: '8px',
+                                backgroundColor: plugin.status === 'running' ? '#f6ffed' : '#fff2f0',
+                                minHeight: '50px'
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
+                                  <Badge
+                                    status={plugin.status === 'running' ? 'success' : 'error'}
+                                    text={<Text style={{ fontSize: '12px', fontWeight: 500 }}>{plugin.name}</Text>}
+                                  />
+                                </div>
+                                <Text type="secondary" style={{ fontSize: '11px' }}>
+                                  {plugin.type} • v{plugin.version}
+                                </Text>
+                              </div>
+                            </Col>
+                          ))}
+                        </Row>
+                      </div>
+                    )}
+
+                    {/* 如果没有插件数据 */}
+                    {plugins.length === 0 && (
+                      <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
+                        暂无插件数据
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </Card>
           </Col>
         </Row>
@@ -390,7 +613,7 @@ const Dashboard: React.FC = () => {
           系统监控
         </span>
       ),
-      children: <SystemMonitorChart height={350} showDetailedCharts={true} />
+      children: <SystemMonitorChart height={280} showDetailedCharts={true} />
     },
     {
       key: 'iot-data',
@@ -400,9 +623,16 @@ const Dashboard: React.FC = () => {
           数据流监控
         </span>
       ),
-      children: <IoTDataChart height={350} showRawData={true} maxChartPoints={100} />
+      children: <IoTDataChart 
+        height={280} 
+        showRawData={true} 
+        maxChartPoints={100} 
+        enableCompositeDataViewer={true}
+        autoRefresh={true}
+        refreshInterval={3000}
+      />
     }
-  ];
+  ], [formattedMetrics, metricsLoading, stats, isConnected, connectionState, currentTime, plugins, loading, recentAlerts]);
 
       if (loading) {
     return (
@@ -419,46 +649,74 @@ const Dashboard: React.FC = () => {
 
   return (
     <div>
-      <Row justify="space-between" align="middle" style={{ marginBottom: 24 }}>
+      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
-          <Title level={2} style={{ margin: 0 }}>
+          <Title level={3} style={{ margin: 0, fontSize: '20px' }}>
             <DashboardOutlined /> 仪表板
           </Title>
-          <Text type="secondary">欢迎回来, {user?.username}</Text>
+          <Text type="secondary" style={{ fontSize: '13px' }}>欢迎回来, {user?.username}</Text>
         </Col>
         <Col>
-          <Space>
-            <Button type="primary" icon={<ReloadOutlined />} onClick={refreshData} loading={loading}>
-              刷新数据
+          <Space size="small">
+            <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={refreshData} loading={loading}>
+              刷新
             </Button>
-            <Button icon={<ApiOutlined />} onClick={testWebSocketConnection}>
+            <Button size="small" icon={<ApiOutlined />} onClick={testWebSocketConnection}>
               测试连接
             </Button>
             {!isConnected && (
-              <Button type="primary" icon={<ApiOutlined />} onClick={reconnect}>
-                重新连接
+              <Button size="small" type="primary" icon={<ApiOutlined />} onClick={reconnect}>
+                重连
               </Button>
             )}
+            <Button size="small" danger onClick={clearAuthAndReload}>
+              重新登录
+            </Button>
           </Space>
         </Col>
       </Row>
 
-      {/* 连接状态提示 */}
+      {/* 连接状态提示 - 紧凑样式 */}
       {!isConnected && (
         <AntAlert
           message="实时连接断开"
-          description="WebSocket连接已断开，部分实时功能可能不可用。点击重新连接或刷新页面。"
+          description="WebSocket连接已断开，部分实时功能可能不可用。"
           type="warning"
           showIcon
           closable
-          style={{ marginBottom: 16 }}
+          size="small"
+          style={{ marginBottom: 12 }}
+        />
+      )}
+
+      {/* 调试信息面板 - 紧凑样式 */}
+      {import.meta.env.DEV && (
+        <AntAlert
+          message="开发调试信息"
+          description={
+            <div>
+              <div style={{ fontSize: '11px', fontFamily: 'monospace', marginBottom: '8px' }}>
+                <div>🌐 API: {import.meta.env.VITE_API_BASE_URL || 'default'} | 🔐 Token: {authService.getToken() ? '✓' : '❌'} | 📡 状态: {connectionState}</div>
+              </div>
+              <Space size="small">
+                <Button size="small" onClick={testWebSocketConnection}>测试连接</Button>
+                <Button size="small" onClick={refreshAuth}>刷新Token</Button>
+                <Button danger size="small" onClick={clearAuthAndReload}>重新登录</Button>
+              </Space>
+            </div>
+          }
+          type="info"
+          showIcon
+          closable
+          style={{ marginBottom: 12 }}
         />
       )}
 
       <Tabs 
         defaultActiveKey="overview" 
         items={tabItems}
-        size="large"
+        size="small"
+        style={{ marginTop: 8 }}
       />
     </div>
   );

@@ -15,10 +15,21 @@ export interface SystemMetrics {
   uptime_seconds: number;
   memory_usage_bytes: number;
   cpu_usage_percent: number;
+  disk_usage_percent: number;
   goroutine_count: number;
   gc_pause_ms: number;
   heap_size_bytes: number;
   heap_in_use_bytes: number;
+  // 网络累计流量指标
+  network_in_bytes: number;
+  network_out_bytes: number;
+  network_in_packets: number;
+  network_out_packets: number;
+  // 网络实时速率指标
+  network_in_bytes_per_sec: number;
+  network_out_bytes_per_sec: number;
+  network_in_packets_per_sec: number;
+  network_out_packets_per_sec: number;
   version: string;
   go_version: string;
 }
@@ -185,10 +196,19 @@ class LightweightMetricsService {
         uptime_seconds: 0,
         memory_usage_bytes: 0,
         cpu_usage_percent: 0,
+        disk_usage_percent: 0,
         goroutine_count: 0,
         gc_pause_ms: 0,
         heap_size_bytes: 0,
         heap_in_use_bytes: 0,
+        network_in_bytes: 0,
+        network_out_bytes: 0,
+        network_in_packets: 0,
+        network_out_packets: 0,
+        network_in_bytes_per_sec: 0,
+        network_out_bytes_per_sec: 0,
+        network_in_packets_per_sec: 0,
+        network_out_packets_per_sec: 0,
         version: '',
         go_version: ''
       },

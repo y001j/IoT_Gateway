@@ -118,11 +118,15 @@ func (ws *WebService) Start(ctx context.Context) error {
 			// 重新创建规则服务以使用新的规则管理器
 			if newRuleService, err := services.NewRuleService(ruleManager); err == nil {
 				ws.services.Rule = newRuleService
-				log.Info().Msg("已更新Web服务的规则管理器和规则服务")
+				log.Info().Msg("Web服务规则管理器集成成功")
 			} else {
 				log.Error().Err(err).Msg("重新创建规则服务失败")
 			}
+		} else {
+			log.Warn().Msg("规则引擎服务返回的规则管理器为nil")
 		}
+	} else {
+		log.Info().Msg("规则引擎服务未启用，Web服务使用空规则服务")
 	}
 
 	// 启动服务（包括AlertIntegrationService）

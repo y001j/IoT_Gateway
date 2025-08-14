@@ -16,9 +16,9 @@ import {
 import {
   SaveOutlined,
   ReloadOutlined,
-  TestOutlined,
+  ExperimentOutlined as TestOutlined,
   DatabaseOutlined,
-  BackupOutlined,
+  CloudDownloadOutlined as BackupOutlined,
   HistoryOutlined
 } from '@ant-design/icons';
 import { settingsService } from '../../services/settingsService';

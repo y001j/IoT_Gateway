@@ -86,14 +86,54 @@ export const useRealTimeData = () => {
     if (!mountedRef.current) return;
 
     console.log('📨 处理实时数据消息:', message.type, message.data);
+    console.log('📨 完整消息对象:', message);
 
     updateGlobalData(prevData => {
       const newData = { ...prevData };
 
       switch (message.type) {
         case 'iot_data':
+          // 处理增强的IoT数据，包含类型信息和派生值
+          console.log('🔍 收到增强IoT数据:', message.data);
+          console.log('🔍 message.data.subject:', message.data.subject);
+          console.log('🔍 message.data.data:', message.data.data);
+          
+          // 后端发送的数据格式：{ subject: "...", data: enhancedIoTData }
+          // enhancedIoTData 包含: device_id, key, value, data_type, derived_values 等
+          const enhancedData = message.data.data || {};
+          console.log('🔍 提取的enhancedData:', enhancedData);
+          
+          // 检查数据是否为空
+          if (!enhancedData.device_id || !enhancedData.key) {
+            console.warn('⚠️ 数据缺少必要字段:', {
+              device_id: enhancedData.device_id,
+              key: enhancedData.key,
+              originalData: message.data
+            });
+          }
+          
+          const iotDataPoint = {
+            timestamp: new Date(message.timestamp || Date.now()),
+            subject: message.data.subject || '',
+            data: {
+              device_id: enhancedData.device_id,
+              key: enhancedData.key,
+              value: enhancedData.value,
+              data_type: enhancedData.data_type || 'unknown',
+              derived_values: enhancedData.derived_values || {},
+              // 保留原始数据结构
+              ...enhancedData
+            },
+            // 为了向后兼容，保留原始消息
+            raw_message: message.data
+          };
+          
+          console.log('🔍 处理后的增强IoT数据点:', iotDataPoint);
+          console.log('📊 数据类型:', iotDataPoint.data.data_type);
+          console.log('📈 派生值:', iotDataPoint.data.derived_values);
+          
           // 限制 IoT 数据数组大小
-          const newIotData = [...prevData.iotData, message.data];
+          const newIotData = [...prevData.iotData, iotDataPoint];
           if (newIotData.length > 100) {
             newIotData.splice(0, newIotData.length - 100); // 保留最后100条
           }
@@ -286,25 +326,39 @@ export const useRealTimeData = () => {
     const currentlyConnected = service.isConnected();
     setIsConnected(currentlyConnected);
     
-    // 设置认证令牌
-    const token = authService.getToken();
-    if (token) {
-      console.log('🔑 设置 WebSocket 认证令牌');
-      service.setToken(token);
-      
-      // 检查当前连接状态，如果未连接才尝试连接
-      if (!service.isConnected()) {
-        console.log('📡 WebSocket未连接，尝试建立连接...');
-        service.connect().catch((error: any) => {
-          console.error('❌ WebSocket 连接失败:', error);
-        });
+    // 尝试建立连接的函数
+    const tryConnect = () => {
+      const token = authService.getToken();
+      if (token) {
+        console.log('🔑 设置 WebSocket 认证令牌');
+        service.setToken(token);
+        
+        // 检查当前连接状态，如果未连接才尝试连接
+        if (!service.isConnected()) {
+          console.log('📡 WebSocket未连接，尝试建立连接...');
+          service.connect().catch((error: any) => {
+            console.error('❌ WebSocket 连接失败:', error);
+          });
+        } else {
+          console.log('✅ WebSocket已连接，无需重新连接');
+          setIsConnected(true);
+        }
       } else {
-        console.log('✅ WebSocket已连接，无需重新连接');
-        setIsConnected(true);
+        console.warn('⚠️ 没有找到认证令牌，无法建立 WebSocket 连接');
       }
-    } else {
-      console.warn('⚠️ 没有找到认证令牌，无法建立 WebSocket 连接');
-    }
+    };
+
+    // 立即尝试连接
+    tryConnect();
+
+    // 监听认证状态变化，当token可用时自动重连
+    const checkTokenInterval = setInterval(() => {
+      const token = authService.getToken();
+      if (token && !service.isConnected()) {
+        console.log('🔄 检测到认证令牌已可用，尝试重新连接WebSocket');
+        tryConnect();
+      }
+    }, 2000); // 每2秒检查一次token状态
 
     // 定期更新连接状态 (每3秒)
     const statusTimer = setInterval(() => {
@@ -319,6 +373,7 @@ export const useRealTimeData = () => {
     // 清理定时器
     return () => {
       clearInterval(statusTimer);
+      clearInterval(checkTokenInterval);
     };
   }, [getWebSocketService, updateConnectionInfo]);
 

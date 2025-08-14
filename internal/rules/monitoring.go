@@ -182,10 +182,24 @@ func (m *RuleMonitor) RecordError(errType ErrorType, level ErrorLevel, message, 
 
 // RecordRuleExecution 记录规则执行
 func (m *RuleMonitor) RecordRuleExecution(ruleID string, duration time.Duration, matched bool, err error) {
+	log.Debug().
+		Str("rule_id", ruleID).
+		Bool("matched", matched).
+		Err(err).
+		Msg("📊 RuleMonitor.RecordRuleExecution被调用")
+	
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	
+	// 增加调试：记录原子操作前后的值
+	oldValue := atomic.LoadInt64(&m.metrics.PointsProcessed)
 	atomic.AddInt64(&m.metrics.PointsProcessed, 1)
+	newValue := atomic.LoadInt64(&m.metrics.PointsProcessed)
+	
+	log.Debug().
+		Int64("points_processed_before", oldValue).
+		Int64("points_processed_after", newValue).
+		Msg("🔢 PointsProcessed原子计数器更新")
 	
 	if stats, exists := m.ruleStats[ruleID]; exists {
 		stats.TotalEvaluations++

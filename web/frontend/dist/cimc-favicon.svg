@@ -1,0 +1,23 @@
+<svg width="32" height="32" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 外圆环 -->
+  <circle cx="50" cy="50" r="45" fill="none" stroke="#1890ff" stroke-width="6"/>
+  
+  <!-- 内部图案 - 简化的集装箱图标 -->
+  <rect x="20" y="35" width="60" height="30" fill="#1890ff" rx="3"/>
+  <rect x="23" y="38" width="54" height="24" fill="white" rx="2"/>
+  
+  <!-- 中间分割线 -->
+  <line x1="50" y1="38" x2="50" y2="62" stroke="#1890ff" stroke-width="3"/>
+  
+  <!-- 左侧装饰 -->
+  <circle cx="35" cy="50" r="4" fill="#1890ff"/>
+  
+  <!-- 右侧装饰 -->
+  <circle cx="65" cy="50" r="4" fill="#1890ff"/>
+  
+  <!-- 顶部文字区域 -->
+  <text x="50" y="22" text-anchor="middle" font-size="12" fill="#1890ff" font-weight="bold">CIMC</text>
+  
+  <!-- 底部文字区域 -->
+  <text x="50" y="85" text-anchor="middle" font-size="8" fill="#666">ENRIC</text>
+</svg>

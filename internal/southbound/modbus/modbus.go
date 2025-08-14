@@ -11,6 +11,7 @@ import (
 
 	"github.com/goburrow/modbus"
 	"github.com/rs/zerolog/log"
+	"github.com/y001j/iot-gateway/internal/config"
 	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/southbound"
 )
@@ -30,7 +31,7 @@ type ModbusAdapter struct {
 	client     modbus.Client
 	handler    *modbus.TCPClientHandler
 	rtuHandler *modbus.RTUClientHandler
-	registers  []Register
+	registers  []config.ModbusRegister
 	stopCh     chan struct{}
 	mutex      sync.Mutex
 	running    bool
@@ -38,40 +39,7 @@ type ModbusAdapter struct {
 	maxRetries    int
 	retryInterval time.Duration
 	connected     bool
-}
-
-// Register 定义了要读取的Modbus寄存器
-type Register struct {
-	Key       string            `json:"key"`            // 数据点标识符
-	Address   uint16            `json:"address"`        // 寄存器地址
-	Quantity  uint16            `json:"quantity"`       // 读取数量
-	Type      string            `json:"type"`           // 数据类型: int16, int32, float32, bool, string
-	Function  uint8             `json:"function"`       // 功能码: 1=读线圈, 2=读离散输入, 3=读保持寄存器, 4=读输入寄存器
-	Scale     float64           `json:"scale"`          // 缩放因子，默认为1
-	ByteOrder string            `json:"byte_order"`     // 字节序: big_endian, little_endian
-	BitOffset int               `json:"bit_offset"`     // 位偏移，用于从寄存器中提取布尔值
-	DeviceID  byte              `json:"device_id"`      // Modbus设备ID/从站地址
-	Tags      map[string]string `json:"tags,omitempty"` // 附加标签
-}
-
-// ModbusConfig 是Modbus适配器的配置
-type ModbusConfig struct {
-	Name      string     `json:"name"`
-	Mode      string     `json:"mode"`        // "tcp" 或 "rtu"
-	Address   string     `json:"address"`     // TCP模式: "host:port", RTU模式: 串口名称
-	Timeout   int        `json:"timeout_ms"`  // 超时时间(ms)
-	Interval  int        `json:"interval_ms"` // 采样间隔(ms)
-	Registers []Register `json:"registers"`
-	// 添加重连配置
-	MaxRetries    int `json:"max_retries,omitempty"`    // 最大重试次数，默认5
-	RetryInterval int `json:"retry_interval,omitempty"` // 重试间隔(ms)，默认5000
-	// RTU特有配置
-	BaudRate int    `json:"baud_rate,omitempty"`
-	DataBits int    `json:"data_bits,omitempty"`
-	Parity   string `json:"parity,omitempty"`
-	StopBits int    `json:"stop_bits,omitempty"`
-	// TCP特有配置
-	UnitID byte `json:"unit_id,omitempty"`
+	parser        *config.ConfigParser[config.ModbusConfig]
 }
 
 // Name 返回适配器名称
@@ -81,93 +49,41 @@ func (a *ModbusAdapter) Name() string {
 
 // Init 初始化适配器
 func (a *ModbusAdapter) Init(cfg json.RawMessage) error {
-	var config ModbusConfig
-	if err := json.Unmarshal(cfg, &config); err != nil {
+	// 创建配置解析器
+	a.parser = config.NewParserWithDefaults(config.GetDefaultModbusConfig())
+	
+	// 解析配置
+	modbusConfig, err := a.parser.Parse(cfg)
+	if err != nil {
 		return fmt.Errorf("解析Modbus配置失败: %w", err)
 	}
 
-	// 验证必需字段
-	if config.Name == "" {
-		return fmt.Errorf("适配器名称不能为空")
-	}
-	if config.Mode == "" {
-		config.Mode = "tcp" // 默认TCP模式
-	}
-	if config.Address == "" {
-		return fmt.Errorf("地址不能为空")
-	}
+	return a.initWithConfig(modbusConfig)
+}
 
+// initWithConfig 使用新配置格式初始化
+func (a *ModbusAdapter) initWithConfig(config *config.ModbusConfig) error {
 	// 初始化BaseAdapter
 	a.BaseAdapter = southbound.NewBaseAdapter(config.Name, "modbus")
-	a.mode = config.Mode
-	a.interval = time.Duration(config.Interval) * time.Millisecond
-	if a.interval < 100*time.Millisecond {
-		a.interval = 1000 * time.Millisecond // 默认1秒间隔
-	}
-
-	// 设置重连参数
-	a.maxRetries = config.MaxRetries
-	if a.maxRetries <= 0 {
-		a.maxRetries = 5 // 默认最大重试5次
-	}
-	a.retryInterval = time.Duration(config.RetryInterval) * time.Millisecond
-	if a.retryInterval <= 0 {
-		a.retryInterval = 5000 * time.Millisecond // 默认5秒重试间隔
-	}
-
-	// 验证和处理寄存器配置
-	for i := range config.Registers {
-		reg := &config.Registers[i]
-
-		// 设置默认缩放因子
-		if reg.Scale == 0 {
-			reg.Scale = 1.0
-		}
-
-		// 验证数据类型和数量的匹配
-		if err := a.validateRegister(reg); err != nil {
-			return fmt.Errorf("寄存器 %s 配置错误: %w", reg.Key, err)
-		}
-
-		// 设置默认字节序
-		if reg.ByteOrder == "" {
-			reg.ByteOrder = "big_endian"
-		}
-	}
-
+	a.mode = config.Protocol
+	a.interval = config.Interval.Duration()
 	a.registers = config.Registers
 	a.stopCh = make(chan struct{})
 
-	// 创建Modbus客户端
-	timeout := time.Duration(config.Timeout) * time.Millisecond
-	if timeout == 0 {
-		timeout = 1000 * time.Millisecond // 默认超时1秒
-	}
+	// 设置重连参数
+	a.maxRetries = 5 // 默认值，可从配置扩展
+	a.retryInterval = 5 * time.Second
 
+	// 创建Modbus客户端
 	switch a.mode {
 	case "tcp":
-		a.handler = modbus.NewTCPClientHandler(config.Address)
-		a.handler.Timeout = timeout
-		if config.UnitID > 0 {
-			a.handler.SlaveId = config.UnitID
-		}
+		a.handler = modbus.NewTCPClientHandler(fmt.Sprintf("%s:%d", config.Host, config.Port))
+		a.handler.Timeout = config.Timeout.Duration()
+		a.handler.SlaveId = config.SlaveID
 		a.client = modbus.NewClient(a.handler)
 	case "rtu":
-		a.rtuHandler = modbus.NewRTUClientHandler(config.Address)
-		a.rtuHandler.Timeout = timeout
-		if config.BaudRate > 0 {
-			a.rtuHandler.BaudRate = config.BaudRate
-		}
-		if config.DataBits > 0 {
-			a.rtuHandler.DataBits = config.DataBits
-		}
-		if config.Parity != "" {
-			a.rtuHandler.Parity = config.Parity
-		}
-		if config.StopBits > 0 {
-			a.rtuHandler.StopBits = config.StopBits
-		}
-		a.client = modbus.NewClient(a.rtuHandler)
+		// RTU mode would need additional configuration
+		return fmt.Errorf("RTU mode not yet implemented with new config")
 	default:
 		return fmt.Errorf("不支持的Modbus模式: %s", a.mode)
 	}
@@ -175,63 +91,11 @@ func (a *ModbusAdapter) Init(cfg json.RawMessage) error {
 	log.Info().
 		Str("name", a.Name()).
 		Str("mode", a.mode).
-		Str("address", config.Address).
+		Str("host", config.Host).
+		Int("port", config.Port).
 		Int("registers", len(a.registers)).
 		Dur("interval", a.interval).
-		Int("max_retries", a.maxRetries).
 		Msg("Modbus适配器初始化完成")
-
-	return nil
-}
-
-// validateRegister 验证寄存器配置
-func (a *ModbusAdapter) validateRegister(reg *Register) error {
-	if reg.Key == "" {
-		return fmt.Errorf("寄存器key不能为空")
-	}
-
-	if reg.Function < 1 || reg.Function > 4 {
-		return fmt.Errorf("不支持的功能码: %d", reg.Function)
-	}
-
-	// 验证数据类型和数量的匹配
-	switch reg.Type {
-	case "bool":
-		if reg.Function == 1 || reg.Function == 2 {
-			// 线圈和离散输入，数量应该为1
-			if reg.Quantity != 1 {
-				reg.Quantity = 1
-			}
-		} else {
-			// 寄存器类型，数量应该为1
-			if reg.Quantity != 1 {
-				reg.Quantity = 1
-			}
-		}
-	case "int16":
-		if reg.Quantity != 1 {
-			reg.Quantity = 1
-		}
-	case "int32", "float32":
-		if reg.Quantity != 2 {
-			log.Warn().
-				Str("key", reg.Key).
-				Str("type", reg.Type).
-				Uint16("quantity", reg.Quantity).
-				Msg("32位数据类型需要2个寄存器，自动调整数量为2")
-			reg.Quantity = 2
-		}
-	case "string":
-		if reg.Quantity == 0 {
-			reg.Quantity = 1
-		}
-	default:
-		// 默认为int16
-		reg.Type = "int16"
-		if reg.Quantity == 0 {
-			reg.Quantity = 1
-		}
-	}
 
 	return nil
 }
@@ -333,7 +197,7 @@ func (a *ModbusAdapter) Start(ctx context.Context, ch chan<- model.Point) error 
 
 				// 读取所有配置的寄存器
 				for _, reg := range a.registers {
-					if err := a.readRegister(reg, ch, pollStart); err != nil {
+					if err := a.readNewRegister(reg, ch, pollStart); err != nil {
 						log.Error().
 							Err(err).
 							Str("name", a.Name()).
@@ -360,31 +224,23 @@ func (a *ModbusAdapter) Start(ctx context.Context, ch chan<- model.Point) error 
 	return nil
 }
 
-// readRegister 读取单个寄存器
-func (a *ModbusAdapter) readRegister(reg Register, ch chan<- model.Point, pollStart time.Time) error {
-	// 设置从站地址
-	switch a.mode {
-	case "tcp":
-		a.handler.SlaveId = reg.DeviceID
-	case "rtu":
-		a.rtuHandler.SlaveId = reg.DeviceID
-	}
-
-	// 根据功能码读取不同类型的寄存器
+// readNewRegister 读取单个寄存器（新格式）
+func (a *ModbusAdapter) readNewRegister(reg config.ModbusRegister, ch chan<- model.Point, pollStart time.Time) error {
+	// 根据寄存器类型读取数据
 	var result []byte
 	var err error
 
-	switch reg.Function {
-	case 1: // 读线圈
-		result, err = a.client.ReadCoils(reg.Address, reg.Quantity)
-	case 2: // 读离散输入
-		result, err = a.client.ReadDiscreteInputs(reg.Address, reg.Quantity)
-	case 3: // 读保持寄存器
-		result, err = a.client.ReadHoldingRegisters(reg.Address, reg.Quantity)
-	case 4: // 读输入寄存器
-		result, err = a.client.ReadInputRegisters(reg.Address, reg.Quantity)
+	switch reg.Type {
+	case "coil":
+		result, err = a.client.ReadCoils(reg.Address, 1)
+	case "discrete_input":
+		result, err = a.client.ReadDiscreteInputs(reg.Address, 1)
+	case "input_register":
+		result, err = a.client.ReadInputRegisters(reg.Address, getRegisterCount(reg.DataType))
+	case "holding_register":
+		result, err = a.client.ReadHoldingRegisters(reg.Address, getRegisterCount(reg.DataType))
 	default:
-		return fmt.Errorf("不支持的Modbus功能码: %d", reg.Function)
+		return fmt.Errorf("不支持的寄存器类型: %s", reg.Type)
 	}
 
 	if err != nil {
@@ -392,25 +248,20 @@ func (a *ModbusAdapter) readRegister(reg Register, ch chan<- model.Point, pollSt
 	}
 
 	// 解析数据
-	value, dataType, err := a.parseData(result, reg)
+	value, dataType, err := a.parseNewData(result, reg)
 	if err != nil {
 		return fmt.Errorf("解析数据失败: %w", err)
 	}
 
 	if value != nil {
 		// 创建数据点
-		point := model.NewPoint(reg.Key, fmt.Sprintf("modbus-%d", reg.DeviceID), value, dataType)
+		point := model.NewPoint(reg.Key, reg.DeviceID, value, dataType)
 
 		// 添加标签
 		point.AddTag("source", "modbus")
 		point.AddTag("mode", a.mode)
 		point.AddTag("address", fmt.Sprintf("%d", reg.Address))
-		point.AddTag("function", fmt.Sprintf("%d", reg.Function))
-
-		// 添加自定义标签
-		for k, v := range reg.Tags {
-			point.AddTag(k, v)
-		}
+		point.AddTag("type", reg.Type)
 
 		// 发送数据点
 		a.SafeSendDataPoint(ch, point, pollStart)
@@ -419,118 +270,116 @@ func (a *ModbusAdapter) readRegister(reg Register, ch chan<- model.Point, pollSt
 	return nil
 }
 
-// parseData 解析Modbus数据
-func (a *ModbusAdapter) parseData(result []byte, reg Register) (interface{}, model.DataType, error) {
+// parseNewData 解析Modbus数据使用新配置格式
+func (a *ModbusAdapter) parseNewData(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
 	if len(result) == 0 {
 		return nil, "", fmt.Errorf("读取数据为空")
 	}
 
 	switch reg.Type {
-	case "bool":
-		return a.parseBool(result, reg)
-	case "int16":
-		return a.parseInt16(result, reg)
-	case "int32":
-		return a.parseInt32(result, reg)
-	case "float32":
-		return a.parseFloat32(result, reg)
-	case "string":
-		return a.parseString(result, reg)
+	case "coil", "discrete_input":
+		return a.parseNewBool(result)
+	case "input_register", "holding_register":
+		return a.parseNewRegisterData(result, reg)
 	default:
-		// 默认按int16处理
-		return a.parseInt16(result, reg)
+		return nil, "", fmt.Errorf("不支持的寄存器类型: %s", reg.Type)
 	}
 }
 
-// parseBool 解析布尔值
-func (a *ModbusAdapter) parseBool(result []byte, reg Register) (interface{}, model.DataType, error) {
-	if reg.Function == 1 || reg.Function == 2 {
-		// 线圈和离散输入，每个位代表一个布尔值
-		if len(result) > 0 {
-			return (result[0] & 0x01) == 1, model.TypeBool, nil
-		}
-	} else {
-		// 寄存器类型，根据位偏移读取
-		if len(result) >= 2 {
-			var value uint16
-			if reg.ByteOrder == "little_endian" {
-				value = binary.LittleEndian.Uint16(result[:2])
-			} else {
-				value = binary.BigEndian.Uint16(result[:2])
-			}
-
-			if reg.BitOffset >= 0 && reg.BitOffset < 16 {
-				return ((value >> reg.BitOffset) & 0x01) == 1, model.TypeBool, nil
-			} else {
-				return value != 0, model.TypeBool, nil
-			}
-		}
+// parseNewBool 解析布尔数据
+func (a *ModbusAdapter) parseNewBool(result []byte) (interface{}, model.DataType, error) {
+	if len(result) > 0 {
+		return (result[0] & 0x01) == 1, model.TypeBool, nil
 	}
-
 	return nil, "", fmt.Errorf("无法解析布尔值")
 }
 
-// parseInt16 解析16位整数
-func (a *ModbusAdapter) parseInt16(result []byte, reg Register) (interface{}, model.DataType, error) {
+// parseNewRegisterData 根据数据类型解析寄存器数据
+func (a *ModbusAdapter) parseNewRegisterData(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
+	switch reg.DataType {
+	case "uint16":
+		return a.parseUInt16(result, reg)
+	case "int16":
+		return a.parseInt16New(result, reg)
+	case "uint32":
+		return a.parseUInt32(result, reg)
+	case "int32":
+		return a.parseInt32New(result, reg)
+	case "float32":
+		return a.parseFloat32New(result, reg)
+	default:
+		// Default to int16 for backward compatibility
+		return a.parseInt16New(result, reg)
+	}
+}
+
+// parseUInt16 解析16位无符号整数
+func (a *ModbusAdapter) parseUInt16(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
 	if len(result) < 2 {
 		return nil, "", fmt.Errorf("数据长度不足，需要2字节")
 	}
 
-	var value int16
-	if reg.ByteOrder == "little_endian" {
-		value = int16(binary.LittleEndian.Uint16(result[:2]))
-	} else {
-		value = int16(binary.BigEndian.Uint16(result[:2]))
-	}
-
-	scaledValue := int(float64(value) * reg.Scale)
+	value := binary.BigEndian.Uint16(result[:2])
+	scaledValue := uint64(float64(value)*reg.Scale + reg.Offset)
 	return scaledValue, model.TypeInt, nil
 }
 
-// parseInt32 解析32位整数
-func (a *ModbusAdapter) parseInt32(result []byte, reg Register) (interface{}, model.DataType, error) {
+// parseInt16New 解析16位有符号整数（新版本）
+func (a *ModbusAdapter) parseInt16New(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
+	if len(result) < 2 {
+		return nil, "", fmt.Errorf("数据长度不足，需要2字节")
+	}
+
+	value := int16(binary.BigEndian.Uint16(result[:2]))
+	scaledValue := int64(float64(value)*reg.Scale + reg.Offset)
+	return scaledValue, model.TypeInt, nil
+}
+
+// parseUInt32 解析32位无符号整数
+func (a *ModbusAdapter) parseUInt32(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
 	if len(result) < 4 {
 		return nil, "", fmt.Errorf("数据长度不足，需要4字节")
 	}
 
-	var value int32
-	if reg.ByteOrder == "little_endian" {
-		value = int32(binary.LittleEndian.Uint32(result[:4]))
-	} else {
-		value = int32(binary.BigEndian.Uint32(result[:4]))
-	}
-
-	scaledValue := int(float64(value) * reg.Scale)
+	value := binary.BigEndian.Uint32(result[:4])
+	scaledValue := uint64(float64(value)*reg.Scale + reg.Offset)
 	return scaledValue, model.TypeInt, nil
 }
 
-// parseFloat32 解析32位浮点数
-func (a *ModbusAdapter) parseFloat32(result []byte, reg Register) (interface{}, model.DataType, error) {
+// parseInt32New 解析32位有符号整数（新版本）
+func (a *ModbusAdapter) parseInt32New(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
 	if len(result) < 4 {
 		return nil, "", fmt.Errorf("数据长度不足，需要4字节")
 	}
 
-	var bits uint32
-	if reg.ByteOrder == "little_endian" {
-		bits = binary.LittleEndian.Uint32(result[:4])
-	} else {
-		bits = binary.BigEndian.Uint32(result[:4])
+	value := int32(binary.BigEndian.Uint32(result[:4]))
+	scaledValue := int64(float64(value)*reg.Scale + reg.Offset)
+	return scaledValue, model.TypeInt, nil
+}
+
+// parseFloat32New 解析32位浮点数（新版本）
+func (a *ModbusAdapter) parseFloat32New(result []byte, reg config.ModbusRegister) (interface{}, model.DataType, error) {
+	if len(result) < 4 {
+		return nil, "", fmt.Errorf("数据长度不足，需要4字节")
 	}
 
+	bits := binary.BigEndian.Uint32(result[:4])
 	value := math.Float32frombits(bits)
-	scaledValue := float64(value) * reg.Scale
+	scaledValue := float64(value)*reg.Scale + reg.Offset
 
 	return scaledValue, model.TypeFloat, nil
 }
 
-// parseString 解析字符串
-func (a *ModbusAdapter) parseString(result []byte, reg Register) (interface{}, model.DataType, error) {
-	// 移除末尾的空字符
-	for len(result) > 0 && result[len(result)-1] == 0 {
-		result = result[:len(result)-1]
+// getRegisterCount 返回数据类型需要的寄存器数量
+func getRegisterCount(dataType string) uint16 {
+	switch dataType {
+	case "uint16", "int16":
+		return 1
+	case "uint32", "int32", "float32":
+		return 2
+	default:
+		return 1
 	}
-
-	return string(result), model.TypeString, nil
 }
 
 // isConnectionError 判断是否为连接错误

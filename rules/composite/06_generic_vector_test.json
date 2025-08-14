@@ -1,0 +1,53 @@
+{
+  "id": "generic_vector_test",
+  "name": "通用向量条件测试",
+  "description": "测试通用向量数据的条件和表达式支持",
+  "enabled": true,
+  "priority": 30,
+  "data_type": "vector",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "vector_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "sensor_vector"
+      },
+      {
+        "type": "expression",
+        "expression": "genericVectorMagnitude(sensor_vector) > 10.0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "type": "console",
+        "message": "通用向量高模长检测: 维度={{sensor_vector.dimension}}, 模长={{sensor_vector.magnitude}}"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "expression",
+        "parameters": {
+          "expression": "vectorMean(sensor_vector)"
+        },
+        "output_key": "vector_mean",
+        "output_type": "float",
+        "add_tags": {
+          "source": "generic_vector",
+          "calculation": "mean"
+        }
+      }
+    }
+  ]
+}

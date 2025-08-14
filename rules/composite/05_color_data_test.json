@@ -1,0 +1,51 @@
+{
+  "id": "color_data_test",
+  "name": "颜色数据处理测试",
+  "description": "测试颜色复合数据的处理和转换",
+  "enabled": true,
+  "priority": 50,
+  "data_type": "color",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "color_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "color"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "type": "console",
+        "message": "颜色数据: R={{color.r}}, G={{color.g}}, B={{color.b}}, 色相={{color.hue}}°, 饱和度={{color.saturation}}, 亮度={{color.lightness}}"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "extract_field",
+        "parameters": {
+          "field": "hue"
+        },
+        "output_key": "color_hue",
+        "output_type": "float",
+        "precision": 1,
+        "add_tags": {
+          "color_property": "hue",
+          "unit": "degrees",
+          "extracted_from": "color_data"
+        }
+      }
+    }
+  ]
+}

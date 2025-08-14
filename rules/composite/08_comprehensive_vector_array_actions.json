@@ -1,0 +1,122 @@
+{
+  "id": "comprehensive_vector_array_actions",
+  "name": "通用向量和数组综合Actions测试",
+  "description": "展示向量和数组在各种规则actions中的使用方式",
+  "enabled": true,
+  "priority": 40,
+  "data_type": "vector_generic",
+  "conditions": {
+    "type": "or",
+    "or": [
+      {
+        "type": "and",
+        "and": [
+          {"type": "simple", "field": "device_id", "operator": "eq", "value": "vector_device_01"},
+          {"type": "simple", "field": "key", "operator": "eq", "value": "acceleration_vector"},
+          {"type": "simple", "field": "sensor_vector.dimension", "operator": "gte", "value": 3},
+          {"type": "expression", "expression": "genericVectorMagnitude(sensor_vector) > 5.0"}
+        ]
+      },
+      {
+        "type": "and", 
+        "and": [
+          {"type": "simple", "field": "device_id", "operator": "eq", "value": "array_device_01"},
+          {"type": "simple", "field": "key", "operator": "eq", "value": "sensor_readings"},
+          {"type": "simple", "field": "signal_array.length", "operator": "gte", "value": 3},
+          {"type": "expression", "expression": "vectorMean(signal_array) > 20.0"}
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "message": "复合数据检测 - 设备:{{.DeviceID}}, 键:{{.Key}}, 类型:{{.Type}}, 时间:{{.Timestamp}}",
+        "level": "info",
+        "channels": ["console"]
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "vector_stats",
+        "parameters": {
+          "stat_type": "magnitude",
+          "vector_field": "sensor_vector"
+        },
+        "output_key": "vector_magnitude"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "vector_stats", 
+        "parameters": {
+          "stat_type": "mean",
+          "vector_field": "sensor_vector"
+        },
+        "output_key": "vector_mean"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "array_aggregate",
+        "parameters": {
+          "operation": "sum",
+          "array_field": "signal_array"
+        },
+        "output_key": "array_sum"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "array_aggregate",
+        "parameters": {
+          "operation": "mean",
+          "array_field": "signal_array"
+        },
+        "output_key": "array_avg"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "vector_transform",
+        "parameters": {
+          "sub_type": "normalize",
+          "vector_field": "sensor_vector"
+        },
+        "output_key": "normalized_vector"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "composite_to_array",
+        "parameters": {
+          "include_metadata": true
+        },
+        "output_key": "converted_array"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "expression",
+        "parameters": {
+          "expression": "value * 2.0 + 1.0"
+        },
+        "output_key": "calculated_value"
+      }
+    },
+    {
+      "type": "forward",
+      "config": {
+        "subject": "iot.processed.vector_array.{{.DeviceID}}.{{.Key}}"
+      }
+    }
+  ]
+}

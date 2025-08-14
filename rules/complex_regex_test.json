@@ -1,0 +1,63 @@
+{
+  "id": "complex_regex_patterns",
+  "name": "复杂正则模式测试",
+  "description": "测试复杂的正则表达式模式匹配",
+  "enabled": true,
+  "priority": 60,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "complex_sensor_01"
+      },
+      {
+        "type": "or",
+        "or": [
+          {
+            "type": "simple",
+            "field": "tags.email",
+            "operator": "regex",
+            "value": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+          },
+          {
+            "type": "simple",
+            "field": "tags.phone", 
+            "operator": "regex",
+            "value": "^\\+?1?[-.\\s]?\\(?[0-9]{3}\\)?[-.\\s]?[0-9]{3}[-.\\s]?[0-9]{4}$"
+          },
+          {
+            "type": "simple",
+            "field": "tags.ip_address",
+            "operator": "regex",
+            "value": "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_fields": {
+          "contact_info_validated": "true",
+          "validation_timestamp": "{{.timestamp}}"
+        },
+        "add_tags": {
+          "regex_validation": "passed",
+          "test_type": "complex_regex"
+        }
+      }
+    },
+    {
+      "type": "alert", 
+      "config": {
+        "level": "info",
+        "message": "📞 联系信息验证: {{.DeviceID}} 格式验证完成"
+      }
+    }
+  ]
+}

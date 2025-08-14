@@ -440,25 +440,11 @@
       {
         "type": "filter",
         "config": {
-          "filters": [
-            {
-              "type": "null",
-              "field": "value",
-              "action": "drop"
-            },
-            {
-              "type": "range",
-              "field": "value",
-              "min": -1000,
-              "max": 10000
-            },
-            {
-              "type": "rate_limit",
-              "max_rate": 100,
-              "window": "1s",
-              "action": "drop"
-            }
-          ],
+          "type": "range",
+          "parameters": {
+            "min": -1000,
+            "max": 10000
+          },
           "action": "pass"
         }
       },
@@ -483,9 +469,9 @@
     }
   },
   {
-    "id": "multi_target_forwarding",
-    "name": "多目标数据转发",
-    "description": "将处理后的数据转发到多个目标系统",
+    "id": "simple_data_forwarding",
+    "name": "简单数据转发",
+    "description": "将处理后的数据转发到NATS主题供sink组件处理",
     "enabled": true,
     "priority": 7,
     "conditions": {
@@ -509,75 +495,13 @@
       {
         "type": "forward",
         "config": {
-          "targets": [
-            {
-              "name": "influxdb",
-              "type": "http",
-              "enabled": true,
-              "async": true,
-              "timeout": "10s",
-              "retry": 3,
-              "config": {
-                "url": "http://localhost:8086/write?db=iot",
-                "method": "POST",
-                "content_type": "text/plain",
-                "template": "{{.key}},device={{.device_id}} value={{.value}} {{.timestamp}}"
-              }
-            },
-            {
-              "name": "elasticsearch",
-              "type": "http",
-              "enabled": true,
-              "async": true,
-              "timeout": "15s",
-              "retry": 2,
-              "config": {
-                "url": "http://localhost:9200/iot-data/_doc",
-                "method": "POST",
-                "content_type": "application/json"
-              }
-            },
-            {
-              "name": "mqtt_cloud",
-              "type": "mqtt",
-              "enabled": true,
-              "async": true,
-              "timeout": "20s",
-              "retry": 3,
-              "config": {
-                "broker": "ssl://mqtt.cloud.example.com:8883",
-                "topic": "devices/{{.device_id}}/telemetry",
-                "qos": 1,
-                "retain": false,
-                "format": "json",
-                "tls": true
-              }
-            },
-            {
-              "name": "backup_file",
-              "type": "file",
-              "enabled": true,
-              "config": {
-                "path": "/var/backup/iot-data/{{.device_id}}/{{.key}}.json",
-                "format": "json",
-                "append": true
-              }
-            }
-          ],
-          "add_rule_info": true,
-          "add_timestamp": true,
-          "data_transform": {
-            "constants": {
-              "source": "iot-gateway",
-              "version": "1.0"
-            }
-          }
+          "subject": "iot.processed.data"
         }
       }
     ],
     "tags": {
       "category": "forwarding",
-      "targets": "multiple"
+      "targets": "nats"
     }
   },
   {

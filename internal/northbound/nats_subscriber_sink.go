@@ -234,6 +234,14 @@ func (s *NATSSubscriberSink) createSubscriptions() error {
 // createMessageHandler 创建消息处理器
 func (s *NATSSubscriberSink) createMessageHandler(subConfig SubscriptionConfig) nats.MsgHandler {
 	return func(msg *nats.Msg) {
+		// 🔍 调试：记录接收到的原始NATS消息内容
+		log.Debug().
+			Str("name", s.Name()).
+			Str("subject", msg.Subject).
+			Str("raw_data", string(msg.Data)).
+			Int("data_size", len(msg.Data)).
+			Msg("🔍 NATS订阅器接收到原始消息")
+		
 		// 根据数据类型解析消息
 		point, err := s.parseMessage(msg.Data, subConfig)
 		if err != nil {
@@ -309,12 +317,27 @@ func (s *NATSSubscriberSink) parseMessage(data []byte, subConfig SubscriptionCon
 
 	// 添加订阅配置中的标签
 	if subConfig.Tags != nil {
-		if point.Tags == nil {
-			point.Tags = make(map[string]string)
-		}
+		// 记录标签合并过程
+		originalTags := point.GetTagsCopy()
+		log.Info().
+			Str("name", s.Name()).
+			Str("subject", subConfig.Subject).
+			Interface("original_tags", originalTags).
+			Interface("config_tags", subConfig.Tags).
+			Msg("🏷️ NATS订阅器标签合并开始")
+		
 		for k, v := range subConfig.Tags {
-			point.Tags[k] = v
+			// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+			point.AddTag(k, v)
 		}
+		
+		// 记录合并后的标签
+		mergedTags := point.GetTagsCopy()
+		log.Debug().
+			Str("name", s.Name()).
+			Str("subject", subConfig.Subject).
+			Interface("merged_tags", mergedTags).
+			Msg("🏷️ NATS订阅器标签合并完成")
 	}
 
 	return point, nil
@@ -327,18 +350,18 @@ func (s *NATSSubscriberSink) convertAlertToPoint(alertData map[string]interface{
 		Key:       "alert",
 		Type:      "alert",
 		Timestamp: time.Now(),
-		Tags: map[string]string{
-			"source":    "alert",
-			"data_type": "alert",
-		},
 	}
+	// 初始化SafeTags并添加标签
+	point.AddTag("source", "alert")
+	point.AddTag("data_type", "alert")
 
 	// 提取告警信息
 	if id, ok := alertData["id"].(string); ok {
 		point.DeviceID = id
 	}
 	if level, ok := alertData["level"].(string); ok {
-		point.Tags["level"] = level
+		// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+		point.AddTag("level", level)
 	}
 	if message, ok := alertData["message"].(string); ok {
 		point.Value = message
@@ -357,11 +380,10 @@ func (s *NATSSubscriberSink) convertSystemToPoint(systemData map[string]interfac
 		Key:       "system_event",
 		Type:      "system",
 		Timestamp: time.Now(),
-		Tags: map[string]string{
-			"source":    "system",
-			"data_type": "system",
-		},
 	}
+	// 初始化SafeTags并添加标签
+	point.AddTag("source", "system")
+	point.AddTag("data_type", "system")
 
 	// 提取系统事件信息
 	if eventType, ok := systemData["event_type"].(string); ok {
@@ -378,11 +400,9 @@ func (s *NATSSubscriberSink) convertSystemToPoint(systemData map[string]interfac
 func (s *NATSSubscriberSink) applyTransform(point model.Point, transform *TransformConfig) model.Point {
 	// 应用静态标签
 	if transform.StaticTags != nil {
-		if point.Tags == nil {
-			point.Tags = make(map[string]string)
-		}
 		for k, v := range transform.StaticTags {
-			point.Tags[k] = v
+			// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+			point.AddTag(k, v)
 		}
 	}
 
@@ -414,11 +434,9 @@ func (s *NATSSubscriberSink) evaluateFilterRule(point model.Point, rule FilterRu
 	case "type":
 		fieldValue = point.Type
 	default:
-		// 从标签中获取
-		if point.Tags != nil {
-			if val, exists := point.Tags[rule.Field]; exists {
-				fieldValue = val
-			}
+		// Go 1.24安全：使用GetTag方法替代直接Tags[]访问
+		if val, exists := point.GetTag(rule.Field); exists {
+			fieldValue = val
 		}
 	}
 
@@ -491,6 +509,18 @@ func (s *NATSSubscriberSink) publishBatch(batch []model.Point) {
 
 	// 发送到所有目标sink
 	for _, targetSink := range s.targetSinks {
+		// 记录发送前的数据点详情
+		for _, point := range batch {
+			log.Debug().
+				Str("name", s.Name()).
+				Str("target_sink", targetSink.Name()).
+				Str("device_id", point.DeviceID).
+				Str("key", point.Key).
+				Interface("tags", point.GetTagsCopy()).
+				Interface("value", point.Value).
+				Msg("发送数据点到目标sink")
+		}
+		
 		if err := targetSink.Publish(batch); err != nil {
 			s.HandleError(err, fmt.Sprintf("发送数据到目标sink %s", targetSink.Name()))
 		}
@@ -506,9 +536,40 @@ func (s *NATSSubscriberSink) publishBatch(batch []model.Point) {
 		Msg("批量数据发送完成")
 }
 
-// Publish 发布数据点（NATSSubscriberSink不接受外部数据）
+// Publish 发布数据点（NATSSubscriberSink主要用于订阅，但也可以接受数据）
 func (s *NATSSubscriberSink) Publish(batch []model.Point) error {
-	return fmt.Errorf("NATS订阅器sink不接受外部数据发布")
+	// NATS订阅器sink主要设计用于订阅数据
+	// 但为了兼容插件管理器的统一接口，我们可以接受数据但不做任何处理
+	// 或者将数据转发到配置的目标sinks
+	
+	if len(batch) == 0 {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	// 如果有配置目标sinks，将数据转发到它们
+	if len(s.targetSinks) > 0 {
+		for _, targetSink := range s.targetSinks {
+			if err := targetSink.Publish(batch); err != nil {
+				log.Error().
+					Err(err).
+					Str("target_sink", targetSink.Name()).
+					Str("subscriber_sink", s.Name()).
+					Msg("转发数据到目标sink失败")
+			}
+		}
+		return nil
+	}
+	
+	// 如果没有目标sinks，只记录调试信息并忽略数据
+	log.Debug().
+		Str("name", s.Name()).
+		Int("batch_size", len(batch)).
+		Msg("NATS订阅器sink收到数据，但没有配置目标sinks，忽略数据")
+	
+	return nil
 }
 
 // Stop 停止NATS订阅器sink

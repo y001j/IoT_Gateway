@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -71,8 +73,8 @@ func (h *AlertHandler) Execute(ctx context.Context, point model.Point, rule *rul
 	// 创建报警消息
 	alert := h.createAlert(point, rule, alertConfig)
 
-	// 检查节流
-	if h.shouldThrottle(alert) {
+	// 检查节流（原子操作，避免竞态条件）
+	if h.checkAndRecordThrottle(alert) {
 		return &rules.ActionResult{
 			Type:     "alert",
 			Success:  true,
@@ -87,9 +89,6 @@ func (h *AlertHandler) Execute(ctx context.Context, point model.Point, rule *rul
 
 	// 发布告警到NATS（如果有连接）
 	h.publishAlertToNATS(alert, alertConfig)
-
-	// 记录节流时间
-	h.recordThrottle(alert)
 
 	// 统计结果
 	successCount := 0
@@ -118,18 +117,25 @@ func (h *AlertHandler) Execute(ctx context.Context, point model.Point, rule *rul
 			"channels_sent":  successCount,
 			"channels_total": len(alertConfig.Channels),
 			"results":        results,
+			"message":        alert.Message, // 添加渲染后的消息内容
+			"level":          alert.Level,
+			"device_id":      alert.DeviceID,
+			"key":            alert.Key,
+			"value":          alert.Value,
 		},
 	}, nil
 }
 
 // AlertConfig 报警配置
 type AlertConfig struct {
-	Level    string                 `json:"level"`    // info, warning, error, critical
-	Message  string                 `json:"message"`  // 报警消息模板
-	Channels []ChannelConfig        `json:"channels"` // 通知渠道
-	Throttle time.Duration          `json:"throttle"` // 节流时间
-	Tags     map[string]string      `json:"tags"`     // 额外标签
-	Template map[string]interface{} `json:"template"` // 消息模板参数
+	Level      string                 `json:"level"`       // info, warning, error, critical
+	Message    string                 `json:"message"`     // 报警消息模板
+	Channels   []ChannelConfig        `json:"channels"`    // 通知渠道
+	Throttle   time.Duration          `json:"throttle"`    // 节流时间
+	Tags       map[string]string      `json:"tags"`        // 额外标签
+	Template   map[string]interface{} `json:"template"`    // 消息模板参数
+	RetryCount int                    `json:"retry_count"` // 重试次数
+	RetryDelay time.Duration          `json:"retry_delay"` // 重试延迟
 }
 
 // ChannelConfig 通知渠道配置
@@ -148,12 +154,14 @@ type ChannelResult struct {
 // parseConfig 解析配置
 func (h *AlertHandler) parseConfig(config map[string]interface{}) (*AlertConfig, error) {
 	alertConfig := &AlertConfig{
-		Level:    "warning",
-		Message:  "规则触发报警: {{.RuleName}}",
-		Channels: []ChannelConfig{},
-		Throttle: 5 * time.Minute,
-		Tags:     make(map[string]string),
-		Template: make(map[string]interface{}),
+		Level:      "warning",
+		Message:    "规则触发报警: {{.RuleName}}",
+		Channels:   []ChannelConfig{},
+		Throttle:   5 * time.Minute,
+		Tags:       make(map[string]string),
+		Template:   make(map[string]interface{}),
+		RetryCount: 0,                    // 默认不重试
+		RetryDelay: 100 * time.Millisecond, // 默认重试延迟
 	}
 
 	// 解析level
@@ -166,8 +174,12 @@ func (h *AlertHandler) parseConfig(config map[string]interface{}) (*AlertConfig,
 		alertConfig.Message = message
 	}
 
-	// 解析throttle
+	// 解析throttle (支持throttle和throttle_duration两种键名)
 	if throttleStr, ok := config["throttle"].(string); ok {
+		if duration, err := time.ParseDuration(throttleStr); err == nil {
+			alertConfig.Throttle = duration
+		}
+	} else if throttleStr, ok := config["throttle_duration"].(string); ok {
 		if duration, err := time.ParseDuration(throttleStr); err == nil {
 			alertConfig.Throttle = duration
 		}
@@ -191,6 +203,19 @@ func (h *AlertHandler) parseConfig(config map[string]interface{}) (*AlertConfig,
 	// 解析template
 	if template, ok := config["template"].(map[string]interface{}); ok {
 		alertConfig.Template = template
+	}
+
+	// 解析重试配置
+	if retryCount, ok := config["retry_count"].(int); ok {
+		alertConfig.RetryCount = retryCount
+	} else if retryCount, ok := config["retry_count"].(float64); ok {
+		alertConfig.RetryCount = int(retryCount)
+	}
+
+	if retryDelayStr, ok := config["retry_delay"].(string); ok {
+		if delay, err := time.ParseDuration(retryDelayStr); err == nil {
+			alertConfig.RetryDelay = delay
+		}
 	}
 
 	// 如果没有配置渠道，默认添加console渠道
@@ -222,10 +247,10 @@ func (h *AlertHandler) createAlert(point model.Point, rule *rules.Rule, config *
 	for k, v := range config.Tags {
 		tags[k] = v
 	}
-	if point.Tags != nil {
-		for k, v := range point.Tags {
-			tags["point_"+k] = v
-		}
+	// Go 1.24安全：使用GetTagsSafe获取标签
+	pointTags := point.GetTagsSafe()
+	for k, v := range pointTags {
+		tags["point_"+k] = v
 	}
 
 	return &rules.Alert{
@@ -243,9 +268,94 @@ func (h *AlertHandler) createAlert(point model.Point, rule *rules.Rule, config *
 	}
 }
 
-// parseMessageTemplate 解析消息模板
-func (h *AlertHandler) parseMessageTemplate(template string, point model.Point, rule *rules.Rule, config *AlertConfig) string {
-	message := template
+// parseMessageTemplate 解析消息模板，支持Go模板语法
+func (h *AlertHandler) parseMessageTemplate(templateStr string, point model.Point, rule *rules.Rule, config *AlertConfig) string {
+	// 准备模板数据
+	templateData := map[string]interface{}{
+		"RuleName":  rule.Name,
+		"RuleID":    rule.ID,
+		"DeviceID":  point.DeviceID,
+		"Key":       point.Key,
+		"Value":     point.Value,
+		"Type":      string(point.Type),
+		"Timestamp": point.Timestamp,
+		"Level":     config.Level,
+		"Tags":      make(map[string]interface{}),
+	}
+
+	// Go 1.24安全：添加point的tags，确保正确的映射结构
+	pointTags := point.GetTagsSafe()
+	if len(pointTags) > 0 {
+		tagsMap := make(map[string]interface{})
+		for key, value := range pointTags {
+			tagsMap[key] = value
+		}
+		templateData["Tags"] = tagsMap
+	}
+
+	// 添加rule的tags
+	if rule.Tags != nil {
+		for key, value := range rule.Tags {
+			templateData[key] = value
+		}
+	}
+
+	// 添加config的template参数
+	for key, value := range config.Template {
+		templateData[key] = value
+	}
+
+	// 尝试使用Go模板引擎，添加常用函数
+	tmpl, err := template.New("alert").Funcs(template.FuncMap{
+		"gt": func(a, b interface{}) bool {
+			// 大于比较，支持数值转换
+			if aNum, ok := toFloat64(a); ok {
+				if bNum, ok := toFloat64(b); ok {
+					return aNum > bNum
+				}
+			}
+			return false
+		},
+		"lt": func(a, b interface{}) bool {
+			// 小于比较
+			if aNum, ok := toFloat64(a); ok {
+				if bNum, ok := toFloat64(b); ok {
+					return aNum < bNum
+				}
+			}
+			return false
+		},
+		"eq": func(a, b interface{}) bool {
+			// 相等比较
+			if aNum, ok := toFloat64(a); ok {
+				if bNum, ok := toFloat64(b); ok {
+					return aNum == bNum
+				}
+			}
+			return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+		},
+	}).Parse(templateStr)
+	
+	if err != nil {
+		// 如果Go模板解析失败，回退到简单字符串替换
+		log.Warn().Err(err).Str("template", templateStr).Msg("Go模板解析失败，回退到简单替换")
+		return h.parseMessageTemplateFallback(templateStr, point, rule, config)
+	}
+
+	var buf bytes.Buffer
+	err = tmpl.Execute(&buf, templateData)
+	if err != nil {
+		// 如果模板执行失败，回退到简单字符串替换
+		log.Warn().Err(err).Str("template", templateStr).Interface("data", templateData).Msg("Go模板执行失败，回退到简单替换")
+		return h.parseMessageTemplateFallback(templateStr, point, rule, config)
+	}
+
+	return buf.String()
+}
+
+// parseMessageTemplateFallback 简单字符串替换的回退方法
+func (h *AlertHandler) parseMessageTemplateFallback(templateStr string, point model.Point, rule *rules.Rule, config *AlertConfig) string {
+	message := templateStr
 
 	// 替换基本变量
 	replacements := map[string]string{
@@ -269,15 +379,31 @@ func (h *AlertHandler) parseMessageTemplate(template string, point model.Point, 
 		message = strings.ReplaceAll(message, placeholder, fmt.Sprintf("%v", value))
 	}
 
-	// 替换标签
-	if point.Tags != nil {
-		for key, value := range point.Tags {
-			placeholder := fmt.Sprintf("{{.Tags.%s}}", key)
-			message = strings.ReplaceAll(message, placeholder, value)
-		}
+	// Go 1.24安全：替换标签
+	pointTags := point.GetTagsSafe()
+	for key, value := range pointTags {
+		placeholder := fmt.Sprintf("{{.Tags.%s}}", key)
+		message = strings.ReplaceAll(message, placeholder, value)
 	}
 
 	return message
+}
+
+// toFloat64 辅助函数，尝试将值转换为float64
+func toFloat64(v interface{}) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case float32:
+		return float64(val), true
+	case int:
+		return float64(val), true
+	case int32:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	}
+	return 0, false
 }
 
 // generateAlertID 生成报警ID
@@ -287,7 +413,33 @@ func (h *AlertHandler) generateAlertID() string {
 	return hex.EncodeToString(bytes)
 }
 
-// shouldThrottle 检查是否应该节流
+// checkAndRecordThrottle 原子地检查节流并记录时间戳，避免竞态条件
+func (h *AlertHandler) checkAndRecordThrottle(alert *rules.Alert) bool {
+	if alert.Throttle <= 0 {
+		return false
+	}
+
+	// 使用写锁确保检查和记录操作的原子性
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 生成节流键
+	throttleKey := fmt.Sprintf("%s:%s:%s", alert.RuleID, alert.DeviceID, alert.Key)
+
+	// 检查是否应该节流
+	if lastTime, exists := h.throttleMap[throttleKey]; exists {
+		if time.Since(lastTime) < alert.Throttle {
+			// 仍在节流期内
+			return true
+		}
+	}
+
+	// 不在节流期内，记录当前时间戳并允许执行
+	h.throttleMap[throttleKey] = time.Now()
+	return false
+}
+
+// shouldThrottle 检查是否应该节流（保留方法以兼容性，但建议使用checkAndRecordThrottle）
 func (h *AlertHandler) shouldThrottle(alert *rules.Alert) bool {
 	if alert.Throttle <= 0 {
 		return false
@@ -306,7 +458,7 @@ func (h *AlertHandler) shouldThrottle(alert *rules.Alert) bool {
 	return false
 }
 
-// recordThrottle 记录节流时间
+// recordThrottle 记录节流时间（保留方法以兼容性，但建议使用checkAndRecordThrottle）
 func (h *AlertHandler) recordThrottle(alert *rules.Alert) {
 	if alert.Throttle <= 0 {
 		return
@@ -319,11 +471,18 @@ func (h *AlertHandler) recordThrottle(alert *rules.Alert) {
 	h.throttleMap[throttleKey] = time.Now()
 }
 
-// sendAlert 发送报警
+// sendAlert 发送报警，支持重试和故障转移
 func (h *AlertHandler) sendAlert(ctx context.Context, alert *rules.Alert, config *AlertConfig) map[string]ChannelResult {
 	results := make(map[string]ChannelResult)
+	
+	// 如果配置了重试，尝试逐个渠道发送，支持故障转移
+	if config.RetryCount > 0 {
+		return h.sendAlertWithRetry(ctx, alert, config)
+	}
 
-	for _, channel := range config.Channels {
+	// 没有重试配置，直接发送所有渠道
+	for i, channel := range config.Channels {
+		channelKey := fmt.Sprintf("%s_%d", channel.Type, i)
 		start := time.Now()
 		var err error
 
@@ -336,11 +495,13 @@ func (h *AlertHandler) sendAlert(ctx context.Context, alert *rules.Alert, config
 			err = h.sendEmailAlert(alert, channel.Config)
 		case "sms":
 			err = h.sendSMSAlert(alert, channel.Config)
+		case "nats":
+			err = h.sendNATSAlert(alert, channel.Config)
 		default:
 			err = fmt.Errorf("不支持的通知渠道: %s", channel.Type)
 		}
 
-		results[channel.Type] = ChannelResult{
+		results[channelKey] = ChannelResult{
 			Success: err == nil,
 			Error: func() string {
 				if err != nil {
@@ -353,6 +514,111 @@ func (h *AlertHandler) sendAlert(ctx context.Context, alert *rules.Alert, config
 	}
 
 	return results
+}
+
+// sendAlertWithRetry 带重试和故障转移的报警发送
+func (h *AlertHandler) sendAlertWithRetry(ctx context.Context, alert *rules.Alert, config *AlertConfig) map[string]ChannelResult {
+	results := make(map[string]ChannelResult)
+	
+	// 尝试每个渠道，如果失败则重试，最终使用故障转移
+	for i, channel := range config.Channels {
+		channelKey := fmt.Sprintf("%s_%d", channel.Type, i)
+		success := false
+		var lastErr error
+		var totalDuration time.Duration
+		
+		// 重试逻辑
+		for attempt := 0; attempt <= config.RetryCount; attempt++ {
+			start := time.Now()
+			var err error
+
+			switch channel.Type {
+			case "console":
+				err = h.sendConsoleAlert(alert, channel.Config)
+			case "webhook":
+				err = h.sendWebhookAlert(ctx, alert, channel.Config)
+			case "email":
+				err = h.sendEmailAlert(alert, channel.Config)
+			case "sms":
+				err = h.sendSMSAlert(alert, channel.Config)
+			case "nats":
+				err = h.sendNATSAlert(alert, channel.Config)
+			default:
+				err = fmt.Errorf("不支持的通知渠道: %s", channel.Type)
+			}
+			
+			duration := time.Since(start)
+			totalDuration += duration
+			
+			if err == nil {
+				success = true
+				break
+			}
+			
+			lastErr = err
+			
+			// 如果不是最后一次尝试，等待重试延迟
+			if attempt < config.RetryCount {
+				time.Sleep(config.RetryDelay)
+			}
+		}
+		
+		results[channelKey] = ChannelResult{
+			Success: success,
+			Error: func() string {
+				if lastErr != nil {
+					return lastErr.Error()
+				}
+				return ""
+			}(),
+			Duration: totalDuration,
+		}
+		
+		// 如果某个渠道成功了，可以选择是否继续尝试其他渠道
+		// 这里继续尝试所有渠道以获得完整结果
+	}
+
+	return results
+}
+
+// sendNATSAlert 发送NATS报警
+func (h *AlertHandler) sendNATSAlert(alert *rules.Alert, config map[string]interface{}) error {
+	if h.natsConn == nil {
+		return fmt.Errorf("NATS连接未初始化")
+	}
+
+	subject, ok := config["subject"].(string)
+	if !ok || subject == "" {
+		subject = "alerts.default"
+	}
+
+	// 构建消息
+	alertMsg := map[string]interface{}{
+		"id":        alert.ID,
+		"rule_id":   alert.RuleID,
+		"rule_name": alert.RuleName,
+		"level":     alert.Level,
+		"message":   alert.Message,
+		"device_id": alert.DeviceID,
+		"key":       alert.Key,
+		"value":     alert.Value,
+		"tags":      alert.Tags,
+		"timestamp": alert.Timestamp,
+	}
+
+	data, err := json.Marshal(alertMsg)
+	if err != nil {
+		return fmt.Errorf("序列化NATS消息失败: %w", err)
+	}
+
+	// 发布消息
+	if publisher, ok := h.natsConn.(interface {
+		Publish(string, []byte) error
+	}); ok {
+		return publisher.Publish(subject, data)
+	}
+
+	return fmt.Errorf("NATS连接不支持发布消息")
 }
 
 // sendConsoleAlert 发送控制台报警

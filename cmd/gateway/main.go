@@ -20,6 +20,7 @@ import (
 	_ "github.com/y001j/iot-gateway/internal/northbound/websocket"
 
 	// 导入所有内置适配器以触发注册
+	_ "github.com/y001j/iot-gateway/internal/southbound/composite_mock"
 	_ "github.com/y001j/iot-gateway/internal/southbound/http"
 	_ "github.com/y001j/iot-gateway/internal/southbound/mock"
 	_ "github.com/y001j/iot-gateway/internal/southbound/modbus"
@@ -34,7 +35,6 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("init runtime")
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := rt.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("start runtime")

@@ -5,5 +5,5 @@
   "mode": "isp-sidecar",
   "entry": "modbus-sidecar/modbus-sidecar.exe",
   "description": "Modbus适配器（ISP Sidecar模式）",
-  "isp_port": 50052
+  "isp_port": 62000
 } 

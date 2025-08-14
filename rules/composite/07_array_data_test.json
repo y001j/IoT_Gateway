@@ -1,0 +1,59 @@
+{
+  "id": "array_data_test",
+  "name": "数组数据条件测试",
+  "description": "测试数组数据的条件和表达式支持",
+  "enabled": true,
+  "priority": 35,
+  "data_type": "array",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "array_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "sensor_readings"
+      },
+      {
+        "type": "simple",
+        "field": "sensor_readings.size",
+        "operator": "gte",
+        "value": 5
+      },
+      {
+        "type": "expression",
+        "expression": "arrayMean(sensor_readings) > 25.0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "type": "console",
+        "message": "数组高平均值检测: 大小={{sensor_readings.size}}, 平均值={{array_mean}}, 最大值={{array_max}}"
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "type": "expression",
+        "parameters": {
+          "expression": "arrayMax(sensor_readings) - arrayMin(sensor_readings)"
+        },
+        "output_key": "array_range",
+        "output_type": "float",
+        "add_tags": {
+          "source": "array_data",
+          "calculation": "range"
+        }
+      }
+    }
+  ]
+}

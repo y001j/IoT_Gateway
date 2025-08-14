@@ -1,0 +1,47 @@
+{
+  "id": "log_pattern_extraction",
+  "name": "日志模式提取",
+  "description": "从设备消息中提取特定模式信息",
+  "enabled": true,
+  "priority": 50,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "complex_sensor_01"
+      },
+      {
+        "type": "simple",
+        "field": "tags.message",
+        "operator": "regex",
+        "value": "ERROR|WARN|FATAL|CRITICAL"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_fields": {
+          "is_error_log": "true",
+          "needs_attention": "true",
+          "log_extracted": "true"
+        },
+        "add_tags": {
+          "log_level": "error_detected",
+          "processing": "log_extraction"
+        }
+      }
+    },
+    {
+      "type": "alert",
+      "config": {
+        "level": "error",
+        "message": "📋 日志模式检测: {{.DeviceID}} 发现错误级别日志"
+      }
+    }
+  ]
+}

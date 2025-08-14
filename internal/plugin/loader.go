@@ -250,6 +250,17 @@ func (l *Loader) loadSidecar(meta Meta, path string) error {
 
 	// 启动sidecar进程
 	cmd := exec.Command(path)
+	
+	// 设置环境变量，特别是ISP端口
+	cmd.Env = os.Environ() // 继承系统环境变量
+	if meta.ISPPort > 0 {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("ISP_PORT=%d", meta.ISPPort))
+		log.Info().
+			Int("isp_port", meta.ISPPort).
+			Str("name", meta.Name).
+			Msg("🔵 [调试] 设置sidecar ISP端口环境变量")
+	}
+	
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动sidecar进程失败: %w", err)
 	}
@@ -277,10 +288,16 @@ func (l *Loader) loadSidecar(meta Meta, path string) error {
 		case "isp-sidecar":
 			// 获取ISP端口
 			ispPort := 50052 // 默认ISP端口
-			if port, ok := meta.Extra["isp_port"].(float64); ok {
-				ispPort = int(port)
+			if meta.ISPPort != 0 {
+				ispPort = meta.ISPPort
 			}
 			ispAddress := fmt.Sprintf("127.0.0.1:%d", ispPort)
+			
+			log.Info().
+				Int("configured_port", meta.ISPPort).
+				Int("actual_port", ispPort).
+				Str("address", ispAddress).
+				Msg("配置ISP连接地址")
 
 			// 创建ISP适配器代理
 			adapterProxy, err = NewISPAdapterProxy(meta.Name, ispAddress)
@@ -311,7 +328,7 @@ func (l *Loader) loadSidecar(meta Meta, path string) error {
 		delete(l.adapters, adapterType)
 		delete(l.adapters, "modbus")
 
-		// 重新注册
+		// 重新注册到Loader
 		l.adapters[meta.Name] = adapterProxy
 		l.adapters[adapterType] = adapterProxy
 
@@ -320,6 +337,25 @@ func (l *Loader) loadSidecar(meta Meta, path string) error {
 			log.Info().Msg("显式注册 modbus 适配器")
 			l.adapters["modbus"] = adapterProxy
 		}
+
+		// 重要：同时注册到全局Registry，这样plugin_init.go中的southbound.Create()就能找到
+		// 为sidecar插件生成组合类型名，格式：{原类型}-{模式}
+		sidecarTypeName := fmt.Sprintf("%s-%s", adapterType, meta.Mode)
+		
+		// 注册原始类型名
+		southbound.Register(adapterType, func() southbound.Adapter {
+			return adapterProxy
+		})
+		
+		// 注册组合类型名（用于避免与内置适配器冲突）
+		southbound.Register(sidecarTypeName, func() southbound.Adapter {
+			return adapterProxy
+		})
+		
+		log.Info().
+			Str("original_type", adapterType).
+			Str("sidecar_type", sidecarTypeName).
+			Msg("注册sidecar适配器类型")
 
 		// 再次检查是否成功注册
 		_, exists := l.adapters["modbus"]

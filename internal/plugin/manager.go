@@ -52,6 +52,7 @@ type Meta struct {
 	Extra       map[string]interface{} `json:"-"` // 额外的元数据，不从JSON解析
 	Description string                 `json:"description,omitempty"`
 	Status      string                 `json:"status,omitempty"` // 运行时状态: running, stopped
+	ISPPort     int                   `json:"isp_port,omitempty"` // ISP端口配置
 }
 
 // PluginManager 定义了插件管理器的标准接口
@@ -116,7 +117,10 @@ func (m *Manager) Init(cfg any) error {
 		return err
 	}
 
-	// 注意：移除了手动创建gRPC适配器的代码，现在通过插件配置文件加载适配器
+	// 加载所有发现的插件
+	if err := m.loadAllDiscoveredPlugins(); err != nil {
+		log.Warn().Err(err).Msg("加载插件时出现错误，继续初始化内置适配器")
+	}
 
 	// 打印所有可用的适配器
 	adapters := m.loader.ListAdapters()
@@ -183,13 +187,48 @@ func (m *Manager) initSinks() error {
 
 		// 初始化连接器
 		log.Info().Str("name", name).Str("type", sinkType).Msg("初始化连接器")
-		configData, err := json.Marshal(sinkMap["config"])
+		log.Error().Str("name", name).Msg("!!!! DEBUG: 这是来自manager.go的调试消息 !!!!")
+		
+		// 调试输出原始sink映射
+		log.Debug().Str("name", name).Interface("sink_map", sinkMap).Msg("原始连接器映射")
+		
+		var configData []byte
+		var err error
+		
+		// 检查是否使用新格式（扁平化配置）还是旧格式（嵌套config）
+		if configField, hasConfig := sinkMap["config"]; hasConfig {
+			// 旧格式：使用嵌套的config字段
+			log.Debug().Str("name", name).Interface("config_field", configField).Msg("使用遗留连接器配置格式（嵌套config字段）")
+			configData, err = json.Marshal(configField)
+		} else {
+			// 新格式：使用扁平化配置，移除控制字段但保留必需字段
+			log.Debug().Str("name", name).Msg("使用新连接器配置格式（扁平化结构）")
+			
+			// 创建配置副本，移除控制字段但保留必需字段
+			configMap := make(map[string]interface{})
+			for k, v := range sinkMap {
+				// 只跳过enabled字段，保留name和type字段
+				if k != "enabled" {
+					configMap[k] = v
+				}
+			}
+			
+			// 确保必需字段存在
+			configMap["name"] = name
+			configMap["type"] = sinkType
+			
+			// 调试输出配置映射
+			log.Debug().Str("name", name).Interface("config_map", configMap).Msg("构建的连接器配置映射")
+			
+			configData, err = json.Marshal(configMap)
+		}
+		
 		if err != nil {
 			log.Error().Err(err).Str("name", name).Msg("序列化连接器配置失败")
 			return fmt.Errorf("序列化连接器配置失败: %w", err)
 		}
 
-		log.Debug().Str("name", name).RawJSON("config", configData).Msg("连接器配置")
+		log.Debug().Str("name", name).RawJSON("config", configData).Int("config_length", len(configData)).Msg("连接器配置")
 
 		if err := sink.Init(configData); err != nil {
 			return fmt.Errorf("初始化连接器 %s 失败: %w", name, err)
@@ -329,20 +368,27 @@ func (m *Manager) setupDataFlow(ctx context.Context) {
 }
 
 func (m *Manager) Start(ctx context.Context) error {
+	log.Info().Msg("插件管理器开始启动")
 	m.ctx = ctx // 保存上下文
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
+		log.Error().Err(err).Msg("创建文件监听器失败")
 		return err
 	}
 	m.watcher = w
 	if err := w.Add(m.dir); err != nil {
+		log.Error().Err(err).Msg("添加插件目录监听失败")
 		return err
 	}
+	log.Info().Msg("文件监听器设置完成")
 
 	// Setup data flow between adapters and sinks
+	log.Info().Msg("开始设置数据流")
 	m.setupDataFlow(ctx)
+	log.Info().Msg("数据流设置完成")
 
 	go m.loop(ctx)
+	log.Info().Msg("插件管理器启动完成")
 
 	return nil
 }
@@ -1207,6 +1253,46 @@ func (m *Manager) GetSink(name string) (northbound.Sink, bool) {
 	
 	sink, exists := m.sinks[name]
 	return sink, exists
+}
+
+// loadAllDiscoveredPlugins 加载所有发现的插件
+func (m *Manager) loadAllDiscoveredPlugins() error {
+	plugins := m.loader.List()
+	log.Info().Int("count", len(plugins)).Msg("开始加载发现的插件")
+	
+	var lastErr error
+	loadedCount := 0
+	
+	for _, plugin := range plugins {
+		log.Info().
+			Str("name", plugin.Name).
+			Str("type", plugin.Type).
+			Str("mode", plugin.Mode).
+			Msg("加载插件")
+		
+		if err := m.loader.LoadPlugin(*plugin); err != nil {
+			log.Error().
+				Err(err).
+				Str("name", plugin.Name).
+				Str("type", plugin.Type).
+				Msg("加载插件失败")
+			lastErr = err
+			continue
+		}
+		
+		loadedCount++
+		log.Info().
+			Str("name", plugin.Name).
+			Str("type", plugin.Type).
+			Msg("插件加载成功")
+	}
+	
+	log.Info().
+		Int("total", len(plugins)).
+		Int("loaded", loadedCount).
+		Msg("插件加载完成")
+	
+	return lastErr
 }
 
 // containsPluginWithType 检查插件映射中是否已经存在指定类型的插件

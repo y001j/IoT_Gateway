@@ -12,7 +12,7 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #f0f2f5;
+  background-color: #f0fdf4;
 }
 
 code {
@@ -41,21 +41,21 @@ code {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: #bbf7d0;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: #16a34a;
 }
 
-/* Ant Design 主题定制 */
+/* Ant Design 主题定制 - 移除默认深蓝背景 */
 .ant-layout-sider {
-  background: #001529 !important;
+  background: transparent !important;
 }
 
 .ant-menu-dark {
-  background: #001529 !important;
+  background: transparent !important;
 }
 
 /* 响应式设计 */

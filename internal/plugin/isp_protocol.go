@@ -63,6 +63,36 @@ type DataPoint struct {
 	Tags      map[string]string `json:"tags,omitempty"` // 标签
 }
 
+// GetTagsSafe 安全获取所有标签（ISP DataPoint专用）
+func (dp *DataPoint) GetTagsSafe() map[string]string {
+	if dp.Tags == nil {
+		return make(map[string]string)
+	}
+	// ISP DataPoint的Tags通常在单线程环境下使用，但为安全起见创建副本
+	result := make(map[string]string, len(dp.Tags))
+	for k, v := range dp.Tags {
+		result[k] = v
+	}
+	return result
+}
+
+// GetTag 安全获取单个标签值
+func (dp *DataPoint) GetTag(key string) (string, bool) {
+	if dp.Tags == nil {
+		return "", false
+	}
+	value, exists := dp.Tags[key]
+	return value, exists
+}
+
+// AddTag 添加标签
+func (dp *DataPoint) AddTag(key, value string) {
+	if dp.Tags == nil {
+		dp.Tags = make(map[string]string)
+	}
+	dp.Tags[key] = value
+}
+
 // StatusPayload 状态查询载荷（空结构体）
 type StatusPayload struct{}
 

@@ -35,7 +35,7 @@ import { settingsService } from '../../services/settingsService';
 import type { User, UserRole } from '../../types/settings';
 
 const { Option } = Select;
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 const UserManagement: React.FC = () => {
   const [userForm] = Form.useForm();

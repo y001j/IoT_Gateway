@@ -1,0 +1,101 @@
+{
+  "id": "gps_location_transform",
+  "name": "GPS位置数据转换",
+  "description": "将GPS数据转发到专用主题",
+  "enabled": true,
+  "priority": 80,
+  "version": 14,
+  "conditions": {
+    "type": "or",
+    "or": [
+      {
+        "type": "and",
+        "and": [
+          {
+            "type": "simple",
+            "field": "device_id",
+            "operator": "eq",
+            "value": "gps_tracker_01"
+          },
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "latitude"
+          }
+        ]
+      },
+      {
+        "type": "and",
+        "and": [
+          {
+            "type": "simple",
+            "field": "device_id",
+            "operator": "eq",
+            "value": "gps_tracker_01"
+          },
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "longitude"
+          }
+        ]
+      },
+      {
+        "type": "and",
+        "and": [
+          {
+            "type": "simple",
+            "field": "device_id",
+            "operator": "eq",
+            "value": "gps_tracker_01"
+          },
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "altitude"
+          }
+        ]
+      },
+      {
+        "type": "and",
+        "and": [
+          {
+            "type": "simple",
+            "field": "device_id",
+            "operator": "eq",
+            "value": "gps_tracker_01"
+          },
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "speed"
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "driver": "张三",
+          "gps_component": "true",
+          "vehicle_id": "truck_001"
+        }
+      }
+    },
+    {
+      "type": "forward",
+      "config": {
+        "subject": "iot.gps.location.gps_tracker_01"
+      }
+    }
+  ],
+  "created_at": "2025-08-10T14:48:18.3670101+08:00",
+  "updated_at": "2025-08-10T16:09:18.9662115+08:00"
+}

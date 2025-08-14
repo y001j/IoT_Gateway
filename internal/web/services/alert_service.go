@@ -41,6 +41,7 @@ type alertService struct {
 	notificationChannels map[string]*models.NotificationChannel
 	mu                   sync.RWMutex  // 添加读写锁保护
 	alertSubscriber      *AlertSubscriber  // NATS告警订阅器
+	idCounter            int64            // ID计数器，确保唯一性
 }
 
 // NewAlertService 创建告警服务
@@ -283,8 +284,10 @@ func (s *alertService) CreateAlert(req *models.AlertCreateRequest) (*models.Aler
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
+	// 使用计数器确保ID唯一性，避免纳秒时间戳冲突
+	s.idCounter++
 	alert := &models.Alert{
-		ID:          fmt.Sprintf("alert-%d", time.Now().UnixNano()),
+		ID:          fmt.Sprintf("alert-%d-%d", time.Now().UnixNano(), s.idCounter),
 		Title:       req.Title,
 		Description: req.Description,
 		Level:       req.Level,
@@ -296,6 +299,13 @@ func (s *alertService) CreateAlert(req *models.AlertCreateRequest) (*models.Aler
 	}
 	
 	s.alerts[alert.ID] = alert
+	log.Info().
+		Str("alert_id", alert.ID).
+		Str("level", alert.Level).
+		Str("source", alert.Source).
+		Str("title", alert.Title).
+		Msg("Alert created successfully")
+	
 	return alert, nil
 }
 
@@ -407,7 +417,7 @@ func (s *alertService) ResolveAlert(id string, userID string, comment string) er
 	return fmt.Errorf("告警未找到: %s", id)
 }
 
-// GetAlertStats 获取告警统计
+// GetAlertStats 获取告警统计（修复版本，提高准确性）
 func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -418,6 +428,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 		Acknowledged: 0,
 		Resolved:     0,
 		ByLevel: map[string]int{
+			"debug":    0,
 			"info":     0,
 			"warning":  0,
 			"error":    0,
@@ -430,23 +441,51 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 	// 合并本地告警和规则引擎告警
 	allAlerts := make(map[string]*models.Alert)
 	
-	// 添加本地告警
+	// 添加本地告警（带调试日志）
+	localCount := 0
 	for id, alert := range s.alerts {
 		allAlerts[id] = alert
+		localCount++
 	}
 	
-	// 添加规则引擎告警
+	// 添加规则引擎告警（带调试日志和错误处理）
+	ruleEngineCount := 0
 	if s.alertSubscriber != nil {
-		ruleAlerts := s.alertSubscriber.GetAlertStore().GetAlerts()
-		for _, alert := range ruleAlerts {
-			allAlerts[alert.ID] = alert
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Panic occurred while getting rule engine alerts")
+				}
+			}()
+			
+			ruleAlerts := s.alertSubscriber.GetAlertStore().GetAlerts()
+			for _, alert := range ruleAlerts {
+				// 避免重复ID的告警被覆盖
+				if _, exists := allAlerts[alert.ID]; !exists {
+					allAlerts[alert.ID] = alert
+					ruleEngineCount++
+				} else {
+					log.Warn().
+						Str("alert_id", alert.ID).
+						Msg("Duplicate alert ID found, skipping rule engine alert")
+				}
+			}
+		}()
+	} else {
+		log.Debug().Msg("Alert subscriber is nil, rule engine alerts not included in stats")
 	}
+	
+	log.Debug().
+		Int("local_alerts", localCount).
+		Int("rule_engine_alerts", ruleEngineCount).
+		Int("total_unique_alerts", len(allAlerts)).
+		Msg("Alert stats data sources")
 	
 	// 统计总数和状态
-	for _, alert := range allAlerts {
+	for id, alert := range allAlerts {
 		stats.Total++
 		
+		// 状态统计
 		switch alert.Status {
 		case "active":
 			stats.Active++
@@ -454,15 +493,37 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 			stats.Acknowledged++
 		case "resolved":
 			stats.Resolved++
+		default:
+			log.Warn().
+				Str("alert_id", id).
+				Str("unknown_status", alert.Status).
+				Msg("Unknown alert status encountered")
+			stats.Active++ // 默认作为活跃告警处理
 		}
 		
-		// 按级别统计
-		if count, exists := stats.ByLevel[alert.Level]; exists {
-			stats.ByLevel[alert.Level] = count + 1
+		// 按级别统计（改进处理，支持所有级别）
+		if _, exists := stats.ByLevel[alert.Level]; exists {
+			stats.ByLevel[alert.Level]++
+		} else {
+			// 处理未预定义的级别
+			stats.ByLevel[alert.Level] = 1
+			log.Debug().
+				Str("alert_id", id).
+				Str("new_level", alert.Level).
+				Msg("New alert level encountered")
 		}
 		
 		// 按来源统计
 		stats.BySource[alert.Source]++
+		
+		// 调试日志：记录每个告警的详细信息
+		log.Debug().
+			Str("alert_id", id).
+			Str("level", alert.Level).
+			Str("status", alert.Status).
+			Str("source", alert.Source).
+			Str("title", alert.Title).
+			Msg("Alert included in statistics")
 	}
 	
 	// 模拟最近趋势数据（最近7天）
@@ -473,6 +534,16 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 			Count: 5 + i*2, // 模拟数据
 		})
 	}
+	
+	// 记录最终统计结果
+	log.Info().
+		Int("total", stats.Total).
+		Int("active", stats.Active).
+		Int("acknowledged", stats.Acknowledged).
+		Int("resolved", stats.Resolved).
+		Interface("by_level", stats.ByLevel).
+		Interface("by_source", stats.BySource).
+		Msg("Alert statistics calculated")
 	
 	return stats, nil
 }

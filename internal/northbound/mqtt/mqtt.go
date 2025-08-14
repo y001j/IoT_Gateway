@@ -62,19 +62,36 @@ type TLSConfig struct {
 	ClientKey  string `json:"client_key"`
 }
 
+// StandardConfig 是标准配置格式
+type StandardConfig struct {
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	BatchSize  int               `json:"batch_size,omitempty"`
+	BufferSize int               `json:"buffer_size,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
+	Params     json.RawMessage   `json:"params"` // 连接器特定的参数
+}
+
 // Init 初始化连接器
 func (s *MQTTSink) Init(cfg json.RawMessage) error {
-	// 使用标准化配置解析
-	standardConfig, err := s.ParseStandardConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("解析MQTT sink配置失败: %w", err)
+	fmt.Printf("!!!! MQTT DEBUG: Init被调用, cfg长度=%d !!!!\n", len(cfg))
+	fmt.Printf("!!!! MQTT DEBUG: 接收到的配置内容=%s !!!!\n", string(cfg))
+	
+	// 使用标准化配置解析来设置基础属性
+	if _, err := s.ParseStandardConfig(cfg); err != nil {
+		return fmt.Errorf("解析MQTT sink标准配置失败: %w", err)
 	}
 
-	// 解析MQTT特定参数
-	var mqttConfig MQTTConfig
-	if err := json.Unmarshal(standardConfig.Params, &mqttConfig); err != nil {
-		return fmt.Errorf("解析MQTT特定参数失败: %w", err)
+	// 解析MQTT特定参数 - 直接从params字段解析
+	var tempConfig struct {
+		Params MQTTConfig `json:"params"`
 	}
+	if err := json.Unmarshal(cfg, &tempConfig); err != nil {
+		fmt.Printf("!!!! MQTT DEBUG: JSON解析失败, 错误=%v !!!!\n", err)
+		return fmt.Errorf("解析MQTT配置失败: %w", err)
+	}
+	mqttConfig := tempConfig.Params
+	fmt.Printf("!!!! MQTT DEBUG: 解析得到的MQTT配置=%+v !!!!\n", mqttConfig)
 
 	// 设置默认值
 	s.topicTpl = mqttConfig.TopicTpl
@@ -254,8 +271,18 @@ func (s *MQTTSink) publishLoop() {
 				finalValue = point.Value
 			}
 			
-			// 序列化值
-			payload, err := json.Marshal(finalValue)
+			// 创建完整的数据结构，包含所有字段
+			fullData := map[string]interface{}{
+				"device_id": point.DeviceID,
+				"key":       point.Key,
+				"value":     finalValue,
+				"type":      point.Type,
+				"timestamp": point.Timestamp,
+				"tags":      point.GetTagsCopy(), // 保留tags信息
+			}
+			
+			// 序列化完整数据结构
+			payload, err := json.Marshal(fullData)
 			if err != nil {
 				s.HandleError(err, "序列化数据点值")
 				continue
@@ -271,6 +298,8 @@ func (s *MQTTSink) publishLoop() {
 					Str("device_id", point.DeviceID).
 					Str("key", point.Key).
 					Str("topic", topic).
+					Interface("tags", point.GetTagsCopy()).
+					Interface("full_data", fullData).
 					Msg("成功发布数据点到MQTT")
 			}
 

@@ -226,8 +226,7 @@ func (c *ISPClient) receiveLoop() {
 				if err := c.scanner.Err(); err != nil {
 					// 检查是否是超时错误
 					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						// 超时是正常的，继续循环
-						log.Debug().Msg("ISP客户端读取超时，继续等待")
+						// 超时是正常的，继续循环（不记录日志避免过多输出）
 						continue
 					}
 					log.Error().Err(err).Msg("读取消息失败")
@@ -247,10 +246,13 @@ func (c *ISPClient) receiveLoop() {
 				continue
 			}
 
-			log.Debug().
-				Str("type", msg.Type).
-				Str("id", msg.ID).
-				Msg("收到ISP消息")
+			// 只记录非数据和心跳消息，减少日志噪声
+			if msg.Type != MessageTypeData && msg.Type != MessageTypeHeartbeat {
+				log.Debug().
+					Str("type", msg.Type).
+					Str("id", msg.ID).
+					Msg("收到ISP消息")
+			}
 
 			// 处理消息
 			c.handleMessage(msg)
@@ -276,8 +278,7 @@ func (c *ISPClient) handleMessage(msg *ISPMessage) {
 		}
 
 	case MessageTypeData:
-		// 处理数据消息
-		log.Debug().Msg("收到数据消息")
+		// 处理数据消息（减少日志输出）
 		c.handlerMu.Lock()
 		handler := c.dataHandler
 		c.handlerMu.Unlock()
@@ -287,8 +288,7 @@ func (c *ISPClient) handleMessage(msg *ISPMessage) {
 		}
 
 	case MessageTypeHeartbeat:
-		// 处理心跳消息 - 发送心跳响应以保持连接活跃
-		log.Debug().Msg("收到心跳消息，发送响应")
+		// 处理心跳消息 - 发送心跳响应以保持连接活跃（静默处理）
 		heartbeatResponse := NewHeartbeatMessage()
 		if err := c.SendMessage(heartbeatResponse); err != nil {
 			log.Error().Err(err).Msg("发送心跳响应失败")

@@ -24,3 +24,6 @@ package-lock.json
 
 # Temporary files
 *.tmp
+
+# Claude Code configuration
+CLAUDE.md

@@ -323,6 +323,9 @@ func (s *WebSocketSink) Publish(batch []model.Point) error {
 				topic = fmt.Sprintf("iot.data.%s.%s", point.DeviceID, point.Key)
 			}
 
+			// 创建安全的Tags副本 - 使用GetTagsCopy()
+			safeTags := point.GetTagsCopy()
+
 			// 构建消息
 			msg := WebSocketMessage{
 				Topic:     topic,
@@ -331,7 +334,7 @@ func (s *WebSocketSink) Publish(batch []model.Point) error {
 				Value:     s.convertValue(point, config),
 				Type:      string(point.Type),
 				Timestamp: point.Timestamp.UnixNano() / 1e6, // 转换为毫秒
-				Tags:      point.Tags,
+				Tags:      safeTags,
 			}
 
 			// 序列化消息

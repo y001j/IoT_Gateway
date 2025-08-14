@@ -1,0 +1,41 @@
+{
+  "id": "vector_magnitude_transform",
+  "name": "向量模长计算转换",
+  "description": "将3D加速度向量转换为模长值",
+  "enabled": true,
+  "priority": 20,
+  "data_type": "vector3d",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "accel_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "acceleration"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "vector_magnitude",
+        "output_key": "acceleration_magnitude",
+        "output_type": "float",
+        "precision": 3,
+        "add_tags": {
+          "transform_type": "vector_magnitude",
+          "original_key": "acceleration",
+          "calculation": "sqrt(x^2 + y^2 + z^2)"
+        }
+      }
+    }
+  ]
+}

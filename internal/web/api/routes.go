@@ -62,6 +62,26 @@ func SetupRoutes(router *gin.Engine, svc *services.Services, natsConn *nats.Conn
 			wsProtected.GET("/realtime", wsHandler.HandleWebSocket)
 		}
 
+		// WebSocket 管理路由（需要认证）
+		wsManagement := v1.Group("/websocket")
+		wsManagement.Use(middleware.JWTMiddleware(config.WebUI.Auth.JWTSecret))
+		{
+			// WebSocket 统计信息（所有用户）
+			wsManagement.GET("/stats", wsHandler.GetWebSocketStats)
+			
+			// 管理员权限路由
+			adminWs := wsManagement.Group("/")
+			adminWs.Use(middleware.RequireRole("admin"))
+			{
+				// 全局推送控制
+				adminWs.POST("/push/enable", wsHandler.SetGlobalPushEnabled)
+				
+				// 客户端管理
+				adminWs.POST("/clients/:clientId/push", wsHandler.SetClientPushEnabled)
+				adminWs.POST("/clients/:clientId/subscriptions", wsHandler.SetClientSubscriptions)
+			}
+		}
+
 		// 需要认证的路由
 		protected := v1.Group("/")
 		protected.Use(middleware.JWTMiddleware(config.WebUI.Auth.JWTSecret))

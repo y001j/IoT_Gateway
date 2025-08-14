@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/southbound"
 	"github.com/y001j/iot-gateway/internal/northbound"
+	"github.com/y001j/iot-gateway/internal/monitoring"
 )
 
 // MetricsProvider 定义了metrics提供者接口
@@ -31,6 +32,16 @@ type MetricsCache struct {
 	ttl        time.Duration
 }
 
+// DataPointsTracker 数据点速率跟踪器
+type DataPointsTracker struct {
+	lastCount       int64
+	lastTime        time.Time
+	lastBytesCount  int64
+	currentRate     float64
+	currentByteRate float64
+	initialized     bool
+}
+
 // LightweightMetrics 轻量级指标收集器
 type LightweightMetrics struct {
 	mu        sync.RWMutex
@@ -41,8 +52,17 @@ type LightweightMetrics struct {
 	updateCancel context.CancelFunc
 	updateTicker *time.Ticker
 	
+	// 系统指标收集器
+	systemCollector *monitoring.SystemCollector
+	
+	// 实时速率跟踪器
+	dataTracker *DataPointsTracker
+	
 	// 缓存
 	cache *MetricsCache
+	
+	// 自定义更新回调
+	updateCallback func()
 	
 	// 系统指标
 	SystemMetrics SystemMetrics `json:"system"`
@@ -74,10 +94,21 @@ type SystemMetrics struct {
 	UptimeSeconds     float64 `json:"uptime_seconds"`
 	MemoryUsageBytes  int64   `json:"memory_usage_bytes"`
 	CPUUsagePercent   float64 `json:"cpu_usage_percent"`
+	DiskUsagePercent  float64 `json:"disk_usage_percent"`
 	GoroutineCount    int     `json:"goroutine_count"`
 	GCPauseMS         float64 `json:"gc_pause_ms"`
 	HeapSizeBytes     int64   `json:"heap_size_bytes"`
 	HeapInUseBytes    int64   `json:"heap_in_use_bytes"`
+	// 网络累计流量指标
+	NetworkInBytes    int64   `json:"network_in_bytes"`
+	NetworkOutBytes   int64   `json:"network_out_bytes"`
+	NetworkInPackets  int64   `json:"network_in_packets"`
+	NetworkOutPackets int64   `json:"network_out_packets"`
+	// 网络实时速率指标
+	NetworkInBytesPerSec    float64 `json:"network_in_bytes_per_sec"`
+	NetworkOutBytesPerSec   float64 `json:"network_out_bytes_per_sec"`
+	NetworkInPacketsPerSec  float64 `json:"network_in_packets_per_sec"`
+	NetworkOutPacketsPerSec float64 `json:"network_out_packets_per_sec"`
 	Version           string  `json:"version"`
 	GoVersion         string  `json:"go_version"`
 }
@@ -165,8 +196,34 @@ type ErrorMetrics struct {
 
 // NewLightweightMetrics 创建轻量级指标收集器
 func NewLightweightMetrics() *LightweightMetrics {
+	// 创建并启动系统指标收集器
+	// 根据操作系统设置磁盘路径
+	diskPath := "/"
+	if runtime.GOOS == "windows" {
+		diskPath = "C:\\"
+	}
+	
+	systemCollectorConfig := monitoring.SystemCollectorConfig{
+		Enabled:         true,
+		CollectInterval: 5 * time.Second,
+		CacheDuration:   10 * time.Second,
+		DiskPath:        diskPath,
+	}
+	
+	systemCollector := monitoring.NewSystemCollector(systemCollectorConfig)
+	if err := systemCollector.Start(); err != nil {
+		log.Warn().Err(err).Msg("系统指标收集器启动失败，将使用基本指标")
+	} else {
+		log.Info().Msg("系统指标收集器已启动")
+	}
+
 	return &LightweightMetrics{
-		startTime: time.Now(),
+		startTime:       time.Now(),
+		systemCollector: systemCollector,
+		dataTracker: &DataPointsTracker{
+			lastTime:    time.Now(),
+			initialized: false,
+		},
 		cache: &MetricsCache{
 			ttl: 3 * time.Second, // 缓存3秒
 		},
@@ -212,9 +269,52 @@ func (m *LightweightMetrics) UpdateSystemMetrics() {
 	m.SystemMetrics.GCPauseMS = float64(memStats.PauseNs[(memStats.NumGC+255)%256]) / 1e6
 	m.SystemMetrics.GoroutineCount = runtime.NumGoroutine()
 	
-	// CPU使用率需要在实际使用中计算
-	// 这里设置为0，实际实现时可以使用系统调用获取
-	m.SystemMetrics.CPUUsagePercent = 0
+	// 尝试从系统收集器获取真实的系统指标
+	if m.systemCollector != nil {
+		if systemMetrics, err := m.systemCollector.GetMetrics(); err == nil {
+			// 使用系统收集器的CPU和磁盘使用率
+			m.SystemMetrics.CPUUsagePercent = systemMetrics.CPUUsage
+			m.SystemMetrics.DiskUsagePercent = systemMetrics.DiskUsage
+			
+			// 网络累计流量指标
+			m.SystemMetrics.NetworkInBytes = int64(systemMetrics.NetworkInBytes)
+			m.SystemMetrics.NetworkOutBytes = int64(systemMetrics.NetworkOutBytes)
+			m.SystemMetrics.NetworkInPackets = int64(systemMetrics.NetworkInPackets)
+			m.SystemMetrics.NetworkOutPackets = int64(systemMetrics.NetworkOutPackets)
+			
+			// 网络实时速率指标
+			m.SystemMetrics.NetworkInBytesPerSec = systemMetrics.NetworkInBytesPerSec
+			m.SystemMetrics.NetworkOutBytesPerSec = systemMetrics.NetworkOutBytesPerSec
+			m.SystemMetrics.NetworkInPacketsPerSec = systemMetrics.NetworkInPacketsPerSec
+			m.SystemMetrics.NetworkOutPacketsPerSec = systemMetrics.NetworkOutPacketsPerSec
+			
+			// 系统指标已更新（移除频繁debug日志）
+		} else {
+			log.Warn().Err(err).Msg("无法获取系统指标，使用默认值")
+			m.SystemMetrics.CPUUsagePercent = 0
+			m.SystemMetrics.DiskUsagePercent = 0
+			m.SystemMetrics.NetworkInBytes = 0
+			m.SystemMetrics.NetworkOutBytes = 0
+			m.SystemMetrics.NetworkInPackets = 0
+			m.SystemMetrics.NetworkOutPackets = 0
+			m.SystemMetrics.NetworkInBytesPerSec = 0
+			m.SystemMetrics.NetworkOutBytesPerSec = 0
+			m.SystemMetrics.NetworkInPacketsPerSec = 0
+			m.SystemMetrics.NetworkOutPacketsPerSec = 0
+		}
+	} else {
+		// 系统收集器未启用，使用默认值0
+		m.SystemMetrics.CPUUsagePercent = 0
+		m.SystemMetrics.DiskUsagePercent = 0
+		m.SystemMetrics.NetworkInBytes = 0
+		m.SystemMetrics.NetworkOutBytes = 0
+		m.SystemMetrics.NetworkInPackets = 0
+		m.SystemMetrics.NetworkOutPackets = 0
+		m.SystemMetrics.NetworkInBytesPerSec = 0
+		m.SystemMetrics.NetworkOutBytesPerSec = 0
+		m.SystemMetrics.NetworkInPacketsPerSec = 0
+		m.SystemMetrics.NetworkOutPacketsPerSec = 0
+	}
 	
 	m.LastUpdated = time.Now()
 }
@@ -233,14 +333,63 @@ func (m *LightweightMetrics) UpdateGatewayMetrics(status, configFile, pluginsDir
 	m.LastUpdated = time.Now()
 }
 
+// calculateRealTimeRate 计算实时速率
+func (m *LightweightMetrics) calculateRealTimeRate(currentPoints, currentBytes int64, now time.Time) {
+	if m.dataTracker == nil {
+		return
+	}
+	
+	if !m.dataTracker.initialized {
+		// 首次初始化
+		m.dataTracker.lastCount = currentPoints
+		m.dataTracker.lastBytesCount = currentBytes
+		m.dataTracker.lastTime = now
+		m.dataTracker.initialized = true
+		m.dataTracker.currentRate = 0
+		m.dataTracker.currentByteRate = 0
+		return
+	}
+	
+	// 计算时间差值（秒）
+	timeDiff := now.Sub(m.dataTracker.lastTime).Seconds()
+	
+	// 如果时间差小于1秒，使用上次的速率
+	if timeDiff < 1.0 {
+		m.DataMetrics.DataPointsPerSecond = m.dataTracker.currentRate
+		m.DataMetrics.BytesPerSecond = m.dataTracker.currentByteRate
+		return
+	}
+	
+	// 计算数据点差值
+	pointsDiff := currentPoints - m.dataTracker.lastCount
+	bytesDiff := currentBytes - m.dataTracker.lastBytesCount
+	
+	// 计算实时速率
+	if timeDiff > 0 {
+		m.dataTracker.currentRate = float64(pointsDiff) / timeDiff
+		m.dataTracker.currentByteRate = float64(bytesDiff) / timeDiff
+	}
+	
+	// 更新指标
+	m.DataMetrics.DataPointsPerSecond = m.dataTracker.currentRate
+	m.DataMetrics.BytesPerSecond = m.dataTracker.currentByteRate
+	
+	// 更新跟踪器状态
+	m.dataTracker.lastCount = currentPoints
+	m.dataTracker.lastBytesCount = currentBytes
+	m.dataTracker.lastTime = now
+}
+
 // UpdateDataMetrics 更新数据处理指标
 func (m *LightweightMetrics) UpdateDataMetrics(totalPoints int64, bytesProcessed int64, latencyMS float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	
+	now := time.Now()
+	
 	m.DataMetrics.TotalDataPoints = totalPoints
 	m.DataMetrics.TotalBytesProcessed = bytesProcessed
-	m.DataMetrics.LastDataPointTime = time.Now()
+	m.DataMetrics.LastDataPointTime = now
 	
 	// 更新延迟统计
 	if latencyMS > 0 {
@@ -255,14 +404,10 @@ func (m *LightweightMetrics) UpdateDataMetrics(totalPoints int64, bytesProcessed
 		m.DataMetrics.AverageLatencyMS = (m.DataMetrics.AverageLatencyMS + latencyMS) / 2
 	}
 	
-	// 计算每秒处理量
-	uptime := time.Since(m.startTime).Seconds()
-	if uptime > 0 {
-		m.DataMetrics.DataPointsPerSecond = float64(totalPoints) / uptime
-		m.DataMetrics.BytesPerSecond = float64(bytesProcessed) / uptime
-	}
+	// 使用实时速率计算
+	m.calculateRealTimeRate(totalPoints, bytesProcessed, now)
 	
-	m.LastUpdated = time.Now()
+	m.LastUpdated = now
 }
 
 // UpdateConnectionMetrics 更新连接指标
@@ -383,6 +528,15 @@ func (m *LightweightMetrics) ToPlainText() string {
 	result += fmt.Sprintf("iot_gateway_uptime_seconds %.2f\n", m.SystemMetrics.UptimeSeconds)
 	result += fmt.Sprintf("iot_gateway_memory_usage_bytes %d\n", m.SystemMetrics.MemoryUsageBytes)
 	result += fmt.Sprintf("iot_gateway_cpu_usage_percent %.2f\n", m.SystemMetrics.CPUUsagePercent)
+	result += fmt.Sprintf("iot_gateway_disk_usage_percent %.2f\n", m.SystemMetrics.DiskUsagePercent)
+	result += fmt.Sprintf("iot_gateway_network_in_bytes %d\n", m.SystemMetrics.NetworkInBytes)
+	result += fmt.Sprintf("iot_gateway_network_out_bytes %d\n", m.SystemMetrics.NetworkOutBytes)
+	result += fmt.Sprintf("iot_gateway_network_in_packets %d\n", m.SystemMetrics.NetworkInPackets)
+	result += fmt.Sprintf("iot_gateway_network_out_packets %d\n", m.SystemMetrics.NetworkOutPackets)
+	result += fmt.Sprintf("iot_gateway_network_in_bytes_per_sec %.2f\n", m.SystemMetrics.NetworkInBytesPerSec)
+	result += fmt.Sprintf("iot_gateway_network_out_bytes_per_sec %.2f\n", m.SystemMetrics.NetworkOutBytesPerSec)
+	result += fmt.Sprintf("iot_gateway_network_in_packets_per_sec %.2f\n", m.SystemMetrics.NetworkInPacketsPerSec)
+	result += fmt.Sprintf("iot_gateway_network_out_packets_per_sec %.2f\n", m.SystemMetrics.NetworkOutPacketsPerSec)
 	result += fmt.Sprintf("iot_gateway_goroutine_count %d\n", m.SystemMetrics.GoroutineCount)
 	result += fmt.Sprintf("iot_gateway_gc_pause_ms %.2f\n", m.SystemMetrics.GCPauseMS)
 	result += fmt.Sprintf("iot_gateway_heap_size_bytes %d\n", m.SystemMetrics.HeapSizeBytes)
@@ -496,6 +650,14 @@ func GetLightweightMetrics() *LightweightMetrics {
 	return globalLightweightMetrics
 }
 
+// SetUpdateCallback 设置自定义更新回调函数
+func (m *LightweightMetrics) SetUpdateCallback(callback func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateCallback = callback
+	log.Info().Msg("🔗 更新回调函数已设置")
+}
+
 // ShutdownLightweightMetrics 关闭轻量级指标收集器
 func ShutdownLightweightMetrics() {
 	if globalLightweightMetrics != nil {
@@ -539,8 +701,11 @@ func (m *LightweightMetrics) AggregateAdapterMetrics() {
 	
 	// 更新数据处理指标
 	m.mu.Lock()
+	now := time.Now()
 	m.DataMetrics.TotalDataPoints = totalDataPoints
-	m.DataMetrics.DataPointsPerSecond = float64(totalDataPoints) / time.Since(m.startTime).Seconds()
+	
+	// 使用实时速率计算而不是平均值
+	m.calculateRealTimeRate(totalDataPoints, m.DataMetrics.TotalBytesProcessed, now)
 	
 	// 更新错误指标
 	m.ErrorMetrics.TotalErrors = totalErrors
@@ -616,12 +781,25 @@ func (m *LightweightMetrics) StartAutoUpdate(interval time.Duration) {
 				m.AggregateAdapterMetrics()
 				m.AggregateSinkMetrics()
 				
+				// 调用自定义更新回调（如规则引擎指标同步）
+				m.mu.RLock()
+				callback := m.updateCallback
+				m.mu.RUnlock()
+				
+				if callback != nil {
+					log.Debug().Msg("⚡ 调用更新回调函数")
+					callback()
+					log.Debug().Msg("✅ 更新回调函数执行完成")
+				} else {
+					log.Warn().Msg("⚠️ 更新回调函数为nil")
+				}
+				
 				// 更新最后更新时间
 				m.mu.Lock()
 				m.LastUpdated = time.Now()
 				m.mu.Unlock()
 				
-				log.Debug().Msg("轻量级metrics已更新")
+				// 轻量级metrics已更新（移除频繁debug日志）
 				
 			case <-m.updateCtx.Done():
 				log.Info().Msg("轻量级metrics自动更新已停止")
@@ -638,6 +816,15 @@ func (m *LightweightMetrics) StopAutoUpdate() {
 	}
 	if m.updateTicker != nil {
 		m.updateTicker.Stop()
+	}
+	
+	// 停止系统收集器
+	if m.systemCollector != nil {
+		if err := m.systemCollector.Stop(); err != nil {
+			log.Warn().Err(err).Msg("停止系统收集器时出错")
+		} else {
+			log.Info().Msg("系统收集器已停止")
+		}
 	}
 	
 	log.Info().Msg("轻量级metrics自动更新已停止")

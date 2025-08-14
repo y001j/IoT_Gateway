@@ -1,0 +1,87 @@
+{
+  "id": "advanced_condition_testing", 
+  "name": "高级条件测试规则",
+  "description": "测试复杂条件逻辑、嵌套条件和表达式引擎",
+  "enabled": true,
+  "priority": 15,
+  "version": 1,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "or",
+        "or": [
+          {
+            "type": "and",
+            "and": [
+              {
+                "type": "simple",
+                "field": "key",
+                "operator": "eq", 
+                "value": "temperature"
+              },
+              {
+                "type": "simple",
+                "field": "value",
+                "operator": "gt",
+                "value": 30
+              }
+            ]
+          },
+          {
+            "type": "and",
+            "and": [
+              {
+                "type": "simple",
+                "field": "key",
+                "operator": "eq",
+                "value": "pressure"
+              },
+              {
+                "type": "expression",
+                "expression": "value > 1000 && tags.priority == 'high'"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "expression",
+        "expression": "__tag_access__(\"sensor_type\") != \"deprecated\""
+      },
+      {
+        "type": "expression",
+        "expression": "timestamp_unix > now() - 300 && quality == 0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "expression",
+        "expression": "round(value * 1.1, 2)",
+        "add_tags": {
+          "rule_complexity": "advanced_conditions",
+          "logic_depth": "3_levels",
+          "condition_types": "and_or_not_expression"
+        }
+      }
+    },
+    {
+      "type": "forward",
+      "config": {
+        "subjects": [
+          "processed.advanced.{device_id}.{key}",
+          "analytics.complex_rules.{tags.sensor_type}"
+        ],
+        "add_tags": {
+          "forwarding_rule": "advanced_routing",
+          "complexity_tested": "true"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -13,8 +14,11 @@ import (
 
 // FilterHandler Filter动作处理器
 type FilterHandler struct {
-	duplicateCache map[string]DuplicateEntry
-	mu             sync.RWMutex
+	duplicateCache  map[string]DuplicateEntry
+	statisticsCache map[string]*StatisticsWindow
+	changeRateCache map[string]*ChangeRateEntry
+	consecutiveCache map[string]*ConsecutiveEntry
+	mu              sync.RWMutex
 }
 
 // DuplicateEntry 重复数据缓存条目
@@ -23,10 +27,35 @@ type DuplicateEntry struct {
 	Timestamp time.Time
 }
 
+// StatisticsWindow 统计窗口数据
+type StatisticsWindow struct {
+	Values    []float64
+	WindowSize int
+	Mean      float64
+	StdDev    float64
+	LastUpdate time.Time
+}
+
+// ChangeRateEntry 变化率缓存条目
+type ChangeRateEntry struct {
+	LastValue     interface{}
+	LastTimestamp time.Time
+}
+
+// ConsecutiveEntry 连续异常缓存条目
+type ConsecutiveEntry struct {
+	ConsecutiveCount int
+	LastCheckTime    time.Time
+	IsAbnormal       bool
+}
+
 // NewFilterHandler 创建Filter处理器
 func NewFilterHandler() *FilterHandler {
 	handler := &FilterHandler{
-		duplicateCache: make(map[string]DuplicateEntry),
+		duplicateCache:   make(map[string]DuplicateEntry),
+		statisticsCache:  make(map[string]*StatisticsWindow),
+		changeRateCache:  make(map[string]*ChangeRateEntry),
+		consecutiveCache: make(map[string]*ConsecutiveEntry),
 	}
 
 	// 启动清理协程
@@ -93,7 +122,7 @@ func (h *FilterHandler) Execute(ctx context.Context, point model.Point, rule *ru
 
 // FilterConfig 过滤配置
 type FilterConfig struct {
-	Type       string                 `json:"type"`       // duplicate, range, rate_limit, pattern, custom
+	Type       string                 `json:"type"`       // duplicate, range, rate_limit, pattern, null, threshold, time_window, quality, change_rate, statistical_anomaly, consecutive
 	Parameters map[string]interface{} `json:"parameters"` // 过滤参数
 	Action     string                 `json:"action"`     // drop, pass, modify
 	TTL        time.Duration          `json:"ttl"`        // 缓存生存时间
@@ -150,6 +179,14 @@ func (h *FilterHandler) shouldFilter(point model.Point, config *FilterConfig) (b
 		return h.thresholdFilter(point, config)
 	case "time_window":
 		return h.timeWindowFilter(point, config)
+	case "quality":
+		return h.qualityFilter(point, config)
+	case "change_rate":
+		return h.changeRateFilter(point, config)
+	case "statistical_anomaly":
+		return h.statisticalAnomalyFilter(point, config)
+	case "consecutive":
+		return h.consecutiveFilter(point, config)
 	default:
 		return false, "", fmt.Errorf("不支持的过滤类型: %s", config.Type)
 	}
@@ -157,27 +194,41 @@ func (h *FilterHandler) shouldFilter(point model.Point, config *FilterConfig) (b
 
 // duplicateFilter 重复数据过滤
 func (h *FilterHandler) duplicateFilter(point model.Point, config *FilterConfig) (bool, string, error) {
-	// 生成缓存键
-	cacheKey := fmt.Sprintf("dup:%s:%s", point.DeviceID, point.Key)
+	// 获取时间窗口参数
+	var timeWindow time.Duration = config.TTL // 默认使用配置的TTL
+	
+	// 如果参数中有window设置，优先使用
+	if windowStr, ok := config.Parameters["window"].(string); ok {
+		if duration, err := time.ParseDuration(windowStr); err == nil {
+			timeWindow = duration
+		}
+	}
+	
+	// 如果都没有设置，使用默认值
+	if timeWindow == 0 {
+		timeWindow = 60 * time.Second // 默认60秒
+	}
+
+	// 生成基于值的缓存键，这样每个不同值都有独立的缓存条目
+	valueStr := fmt.Sprintf("%v", point.Value)
+	cacheKey := fmt.Sprintf("dup:%s:%s:%s", point.DeviceID, point.Key, valueStr)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	// 检查是否存在重复数据
 	if entry, exists := h.duplicateCache[cacheKey]; exists {
-		// 检查值是否相同
-		if h.valuesEqual(entry.Value, point.Value) {
-			// 检查时间间隔
-			if time.Since(entry.Timestamp) < config.TTL {
-				return true, "重复数据", nil
-			}
+		// 检查时间间隔（基于数据点时间戳，不是当前系统时间）
+		timeDiff := point.Timestamp.Sub(entry.Timestamp)
+		if timeDiff < timeWindow && timeDiff >= 0 {
+			return true, "重复数据", nil
 		}
 	}
 
-	// 更新缓存
+	// 更新缓存（使用数据点的时间戳）
 	h.duplicateCache[cacheKey] = DuplicateEntry{
 		Value:     point.Value,
-		Timestamp: time.Now(),
+		Timestamp: point.Timestamp,
 	}
 
 	return false, "", nil
@@ -286,10 +337,9 @@ func (h *FilterHandler) patternFilter(point model.Point, config *FilterConfig) (
 	case "value":
 		valueToMatch = fmt.Sprintf("%v", point.Value)
 	default:
-		if point.Tags != nil {
-			if tagValue, exists := point.Tags[field]; exists {
-				valueToMatch = tagValue
-			}
+		// Go 1.24安全：使用GetTag方法替代直接Tags[]访问
+		if tagValue, exists := point.GetTag(field); exists {
+			valueToMatch = tagValue
 		}
 	}
 
@@ -455,6 +505,262 @@ func (h *FilterHandler) toFloat64(value interface{}) (float64, error) {
 	}
 }
 
+// qualityFilter 质量过滤 - 过滤设备质量码异常的数据
+func (h *FilterHandler) qualityFilter(point model.Point, config *FilterConfig) (bool, string, error) {
+	// 获取允许的质量码列表，默认只允许0（正常）
+	allowedQuality, ok := config.Parameters["allowed_quality"].([]interface{})
+	if !ok {
+		// 默认只允许质量码为0的数据通过
+		if point.Quality != 0 {
+			return true, fmt.Sprintf("数据质量异常: %d", point.Quality), nil
+		}
+		return false, "", nil
+	}
+
+	// 检查质量码是否在允许列表中
+	for _, allowed := range allowedQuality {
+		// 支持多种类型的转换
+		var allowedInt int
+		switch v := allowed.(type) {
+		case int:
+			allowedInt = v
+		case float64:
+			allowedInt = int(v)
+		case int32:
+			allowedInt = int(v)
+		case int64:
+			allowedInt = int(v)
+		default:
+			continue // 跳过无法转换的类型
+		}
+		
+		if allowedInt == point.Quality {
+			return false, "", nil
+		}
+	}
+
+	return true, fmt.Sprintf("数据质量异常: %d", point.Quality), nil
+}
+
+// changeRateFilter 变化率过滤 - 过滤变化过快的数据
+func (h *FilterHandler) changeRateFilter(point model.Point, config *FilterConfig) (bool, string, error) {
+	// 获取最大变化率参数
+	maxChangeRate, ok := config.Parameters["max_change_rate"].(float64)
+	if !ok {
+		return false, "", fmt.Errorf("变化率过滤需要配置max_change_rate参数")
+	}
+
+	// 获取时间窗口参数
+	timeWindowStr, ok := config.Parameters["time_window"].(string)
+	if !ok {
+		timeWindowStr = "10s" // 默认10秒窗口
+	}
+
+	timeWindow, err := time.ParseDuration(timeWindowStr)
+	if err != nil {
+		return false, "", fmt.Errorf("无效的时间窗口: %w", err)
+	}
+
+	// 生成缓存键
+	cacheKey := fmt.Sprintf("chg:%s:%s", point.DeviceID, point.Key)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 转换当前值为数字
+	currentValue, err := h.toFloat64(point.Value)
+	if err != nil {
+		// 非数字值不进行变化率检查
+		return false, "", nil
+	}
+
+	// 检查是否有历史数据
+	if entry, exists := h.changeRateCache[cacheKey]; exists {
+		timeDiff := point.Timestamp.Sub(entry.LastTimestamp)
+		
+		// 只在时间窗口内检查变化率，且确保时间差大于0
+		if timeDiff <= timeWindow && timeDiff > 0 {
+			if lastValue, err := h.toFloat64(entry.LastValue); err == nil {
+				// 计算变化率：变化量/时间差
+				valueDiff := math.Abs(currentValue - lastValue)
+				changeRate := valueDiff / timeDiff.Seconds()
+				
+				if changeRate > maxChangeRate {
+					// 过滤掉变化率过快的数据，不更新缓存，保持原有基准值
+					return true, fmt.Sprintf("变化率过快: %.2f/s 超过限制 %.2f/s", changeRate, maxChangeRate), nil
+				}
+			}
+		}
+	}
+
+	// 更新缓存为当前正常值
+	h.changeRateCache[cacheKey] = &ChangeRateEntry{
+		LastValue:     point.Value,
+		LastTimestamp: point.Timestamp,
+	}
+
+	return false, "", nil
+}
+
+// statisticalAnomalyFilter 统计异常检测过滤 - 基于移动统计检测异常
+func (h *FilterHandler) statisticalAnomalyFilter(point model.Point, config *FilterConfig) (bool, string, error) {
+	// 获取配置参数
+	windowSize, ok := config.Parameters["window_size"].(float64)
+	if !ok {
+		windowSize = 20 // 默认窗口大小
+	}
+
+	stdThreshold, ok := config.Parameters["std_threshold"].(float64)
+	if !ok {
+		stdThreshold = 2.0 // 默认2个标准差
+	}
+
+	minSamples, ok := config.Parameters["min_samples"].(float64)
+	if !ok {
+		minSamples = 5 // 最少需要5个样本才开始检测
+	}
+
+	// 转换数值
+	currentValue, err := h.toFloat64(point.Value)
+	if err != nil {
+		// 非数字值不进行统计分析
+		return false, "", nil
+	}
+
+	// 生成缓存键
+	cacheKey := fmt.Sprintf("stat:%s:%s", point.DeviceID, point.Key)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 获取或创建统计窗口
+	window, exists := h.statisticsCache[cacheKey]
+	if !exists {
+		window = &StatisticsWindow{
+			Values:     make([]float64, 0, int(windowSize)),
+			WindowSize: int(windowSize),
+			LastUpdate: time.Now(),
+		}
+		h.statisticsCache[cacheKey] = window
+	}
+
+	// 检查是否有足够的样本进行异常检测（基于现有数据，不包含当前值）
+	if len(window.Values) >= int(minSamples) {
+		// 先用现有数据计算统计值
+		h.updateStatistics(window)
+
+		// 检查当前值是否为异常
+		deviation := math.Abs(currentValue - window.Mean)
+		if window.StdDev > 0 && deviation > stdThreshold*window.StdDev {
+			// 异常值，不添加到窗口中，但记录检测
+			return true, fmt.Sprintf("统计异常: 偏离均值%.2f个标准差 (阈值:%.1f)", deviation/window.StdDev, stdThreshold), nil
+		}
+	}
+
+	// 添加新值到窗口（只有正常值才添加）
+	window.Values = append(window.Values, currentValue)
+	if len(window.Values) > window.WindowSize {
+		// 移除最旧的值
+		window.Values = window.Values[1:]
+	}
+	window.LastUpdate = time.Now()
+
+	return false, "", nil
+}
+
+// consecutiveFilter 连续异常过滤 - 只有连续N次异常才过滤
+func (h *FilterHandler) consecutiveFilter(point model.Point, config *FilterConfig) (bool, string, error) {
+	// 获取连续次数阈值
+	consecutiveThreshold, ok := config.Parameters["consecutive_count"].(float64)
+	if !ok {
+		consecutiveThreshold = 3 // 默认连续3次
+	}
+
+	// 获取异常检测条件
+	checkConfig := make(map[string]interface{})
+	if innerConfig, ok := config.Parameters["inner_filter"].(map[string]interface{}); ok {
+		checkConfig = innerConfig
+	} else {
+		return false, "", fmt.Errorf("连续异常过滤需要配置inner_filter参数")
+	}
+
+	// 创建内部过滤器配置
+	innerFilterConfig := &FilterConfig{
+		Type:       checkConfig["type"].(string),
+		Parameters: checkConfig["parameters"].(map[string]interface{}),
+		Action:     "drop",
+		TTL:        config.TTL,
+	}
+
+	// 检查内部条件
+	isAbnormal, reason, err := h.shouldFilter(point, innerFilterConfig)
+	if err != nil {
+		return false, "", err
+	}
+
+	// 生成缓存键
+	cacheKey := fmt.Sprintf("cons:%s:%s", point.DeviceID, point.Key)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 获取或创建连续计数器
+	entry, exists := h.consecutiveCache[cacheKey]
+	if !exists {
+		entry = &ConsecutiveEntry{
+			ConsecutiveCount: 0,
+			LastCheckTime:    time.Now(),
+			IsAbnormal:       false,
+		}
+		h.consecutiveCache[cacheKey] = entry
+	}
+
+	now := time.Now()
+	
+	if isAbnormal {
+		entry.ConsecutiveCount++
+		entry.IsAbnormal = true
+	} else {
+		entry.ConsecutiveCount = 0
+		entry.IsAbnormal = false
+	}
+	entry.LastCheckTime = now
+
+	// 检查是否达到连续异常阈值
+	if entry.ConsecutiveCount >= int(consecutiveThreshold) {
+		return true, fmt.Sprintf("连续%d次异常: %s", entry.ConsecutiveCount, reason), nil
+	}
+
+	return false, "", nil
+}
+
+// updateStatistics 更新统计窗口的统计值
+func (h *FilterHandler) updateStatistics(window *StatisticsWindow) {
+	n := len(window.Values)
+	if n == 0 {
+		return
+	}
+
+	// 计算均值
+	sum := 0.0
+	for _, v := range window.Values {
+		sum += v
+	}
+	window.Mean = sum / float64(n)
+
+	// 计算标准差
+	if n > 1 {
+		sumSquaredDiff := 0.0
+		for _, v := range window.Values {
+			diff := v - window.Mean
+			sumSquaredDiff += diff * diff
+		}
+		window.StdDev = math.Sqrt(sumSquaredDiff / float64(n-1))
+	} else {
+		window.StdDev = 0
+	}
+}
+
 // cleanupCache 清理缓存
 func (h *FilterHandler) cleanupCache() {
 	ticker := time.NewTicker(5 * time.Minute)
@@ -463,12 +769,35 @@ func (h *FilterHandler) cleanupCache() {
 	for range ticker.C {
 		h.mu.Lock()
 		now := time.Now()
+		
+		// 清理重复数据缓存
 		for key, entry := range h.duplicateCache {
-			// 清理超过1小时的缓存
 			if now.Sub(entry.Timestamp) > time.Hour {
 				delete(h.duplicateCache, key)
 			}
 		}
+		
+		// 清理统计缓存
+		for key, window := range h.statisticsCache {
+			if now.Sub(window.LastUpdate) > 2*time.Hour {
+				delete(h.statisticsCache, key)
+			}
+		}
+		
+		// 清理变化率缓存
+		for key, entry := range h.changeRateCache {
+			if now.Sub(entry.LastTimestamp) > time.Hour {
+				delete(h.changeRateCache, key)
+			}
+		}
+		
+		// 清理连续异常缓存
+		for key, entry := range h.consecutiveCache {
+			if now.Sub(entry.LastCheckTime) > time.Hour {
+				delete(h.consecutiveCache, key)
+			}
+		}
+		
 		h.mu.Unlock()
 	}
 }

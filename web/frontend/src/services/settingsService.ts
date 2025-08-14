@@ -172,6 +172,11 @@ class SettingsService {
     return response.data;
   }
 
+  async resetUserPassword(id: string, newPassword: string): Promise<SettingsResponse<void>> {
+    const response = await axios.post(`${API_BASE}/users/${id}/reset-password`, { new_password: newPassword });
+    return response.data;
+  }
+
   async getRoles(): Promise<SettingsResponse<UserRole[]>> {
     const response = await axios.get(`${API_BASE}/roles`);
     return response.data;
@@ -202,6 +207,39 @@ class SettingsService {
     return response.data;
   }
 
+  async getApiPermissionsConfig(): Promise<SettingsResponse<ApiPermissionConfig>> {
+    return this.getApiPermissions();
+  }
+
+  async updateApiPermissionsConfig(config: ApiPermissionConfig): Promise<SettingsResponse<void>> {
+    return this.updateApiPermissions(config);
+  }
+
+  async getApiPermissionRules(): Promise<SettingsResponse<any[]>> {
+    const response = await axios.get(`${API_BASE}/settings/api-permissions/rules`);
+    return response.data;
+  }
+
+  async getApiEndpoints(): Promise<SettingsResponse<any[]>> {
+    const response = await axios.get(`${API_BASE}/settings/api-endpoints`);
+    return response.data;
+  }
+
+  async updateApiPermissionRule(id: string, rule: any): Promise<SettingsResponse<void>> {
+    const response = await axios.put(`${API_BASE}/settings/api-permissions/rules/${id}`, rule);
+    return response.data;
+  }
+
+  async createApiPermissionRule(rule: any): Promise<SettingsResponse<void>> {
+    const response = await axios.post(`${API_BASE}/settings/api-permissions/rules`, rule);
+    return response.data;
+  }
+
+  async deleteApiPermissionRule(id: string): Promise<SettingsResponse<void>> {
+    const response = await axios.delete(`${API_BASE}/settings/api-permissions/rules/${id}`);
+    return response.data;
+  }
+
   // 审计日志
   async getAuditConfig(): Promise<SettingsResponse<AuditConfig>> {
     const response = await axios.get(`${API_BASE}/settings/audit`);
@@ -222,6 +260,25 @@ class SettingsService {
     end_time?: string;
   }): Promise<SettingsResponse<{ data: AuditLog[]; total: number }>> {
     const response = await axios.get(`${API_BASE}/audit-logs`, { params });
+    return response.data;
+  }
+
+  async exportAuditLogs(params: {
+    start_time?: string;
+    end_time?: string;
+    format?: string;
+  }): Promise<Blob> {
+    const response = await axios.get(`${API_BASE}/audit-logs/export`, {
+      params,
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async cleanupAuditLogs(retentionDays: number): Promise<SettingsResponse<void>> {
+    const response = await axios.post(`${API_BASE}/audit-logs/cleanup`, {
+      retention_days: retentionDays
+    });
     return response.data;
   }
 

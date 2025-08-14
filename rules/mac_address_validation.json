@@ -1,0 +1,46 @@
+{
+  "id": "mac_address_validation",
+  "name": "MAC地址验证",
+  "description": "验证网络设备的MAC地址格式",
+  "enabled": true,
+  "priority": 40,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "complex_sensor_01"
+      },
+      {
+        "type": "simple",
+        "field": "tags.mac_address",
+        "operator": "regex",
+        "value": "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_fields": {
+          "mac_format": "valid",
+          "network_validated": "true"
+        },
+        "add_tags": {
+          "validation": "mac_valid",
+          "network_check": "passed"
+        }
+      }
+    },
+    {
+      "type": "alert",
+      "config": {
+        "level": "info",
+        "message": "🌐 MAC地址验证: {{.DeviceID}} MAC={{.tags.mac_address}}"
+      }
+    }
+  ]
+}

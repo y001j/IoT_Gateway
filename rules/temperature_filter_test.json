@@ -1,0 +1,65 @@
+{
+  "id": "temperature_filter_test",
+  "name": "温度数据过滤测试",
+  "description": "过滤异常温度数据，去重处理，范围检查",
+  "enabled": true,
+  "priority": 60,
+  "version": 1,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "temperature"
+      },
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "startswith",
+        "value": "temp_sensor"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "filter",
+      "config": {
+        "type": "range",
+        "min": -40,
+        "max": 80,
+        "drop_on_match": true
+      }
+    },
+    {
+      "type": "filter",
+      "config": {
+        "type": "duplicate",
+        "window": "30s",
+        "tolerance": 0.1,
+        "drop_on_match": true
+      }
+    },
+    {
+      "type": "filter",
+      "config": {
+        "type": "rate_limit",
+        "max_rate": 10,
+        "window": "60s",
+        "drop_on_match": true
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "filter_applied": "temperature_range",
+          "quality_check": "passed"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

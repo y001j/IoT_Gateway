@@ -1,0 +1,50 @@
+{
+  "id": "vibration_anomaly_filter",
+  "name": "振动异常检测过滤",
+  "description": "检测和过滤振动传感器异常数据，基于统计异常值检测",
+  "enabled": true,
+  "priority": 70,
+  "version": 1,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "vibration_sensor_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "vibration"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "filter",
+      "config": {
+        "type": "statistical_anomaly",
+        "method": "z_score",
+        "threshold": 2.5,
+        "window": 20,
+        "drop_on_match": true
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "field": "value",
+        "type": "identity",
+        "add_tags": {
+          "anomaly_detector": "vibration_z_score",
+          "analysis_window": "20_samples"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

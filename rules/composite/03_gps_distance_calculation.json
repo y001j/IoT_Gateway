@@ -1,0 +1,46 @@
+{
+  "id": "gps_distance_calculation",
+  "name": "GPS距离计算",
+  "description": "计算GPS位置到北京天安门的距离",
+  "enabled": true,
+  "priority": 30,
+  "data_type": "location",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "gps_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "location"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "geo_distance",
+        "parameters": {
+          "target_latitude": 39.9042,
+          "target_longitude": 116.4074,
+          "unit": "m"
+        },
+        "output_key": "distance_to_tiananmen",
+        "output_type": "float",
+        "precision": 2,
+        "add_tags": {
+          "transform_type": "geo_distance",
+          "target": "tiananmen_square",
+          "unit": "meters"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "test_generic_expression",
+  "name": "测试通用向量表达式",
+  "description": "测试genericVectorMagnitude表达式",
+  "enabled": true,
+  "priority": 30,
+  "version": 3,
+  "data_type": "vector_generic",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "vector_device_01"
+      },
+      {
+        "type": "expression",
+        "expression": "genericVectorMagnitude(sensor_vector) \u003e 10.0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "message": "通用向量表达式测试成功",
+        "type": "console"
+      }
+    }
+  ],
+  "created_at": "2025-08-12T21:46:32.6193592+08:00",
+  "updated_at": "2025-08-13T02:32:09.4536689+08:00"
+}

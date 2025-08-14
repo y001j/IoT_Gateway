@@ -67,13 +67,28 @@ func (p *ISPAdapterProxy) Init(cfg json.RawMessage) error {
 		return fmt.Errorf("解析配置失败: %w", err)
 	}
 
+	// 提取plugin_config字段作为实际的配置
+	var actualConfig map[string]interface{}
+	if pluginConfig, ok := rawConfig["plugin_config"].(map[string]interface{}); ok {
+		actualConfig = pluginConfig
+	} else {
+		actualConfig = rawConfig // 如果没有plugin_config，使用原始配置
+	}
+	
 	// 转换为ISP配置格式
-	config := p.convertToISPConfig(rawConfig)
+	config := p.convertToISPConfig(actualConfig)
 
 	// 保存配置用于重连
 	p.config = &config
 
 	// 发送配置消息
+	log.Info().
+		Str("name", p.Name()).
+		Int("registers_count", len(config.Registers)).
+		Str("address", config.Address).
+		Str("mode", config.Mode).
+		Msg("🔵 [调试] 准备发送ISP配置消息")
+
 	configMsg, err := NewConfigMessage("config-"+fmt.Sprintf("%d", time.Now().Unix()), config)
 	if err != nil {
 		return fmt.Errorf("创建配置消息失败: %w", err)
@@ -108,18 +123,39 @@ func (p *ISPAdapterProxy) convertToISPConfig(rawConfig map[string]interface{}) C
 		Extra: make(map[string]interface{}),
 	}
 
-	// 转换基本配置
+	// 转换基本配置 - 支持多种字段名映射
 	if mode, ok := rawConfig["mode"].(string); ok {
 		config.Mode = mode
+	} else if protocol, ok := rawConfig["protocol"].(string); ok {
+		config.Mode = protocol // protocol字段映射到Mode
 	}
+	
 	if address, ok := rawConfig["address"].(string); ok {
 		config.Address = address
+	} else if host, ok := rawConfig["host"].(string); ok {
+		// 构建完整的地址 host:port
+		port := 502 // 默认Modbus端口
+		if portVal, ok := rawConfig["port"].(float64); ok {
+			port = int(portVal)
+		}
+		config.Address = fmt.Sprintf("%s:%d", host, port)
 	}
+	// 处理超时配置（支持多种格式）
 	if timeout, ok := rawConfig["timeout_ms"].(float64); ok {
 		config.TimeoutMS = int(timeout)
+	} else if timeoutStr, ok := rawConfig["timeout"].(string); ok {
+		if duration, err := time.ParseDuration(timeoutStr); err == nil {
+			config.TimeoutMS = int(duration.Milliseconds())
+		}
 	}
+	
+	// 处理间隔配置（支持多种格式）
 	if interval, ok := rawConfig["interval_ms"].(float64); ok {
 		config.IntervalMS = int(interval)
+	} else if intervalStr, ok := rawConfig["interval"].(string); ok {
+		if duration, err := time.ParseDuration(intervalStr); err == nil {
+			config.IntervalMS = int(duration.Milliseconds())
+		}
 	}
 
 	// 转换寄存器配置
@@ -138,10 +174,38 @@ func (p *ISPAdapterProxy) convertToISPConfig(rawConfig map[string]interface{}) C
 					regConfig.Quantity = uint16(quantity)
 				}
 				if regType, ok := regMap["type"].(string); ok {
+					// 将寄存器类型转换为功能码
+					switch regType {
+					case "coil":
+						regConfig.Function = 1 // 读取线圈
+						if regConfig.Quantity == 0 {
+							regConfig.Quantity = 1
+						}
+					case "discrete_input":
+						regConfig.Function = 2 // 读取离散输入
+						if regConfig.Quantity == 0 {
+							regConfig.Quantity = 1
+						}
+					case "holding_register":
+						regConfig.Function = 3 // 读取保持寄存器
+						if regConfig.Quantity == 0 {
+							regConfig.Quantity = 1
+						}
+					case "input_register":
+						regConfig.Function = 4 // 读取输入寄存器
+						if regConfig.Quantity == 0 {
+							regConfig.Quantity = 1
+						}
+					}
+				}
+				// 处理数据类型字段（优先使用data_type字段）
+				if dataType, ok := regMap["data_type"].(string); ok {
+					regConfig.Type = dataType
+				} else if regType, ok := regMap["type"].(string); ok {
 					regConfig.Type = regType
 				}
 				if function, ok := regMap["function"].(float64); ok {
-					regConfig.Function = uint8(function)
+					regConfig.Function = uint8(function) // 手动指定的功能码优先级更高
 				}
 				if scale, ok := regMap["scale"].(float64); ok {
 					regConfig.Scale = scale
@@ -250,7 +314,7 @@ func (p *ISPAdapterProxy) dataReceiveLoop(ctx context.Context, ch chan<- model.P
 				p.SetHealthStatus("healthy", "ISP connection restored")
 				log.Info().Str("name", p.Name()).Msg("ISP客户端重连成功")
 			}
-			log.Debug().Str("name", p.Name()).Msg("ISP适配器代理运行正常")
+			// ISP适配器代理运行正常（移除频繁debug日志）
 		}
 	}
 }
@@ -296,12 +360,21 @@ func (p *ISPAdapterProxy) reconnect(ctx context.Context) error {
 
 // handleDataMessage 处理数据消息
 func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Point) {
+	log.Info().
+		Str("name", p.Name()).
+		Msg("🔵 [调试] ISP适配器代理收到数据消息")
+	
 	dataPayload, err := msg.ParseDataPayload()
 	if err != nil {
 		p.SetLastError(fmt.Errorf("解析数据消息失败: %w", err))
 		log.Error().Err(err).Msg("解析数据消息失败")
 		return
 	}
+
+	log.Info().
+		Str("name", p.Name()).
+		Int("points_count", len(dataPayload.Points)).
+		Msg("🔵 [调试] 解析到数据点")
 
 	for _, point := range dataPayload.Points {
 		// 转换为内部数据点格式
@@ -311,11 +384,11 @@ func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Poi
 			case ch <- *internalPoint:
 				// 成功发送，更新指标
 				p.IncrementDataPoints()
-				log.Debug().
+				log.Info().
 					Str("name", p.Name()).
 					Str("key", internalPoint.Key).
 					Interface("value", internalPoint.Value).
-					Msg("转发数据点")
+					Msg("🔵 [调试] 数据点已转发到通道")
 			default:
 				p.SetLastError(fmt.Errorf("数据通道已满，丢弃数据点: %s", point.Key))
 				log.Warn().
@@ -335,21 +408,23 @@ func (p *ISPAdapterProxy) convertDataPoint(point DataPoint) *model.Point {
 		Timestamp: time.Unix(0, point.Timestamp),
 		Quality:   point.Quality,
 		Value:     point.Value,
-		Tags:      make(map[string]string),
 	}
 
-	// 复制标签
-	for k, v := range point.Tags {
-		internalPoint.Tags[k] = v
+	// Go 1.24安全：使用安全方法复制ISP DataPoint的标签
+	if point.Tags != nil {
+		// 对于ISP DataPoint，直接复制Tags map是安全的（单线程访问）
+		for k, v := range point.Tags {
+			internalPoint.AddTag(k, v)
+		}
 	}
 
 	// 设置数据类型
 	switch point.Type {
 	case "bool":
 		internalPoint.Type = model.TypeBool
-	case "int":
+	case "int", "int16", "int32", "uint16", "uint32":
 		internalPoint.Type = model.TypeInt
-	case "float":
+	case "float", "float32", "float64":
 		internalPoint.Type = model.TypeFloat
 	case "string":
 		internalPoint.Type = model.TypeString

@@ -55,7 +55,7 @@ func (h *ForwardHandler) Execute(ctx context.Context, point model.Point, rule *r
 		"value":     point.Value,
 		"type":      string(point.Type),
 		"timestamp": point.Timestamp,
-		"tags":      point.Tags,
+		"tags":      rules.SafeValueForJSON(point.GetTagsCopy()), // 使用安全的JSON转换
 		"rule_info": map[string]interface{}{
 			"rule_id":   rule.ID,
 			"rule_name": rule.Name,

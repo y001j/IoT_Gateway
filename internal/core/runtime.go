@@ -19,6 +19,7 @@ import (
 	"github.com/y001j/iot-gateway/internal/metrics"
 	"github.com/y001j/iot-gateway/internal/plugin"
 	"github.com/y001j/iot-gateway/internal/rules"
+	"github.com/y001j/iot-gateway/internal/rules/actions"
 )
 
 type Service interface {
@@ -79,7 +80,6 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		var serverReady bool
 
 		// 先检查是否已有运行中的 NATS 服务器
-		log.Info().Int("port", port).Msg("检查现有 NATS 服务器")
 
 		// 尝试连接到现有服务器
 		testConn, err := nats.Connect(fmt.Sprintf("nats://127.0.0.1:%d", port),
@@ -87,7 +87,6 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 		if err == nil {
 			// 成功连接到现有服务器
-			log.Info().Int("port", port).Msg("检测到现有 NATS 服务器")
 			testConn.Close() // 关闭测试连接
 			serverReady = true
 		} else {
@@ -105,7 +104,6 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 			ln.Close() // 关闭测试监听器
 
 			// 配置嵌入式 NATS 服务器
-			log.Info().Int("port", port).Msg("配置嵌入式 NATS 服务器")
 			opts := &server.Options{
 				ServerName: "embedded-nats",
 				Host:       "127.0.0.1",
@@ -136,14 +134,12 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 				return nil, fmt.Errorf("嵌入式 NATS 服务器启动超时")
 			}
 
-			log.Info().Int("port", port).Msg("嵌入式 NATS 服务器已就绪")
 			serverReady = true
 		}
 
 		// 当服务器就绪后连接到它
 		if serverReady {
 			natsURL = fmt.Sprintf("nats://127.0.0.1:%d", port)
-			log.Info().Str("url", natsURL).Msg("连接到 NATS 服务器")
 
 			// 使用重试机制连接
 			var connectErr error
@@ -154,7 +150,6 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 					nats.MaxReconnects(5))
 
 				if connectErr == nil {
-					log.Info().Str("url", natsURL).Msg("成功连接到 NATS 服务器")
 					break
 				}
 
@@ -174,11 +169,9 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 	} else if natsURL != "" {
 		// 连接到外部 NATS 服务器
-		log.Info().Str("url", natsURL).Msg("连接外部 NATS 服务器")
 		nc, err = nats.Connect(natsURL)
 	} else {
 		// 默认连接
-		log.Info().Str("url", nats.DefaultURL).Msg("使用默认 NATS 连接")
 		nc, err = nats.Connect(nats.DefaultURL)
 	}
 
@@ -208,7 +201,13 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	// 注册规则引擎服务
 	var ruleEngineService *rules.RuleEngineService
 	if v.GetBool("rule_engine.enabled") {
-		ruleEngineService = rules.NewRuleEngineService()
+		// 获取规则引擎配置并创建服务
+		ruleEngineConfig := v.Get("rule_engine")
+		if configMap, ok := ruleEngineConfig.(map[string]interface{}); ok {
+			ruleEngineService = rules.NewRuleEngineServiceWithConfig(configMap)
+		} else {
+			ruleEngineService = rules.NewRuleEngineService()
+		}
 		// 传递Runtime连接到规则引擎服务
 		ruleEngineService.SetRuntime(rt)
 		
@@ -230,13 +229,17 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 				webService.SetRuleEngineService(ruleEngineService)
 			}
 			rt.RegisterService(webService)
-			log.Info().Msg("Web服务已注册")
 		}
 	}
 
 	// 初始化轻量级指标收集器
 	metrics.InitLightweightMetrics() // 初始化全局单例
 	rt.metrics = metrics.GetLightweightMetrics() // 使用全局单例
+	
+	// 设置更新回调，用于同步规则引擎统计数据
+	rt.metrics.SetUpdateCallback(func() {
+		rt.updateRuleEngineMetrics()
+	})
 	
 	// 更新网关基础指标
 	rt.metrics.UpdateGatewayMetrics(
@@ -258,6 +261,17 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 		// 轻量级指标端点 - JSON格式
 		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			// 添加CORS头支持前端跨域访问
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			
+			// 处理预检请求
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			
 			format := r.URL.Query().Get("format")
 			if format == "" {
 				format = "json"
@@ -289,6 +303,17 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 		// 健康检查端点
 		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			// 添加CORS头支持前端跨域访问
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			
+			// 处理预检请求
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
@@ -303,6 +328,17 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 		// 系统信息端点
 		mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+			// 添加CORS头支持前端跨域访问
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			
+			// 处理预检请求
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			natsPort := "N/A"
@@ -341,10 +377,13 @@ func (r *Runtime) RegisterService(svc Service) {
 func (r *Runtime) GetBus() *nats.Conn { return r.Bus }
 
 func (r *Runtime) Start(ctx context.Context) error {
+	log.Info().Msg("Runtime.Start() 被调用")
+	
 	// 启动插件管理器
 	if err := r.PluginMgr.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("启动插件管理器失败")
 	}
+	// 启动注册的服务
 
 	// 初始化并启动所有服务
 	for _, s := range r.Svcs {
@@ -375,7 +414,15 @@ func (r *Runtime) Start(ctx context.Context) error {
 			return fmt.Errorf("服务 %s 启动失败: %w", s.Name(), err)
 		}
 
-		log.Info().Str("service", s.Name()).Msg("服务启动成功")
+		
+		// 如果是规则引擎服务，在启动后注册Transform action handler
+		if s.Name() == "rule-engine" {
+			if ruleService, ok := s.(*rules.RuleEngineService); ok {
+				// 注册Transform处理器
+				transformHandler := actions.NewTransformHandler(r.Bus)
+				ruleService.RegisterActionHandler("transform", transformHandler)
+			}
+		}
 	}
 	return nil
 }
@@ -400,7 +447,56 @@ func (r *Runtime) Stop(ctx context.Context) {
 	// 关闭嵌入式 NATS 服务器
 	if r.NatsServer != nil {
 		r.NatsServer.Shutdown()
-		log.Info().Msg("嵌入式 NATS 服务器已关闭")
+	}
+}
+
+// updateRuleEngineMetrics 更新规则引擎指标到全局metrics系统
+func (r *Runtime) updateRuleEngineMetrics() {
+	if r.metrics == nil {
+		return
+	}
+	
+	// 找到规则引擎服务
+	for _, s := range r.Svcs {
+		if s.Name() == "rule-engine" {
+			if ruleService, ok := s.(*rules.RuleEngineService); ok {
+				// 获取规则引擎的监控指标
+				engineMetrics := ruleService.GetMetrics()
+				if engineMetrics != nil {
+					// 详细调试日志：显示原始指标数据
+					log.Info().
+						Int64("raw_rules_total", engineMetrics.RulesTotal).
+						Int64("raw_rules_enabled", engineMetrics.RulesEnabled).
+						Int64("raw_rules_matched", engineMetrics.RulesMatched).
+						Int64("raw_actions_executed", engineMetrics.ActionsExecuted).
+						Int64("raw_actions_succeeded", engineMetrics.ActionsSucceeded).
+						Int64("raw_actions_failed", engineMetrics.ActionsFailed).
+						Int64("raw_points_processed", engineMetrics.PointsProcessed).
+						Time("raw_last_processed", engineMetrics.LastProcessedAt).
+						Msg("🔍 规则引擎原始指标数据")
+					
+					// 同步统计数据到全局指标系统
+					r.metrics.UpdateRuleMetrics(
+						int(engineMetrics.RulesTotal),       // 总规则数
+						int(engineMetrics.RulesEnabled),     // 启用规则数
+						engineMetrics.RulesMatched,          // 匹配次数
+						engineMetrics.ActionsExecuted,       // 动作执行次数
+						engineMetrics.ActionsSucceeded,      // 动作成功次数
+						engineMetrics.ActionsFailed,         // 动作失败次数
+					)
+					
+					log.Info().
+						Int("synced_total_rules", int(engineMetrics.RulesTotal)).
+						Int("synced_enabled_rules", int(engineMetrics.RulesEnabled)).
+						Int64("synced_rules_matched", engineMetrics.RulesMatched).
+						Int64("synced_actions_executed", engineMetrics.ActionsExecuted).
+						Msg("✅ 规则引擎指标已同步到全局metrics系统")
+				} else {
+					log.Warn().Msg("⚠️ 规则引擎GetMetrics返回nil")
+				}
+			}
+			break
+		}
 	}
 }
 

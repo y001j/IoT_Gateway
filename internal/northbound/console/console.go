@@ -158,8 +158,14 @@ func (s *ConsoleSink) flushLocked() error {
 
 		// 格式化标签
 		tagsStr := ""
-		for k, v := range point.Tags {
-			tagsStr += fmt.Sprintf("%s=%s ", k, v)
+		// Go 1.24安全：使用GetTagsSafe获取标签
+		pointTags := point.GetTagsSafe()
+		if len(pointTags) > 0 {
+			tagsStr = "tags["
+			for k, v := range pointTags {
+				tagsStr += fmt.Sprintf("%s=%s ", k, v)
+			}
+			tagsStr = tagsStr[:len(tagsStr)-1] + "]" // 去掉最后一个空格并添加结束括号
 		}
 
 		// 打印数据点

@@ -1,0 +1,47 @@
+{
+  "id": "color_analysis_rule",
+  "name": "颜色数据分析",
+  "description": "分析RGB颜色数据",
+  "enabled": true,
+  "priority": 70,
+  "version": 8,
+  "conditions": {
+    "type": "simple",
+    "field": "key",
+    "operator": "eq",
+    "value": "color_reading"
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "color_analyzed": "true"
+        },
+        "field": "value.hue",
+        "output_key": "rounded_hue",
+        "precision": 1,
+        "type": "round"
+      }
+    },
+    {
+      "type": "aggregate",
+      "config": {
+        "forward": true,
+        "functions": [
+          "avg",
+          "max",
+          "min"
+        ],
+        "group_by": [
+          "device_id"
+        ],
+        "output_key": "color_stats",
+        "window": "5m",
+        "window_type": "time"
+      }
+    }
+  ],
+  "created_at": "2025-08-14T21:46:15.5693588+08:00",
+  "updated_at": "2025-08-15T01:54:19.9264041+08:00"
+}

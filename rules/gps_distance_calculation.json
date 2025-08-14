@@ -1,0 +1,52 @@
+{
+  "id": "gps_distance_calculation",
+  "name": "GPS距离计算",
+  "description": "计算GPS坐标之间的距离和运动分析",
+  "enabled": true,
+  "priority": 25,
+  "version": 1,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "gps_tracker_01"
+      },
+      {
+        "type": "or",
+        "or": [
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "latitude"
+          },
+          {
+            "type": "simple",
+            "field": "key",
+            "operator": "eq",
+            "value": "longitude"
+          }
+        ]
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "format",
+        "format": "%.6f",
+        "add_tags": {
+          "coordinate_format": "decimal_degrees",
+          "precision": "6_decimal_places",
+          "geo_processing": "enabled"
+        }
+      }
+    }
+  ],
+  "created_at": "2025-08-10T22:00:00Z",
+  "updated_at": "2025-08-10T22:00:00Z"
+}

@@ -45,7 +45,7 @@ class SmartCache {
   set<T>(key: string, data: T, ttl: number): void {
     // 如果缓存已满，删除最老的条目
     if (this.cache.size >= this.maxSize) {
-      const oldestKey = this.cache.keys().next().value;
+      const oldestKey = this.cache.keys().next().value as string;
       this.cache.delete(oldestKey);
     }
 

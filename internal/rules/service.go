@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,10 @@ type RuleEngineService struct {
 	// 聚合状态管理（保留旧版本兼容性）
 	aggregateStates map[string]*AggregateState
 	aggregateMutex  sync.RWMutex
+	
+	// 新的分片聚合状态管理器（高性能）
+	shardedAggregates *ShardedAggregateStates
+	useShardedAggregates bool
 
 	// Runtime引用
 	runtime interface{}
@@ -49,9 +55,16 @@ type RuleEngineService struct {
 	maxWorkers    int
 	queueSize     int
 	
+	// 新的优化工作池
+	optimizedPool *OptimizedWorkerPool
+	useOptimizedPool bool
+	
 	// 监控和错误处理
 	monitor       *RuleMonitor
 	enableMetrics bool
+	
+	// 高性能聚合处理器
+	optimizedAggregateHandler OptimizedAggregateHandler
 }
 
 // GetRuleManager 获取规则管理器实例
@@ -86,17 +99,47 @@ type AggregateState struct {
 
 // NewRuleEngineService 创建规则引擎服务
 func NewRuleEngineService() *RuleEngineService {
+	// 使用更大的默认值以应对高负载场景
 	service := &RuleEngineService{
 		actionHandlers:  make(map[string]ActionHandler),
 		aggregateStates: make(map[string]*AggregateState),
 		aggregateMutex:  sync.RWMutex{},
-		maxWorkers:      4,    // 默认4个工作协程
-		queueSize:       1000, // 默认队列大小
+		maxWorkers:      16,   // 增大默认worker数量
+		queueSize:       5000, // 增大默认队列大小
 		enableMetrics:   true, // 默认启用监控
+		
+		// 启用新的优化组件
+		useShardedAggregates: true,
+		useOptimizedPool:     true,
 	}
 	
 	// 初始化监控器
 	service.monitor = NewRuleMonitor(1000) // 保留最近1000个错误
+	
+	// 初始化分片聚合状态管理器
+	service.shardedAggregates = NewShardedAggregateStates(16) // 16个分片
+	
+	return service
+}
+
+// NewRuleEngineServiceWithConfig 使用配置创建规则引擎服务
+func NewRuleEngineServiceWithConfig(config map[string]interface{}) *RuleEngineService {
+	service := NewRuleEngineService()
+	
+	// 解析工作池配置
+	if poolConfig, ok := config["worker_pool"].(map[string]interface{}); ok {
+		if maxWorkers, ok := poolConfig["max_workers"].(int); ok && maxWorkers > 0 {
+			service.maxWorkers = maxWorkers
+			}
+		
+		if queueSize, ok := poolConfig["queue_size"].(int); ok && queueSize > 0 {
+			service.queueSize = queueSize
+			}
+		
+		if useOptimized, ok := poolConfig["use_optimized"].(bool); ok {
+			service.useOptimizedPool = useOptimized
+			}
+	}
 	
 	return service
 }
@@ -127,7 +170,6 @@ func (wp *WorkerPool) Stop() {
 	wp.cancel()
 	close(wp.taskQueue)
 	wp.wg.Wait()
-	log.Info().Msg("规则引擎工作池停止")
 }
 
 // SubmitTask 提交任务到工作池
@@ -147,16 +189,13 @@ func (wp *WorkerPool) SubmitTask(task RuleTask) bool {
 func (wp *WorkerPool) worker(workerID int) {
 	defer wp.wg.Done()
 	
-	log.Debug().Int("worker_id", workerID).Msg("规则引擎工作协程启动")
 	
 	for {
 		select {
 		case <-wp.ctx.Done():
-			log.Debug().Int("worker_id", workerID).Msg("规则引擎工作协程退出")
 			return
 		case task, ok := <-wp.taskQueue:
 			if !ok {
-				log.Debug().Int("worker_id", workerID).Msg("任务队列已关闭，工作协程退出")
 				return
 			}
 			
@@ -200,23 +239,24 @@ func (s *RuleEngineService) handleAggregateResult(aggregateResult *AggregateResu
 		}
 	}
 
-	// 创建聚合结果数据点
+	// 创建聚合结果数据点，使用安全的Tags复制
 	resultPoint := model.Point{
 		DeviceID:  aggregateResult.DeviceID,
 		Key:       outputKey,
 		Value:     aggregatedValue,
 		Type:      model.TypeFloat,
 		Timestamp: aggregateResult.Timestamp,
-		Tags:      originalPoint.Tags,
 	}
-
-	// 添加聚合标签
-	if resultPoint.Tags == nil {
-		resultPoint.Tags = make(map[string]string)
+	// Go 1.24安全：复制原始数据点的安全标签
+	originalTags := originalPoint.GetTagsCopy()
+	for k, v := range originalTags {
+		resultPoint.AddTag(k, v)
 	}
-	resultPoint.Tags["aggregated"] = "true"
-	resultPoint.Tags["source_rule"] = rule.ID
-	resultPoint.Tags["window_count"] = fmt.Sprintf("%d", aggregateResult.Count)
+	// 添加聚合标签（Tags字段已通过AddTag方法初始化）
+	// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+	resultPoint.AddTag("aggregated", "true")
+	resultPoint.AddTag("source_rule", rule.ID)
+	resultPoint.AddTag("window_count", fmt.Sprintf("%d", aggregateResult.Count))
 
 	log.Info().
 		Str("rule_id", rule.ID).
@@ -283,31 +323,25 @@ func (s *RuleEngineService) Init(cfg any) error {
 
 // Start 启动服务
 func (s *RuleEngineService) Start(ctx context.Context) error {
-	log.Info().Msg("开始启动规则引擎服务...")
 
 	if !s.config.Enabled {
 		log.Info().Msg("规则引擎服务已禁用")
 		return nil
 	}
 
-	log.Info().Msg("规则引擎服务已启用，继续启动...")
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	// 加载规则
-	log.Info().Msg("开始加载规则文件...")
 	if err := s.manager.LoadRules(); err != nil {
 		log.Error().Err(err).Msg("加载规则文件失败")
 		return fmt.Errorf("加载规则失败: %w", err)
 	}
-	log.Info().Msg("规则文件加载成功")
 
 	// 加载配置中的内联规则
-	log.Info().Msg("开始加载内联规则...")
 	if err := s.loadInlineRules(); err != nil {
 		log.Error().Err(err).Msg("加载内联规则失败")
 		return fmt.Errorf("加载内联规则失败: %w", err)
 	}
-	log.Info().Msg("内联规则加载成功")
 
 	// 获取NATS连接
 	log.Info().Msg("开始设置NATS连接...")
@@ -315,16 +349,31 @@ func (s *RuleEngineService) Start(ctx context.Context) error {
 		log.Error().Err(err).Msg("设置NATS连接失败")
 		return fmt.Errorf("设置NATS连接失败: %w", err)
 	}
-	log.Info().Msg("NATS连接设置成功")
 
 	// 创建并启动工作池
-	log.Info().Msg("启动规则引擎工作池...")
-	s.workerPool = NewWorkerPool(s.maxWorkers, s.queueSize, s)
-	s.workerPool.Start()
-	log.Info().Int("workers", s.maxWorkers).Int("queue_size", s.queueSize).Msg("规则引擎工作池启动成功")
+	
+	if s.useOptimizedPool {
+		// 使用优化的工作池，支持动态配置
+		config := WorkerPoolConfig{
+			NumWorkers:   s.maxWorkers,
+			QueueSize:    s.queueSize,
+			BatchSize:    20,                    // 增大批处理大小
+			BatchTimeout: 10 * time.Millisecond, // 增加批处理超时
+		}
+		s.optimizedPool = NewOptimizedWorkerPool(config, s)
+		if err := s.optimizedPool.Start(); err != nil {
+			log.Error().Err(err).Msg("启动优化工作池失败")
+			return fmt.Errorf("启动优化工作池失败: %w", err)
+		}
+	} else {
+		// 使用原始工作池
+		s.workerPool = NewWorkerPool(s.maxWorkers, s.queueSize, s)
+		s.workerPool.Start()
+		log.Info().Int("workers", s.maxWorkers).Int("queue_size", s.queueSize).Msg("规则引擎工作池启动成功")
+	}
 
 	// 注册动作处理器
-	log.Info().Msg("注册动作处理器...")
+	// 注册动作处理器
 	
 	// 注册内建的动作处理器
 	s.RegisterActionHandler("alert", &BuiltinAlertHandler{natsConn: s.bus})
@@ -332,23 +381,18 @@ func (s *RuleEngineService) Start(ctx context.Context) error {
 	// Transform和Forward处理器需要在外部注册，以避免循环导入
 	// 这些处理器应该在main函数或runtime中注册
 	
-	log.Info().Int("handlers", len(s.actionHandlers)).Msg("动作处理器注册完成")
 
 	// 订阅数据主题
-	log.Info().Msg("开始订阅数据流...")
 	if err := s.subscribeToDataStream(); err != nil {
 		log.Error().Err(err).Msg("订阅数据流失败")
 		return fmt.Errorf("订阅数据流失败: %w", err)
 	}
-	log.Info().Msg("数据流订阅成功")
 
 	// 启动规则监控
-	log.Info().Msg("启动规则监控...")
 	s.wg.Add(1)
 	go s.watchRuleChanges()
 
 	// 启动聚合状态清理器
-	log.Info().Msg("启动聚合状态清理器...")
 	s.wg.Add(1)
 	go s.aggregateStatesCleaner()
 
@@ -366,7 +410,14 @@ func (s *RuleEngineService) Stop(ctx context.Context) error {
 	}
 
 	// 停止工作池
-	if s.workerPool != nil {
+	if s.useOptimizedPool && s.optimizedPool != nil {
+		log.Info().Msg("停止优化规则引擎工作池...")
+		if err := s.optimizedPool.Stop(); err != nil {
+			log.Error().Err(err).Msg("停止优化工作池失败")
+		} else {
+			log.Info().Msg("优化规则引擎工作池已停止")
+		}
+	} else if s.workerPool != nil {
 		log.Info().Msg("停止规则引擎工作池...")
 		s.workerPool.Stop()
 		log.Info().Msg("规则引擎工作池已停止")
@@ -462,9 +513,10 @@ func (s *RuleEngineService) subscribeToDataStream() error {
 
 // handleDataPoint 处理数据点
 func (s *RuleEngineService) handleDataPoint(msg *nats.Msg) {
-	log.Debug().
+	log.Info().
 		Str("subject", msg.Subject).
-		Msg("规则引擎收到数据点消息")
+		Int("data_size", len(msg.Data)).
+		Msg("🎯 规则引擎收到数据点消息")
 
 	// 解析数据点
 	var point model.Point
@@ -487,11 +539,11 @@ func (s *RuleEngineService) handleDataPoint(msg *nats.Msg) {
 	// 获取启用的规则
 	rules := s.manager.GetEnabledRules()
 	if len(rules) == 0 {
-		log.Debug().Msg("没有启用的规则")
+		log.Warn().Msg("⚠️ 没有启用的规则")
 		return
 	}
 
-	log.Debug().Int("rules_count", len(rules)).Msg("开始评估规则")
+	log.Info().Int("rules_count", len(rules)).Msg("🔢 开始评估规则")
 
 	// 并行评估规则
 	successCount := 0
@@ -500,8 +552,16 @@ func (s *RuleEngineService) handleDataPoint(msg *nats.Msg) {
 	for _, rule := range rules {
 		task := RuleTask{Rule: rule, Point: point}
 		
-		// 尝试提交到工作池进行并行处理
-		if s.workerPool != nil && s.workerPool.SubmitTask(task) {
+		var submitted bool
+		if s.useOptimizedPool && s.optimizedPool != nil {
+			// 使用优化工作池
+			submitted = s.optimizedPool.SubmitTask(task)
+		} else if s.workerPool != nil {
+			// 使用原始工作池
+			submitted = s.workerPool.SubmitTask(task)
+		}
+		
+		if submitted {
 			successCount++
 		} else {
 			// 工作池满或不可用，回退到同步处理
@@ -510,12 +570,13 @@ func (s *RuleEngineService) handleDataPoint(msg *nats.Msg) {
 		}
 	}
 	
-	if successCount > 0 {
-		log.Debug().
-			Int("parallel_tasks", successCount).
-			Int("sync_tasks", failCount).
-			Msg("规则任务分发完成")
-	}
+	log.Info().
+		Int("parallel_tasks", successCount).
+		Int("sync_tasks", failCount).
+		Bool("useOptimizedPool", s.useOptimizedPool).
+		Bool("optimizedPool_nil", s.optimizedPool == nil).
+		Bool("workerPool_nil", s.workerPool == nil).
+		Msg("📋 规则任务分发完成")
 }
 
 // processRuleTask 处理规则任务（由工作池调用）
@@ -531,9 +592,31 @@ func (s *RuleEngineService) processRule(rule *Rule, point model.Point) {
 	matched, err := s.evaluator.Evaluate(rule.Conditions, point)
 	duration := time.Since(start)
 	
+	// 临时调试：记录规则评估详情
+	log.Info().
+		Str("rule_id", rule.ID).
+		Str("rule_name", rule.Name).
+		Str("device_id", point.DeviceID).
+		Str("key", point.Key).
+		Interface("value", point.Value).
+		Bool("matched", matched).
+		Err(err).
+		Msg("规则评估结果")
+	
 	// 记录规则执行统计
 	if s.enableMetrics {
-		s.monitor.RecordRuleExecution(rule.ID, duration, matched, err)
+		if s.monitor == nil {
+			log.Error().Msg("❌ s.monitor是nil但enableMetrics是true")
+		} else {
+			log.Debug().
+				Bool("enableMetrics", s.enableMetrics).
+				Msg("📈 准备调用RecordRuleExecution")
+			s.monitor.RecordRuleExecution(rule.ID, duration, matched, err)
+		}
+	} else {
+		log.Warn().
+			Bool("enableMetrics", s.enableMetrics).
+			Msg("⚠️ enableMetrics是false，跳过统计记录")
 	}
 	
 	if err != nil {
@@ -602,7 +685,17 @@ func (s *RuleEngineService) processRule(rule *Rule, point model.Point) {
 		
 		// 记录动作执行统计
 		if s.enableMetrics {
-			s.monitor.RecordActionExecution(action.Type, actionDuration, err == nil, err)
+			if s.monitor == nil {
+				log.Error().Msg("❌ s.monitor是nil但enableMetrics是true (动作)")
+			} else {
+				log.Debug().
+					Str("action_type", action.Type).
+					Bool("success", err == nil).
+					Msg("🎯 准备调用RecordActionExecution")
+				s.monitor.RecordActionExecution(action.Type, actionDuration, err == nil, err)
+			}
+		} else {
+			log.Warn().Msg("⚠️ enableMetrics是false，跳过动作统计记录")
 		}
 		
 		actionResult := map[string]interface{}{
@@ -658,12 +751,88 @@ func (s *RuleEngineService) processRule(rule *Rule, point model.Point) {
 	})
 }
 
+// processRuleTaskInternal 内部规则处理方法（供优化工作池调用）
+func (s *RuleEngineService) processRuleTaskInternal(rule *Rule, point model.Point) error {
+	if !rule.Enabled {
+		return nil
+	}
+	
+	startTime := time.Now()
+	
+	// 评估条件
+	matched, err := s.evaluator.Evaluate(rule.Conditions, point)
+	if err != nil {
+		if s.enableMetrics {
+			s.monitor.RecordError(ErrorTypeCondition, ErrorLevelError,
+				"条件评估失败", err.Error(),
+				map[string]string{
+					"rule_id": rule.ID,
+					"rule_name": rule.Name,
+					"device_id": point.DeviceID,
+					"key": point.Key,
+				})
+		}
+		return fmt.Errorf("规则条件评估失败: %w", err)
+	}
+	
+	duration := time.Since(startTime)
+	
+	// *** 修复：添加规则执行统计记录 ***
+	if s.enableMetrics {
+		if s.monitor == nil {
+			log.Error().Msg("❌ s.monitor是nil但enableMetrics是true")
+		} else {
+			log.Debug().
+				Bool("enableMetrics", s.enableMetrics).
+				Str("rule_id", rule.ID).
+				Bool("matched", matched).
+				Msg("📈 准备调用RecordRuleExecution（优化工作池）")
+			s.monitor.RecordRuleExecution(rule.ID, duration, matched, err)
+		}
+	} else {
+		log.Warn().
+			Bool("enableMetrics", s.enableMetrics).
+			Msg("⚠️ enableMetrics是false，跳过统计记录（优化工作池）")
+	}
+	
+	// 发布条件评估事件
+	s.publishRuleEvent("evaluated", rule, point, map[string]interface{}{
+		"matched": matched,
+		"duration_ns": duration.Nanoseconds(),
+	})
+	
+	// 如果条件匹配，执行动作
+	if matched {
+		// 简化的动作执行，避免循环依赖
+		for _, action := range rule.Actions {
+			if err := s.executeAction(&action, point, rule); err != nil {
+				log.Error().
+					Err(err).
+					Str("rule_id", rule.ID).
+					Str("action_type", action.Type).
+					Msg("执行规则动作失败")
+			}
+		}
+	}
+	
+	return nil
+}
+
 // executeAction 执行动作
 func (s *RuleEngineService) executeAction(action *Action, point model.Point, rule *Rule) error {
+	actionStart := time.Now()
+	
 	handler, exists := s.actionHandlers[action.Type]
 	if exists {
 		// 使用新的动作处理器
 		result, err := handler.Execute(context.Background(), point, rule, action.Config)
+		actionDuration := time.Since(actionStart)
+		
+		// *** 修复：记录动作执行统计 ***
+		if s.enableMetrics && s.monitor != nil {
+			s.monitor.RecordActionExecution(action.Type, actionDuration, err == nil, err)
+		}
+		
 		if err != nil {
 			return err
 		}
@@ -686,24 +855,83 @@ func (s *RuleEngineService) executeAction(action *Action, point model.Point, rul
 	}
 
 	// 回退到旧的内置实现
+	var err error
 	switch action.Type {
 	case "aggregate":
-		return s.executeAggregateAction(action, point, rule)
+		err = s.executeAggregateAction(action, point, rule)
 	case "transform":
-		return s.executeTransformAction(action, point, rule)
+		err = s.executeTransformAction(action, point, rule)
 	case "filter":
-		return s.executeFilterAction(action, point, rule)
+		err = s.executeFilterAction(action, point, rule)
 	case "forward":
-		return s.executeForwardAction(action, point, rule)
+		err = s.executeForwardAction(action, point, rule)
 	case "alert":
-		return s.executeAlertAction(action, point, rule)
+		err = s.executeAlertAction(action, point, rule)
 	default:
-		return fmt.Errorf("不支持的动作类型: %s", action.Type)
+		err = fmt.Errorf("不支持的动作类型: %s", action.Type)
 	}
+	
+	// *** 修复：记录旧实现的动作执行统计 ***
+	actionDuration := time.Since(actionStart)
+	if s.enableMetrics && s.monitor != nil {
+		s.monitor.RecordActionExecution(action.Type, actionDuration, err == nil, err)
+	}
+	
+	return err
 }
 
-// executeAggregateAction 执行聚合动作
+// executeAggregateAction 执行聚合动作 - 高性能优化版本
 func (s *RuleEngineService) executeAggregateAction(action *Action, point model.Point, rule *Rule) error {
+	// 检查是否启用高性能聚合引擎
+	useOptimized := os.Getenv("IOT_GATEWAY_ENABLE_OPTIMIZED_AGGREGATE") == "true"
+	
+	if useOptimized {
+		return s.executeOptimizedAggregateAction(action, point, rule)
+	}
+	
+	// 回退到原始实现
+	return s.executeLegacyAggregateAction(action, point, rule)
+}
+
+// executeOptimizedAggregateAction 执行优化版聚合动作
+func (s *RuleEngineService) executeOptimizedAggregateAction(action *Action, point model.Point, rule *Rule) error {
+	// 懒加载优化聚合处理器
+	if s.optimizedAggregateHandler == nil {
+		if OptimizedAggregateHandlerFactory == nil {
+			log.Error().Msg("优化聚合处理器工厂未注册，回退到传统实现")
+			return s.executeLegacyAggregateAction(action, point, rule)
+		}
+		s.optimizedAggregateHandler = OptimizedAggregateHandlerFactory()
+		log.Info().Msg("高性能聚合引擎已启动")
+	}
+	
+	// 使用优化处理器处理
+	result, err := s.optimizedAggregateHandler.Execute(context.Background(), point, rule, action.Config)
+	if err != nil {
+		log.Error().Err(err).Msg("优化聚合处理失败，回退到传统实现")
+		return s.executeLegacyAggregateAction(action, point, rule)
+	}
+	
+	// 处理聚合结果转发
+	if result.Success && result.Output != nil {
+		if outputMap, ok := result.Output.(map[string]interface{}); ok {
+			if aggregated, ok := outputMap["aggregated"].(bool); ok && aggregated {
+				if aggregateResultData, ok := outputMap["aggregate_result"]; ok {
+					if aggResult, ok := aggregateResultData.(map[string]interface{}); ok {
+						if err := s.handleOptimizedAggregateResult(aggResult, point, rule, action); err != nil {
+							log.Error().Err(err).Msg("处理优化聚合结果失败")
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// executeLegacyAggregateAction 执行传统聚合动作（保持向后兼容）
+func (s *RuleEngineService) executeLegacyAggregateAction(action *Action, point model.Point, rule *Rule) error {
 	config := action.Config
 
 	// 获取窗口配置
@@ -740,26 +968,35 @@ func (s *RuleEngineService) executeAggregateAction(action *Action, point model.P
 	groupKey := s.generateGroupKey(point, groupBy)
 	stateKey := fmt.Sprintf("%s:%s", rule.ID, groupKey)
 
-	s.aggregateMutex.Lock()
-	defer s.aggregateMutex.Unlock()
-
-	// 获取或创建聚合状态
-	state, exists := s.aggregateStates[stateKey]
-	if !exists {
-		state = &AggregateState{
-			Buffer:     make([]model.Point, 0, windowSize),
-			GroupKey:   groupKey,
-			WindowSize: windowSize,
+	var state *AggregateState
+	var windowReady bool
+	
+	if s.useShardedAggregates {
+		// 使用分片聚合状态管理器（高性能）
+		state, windowReady = s.shardedAggregates.UpdateState(stateKey, point, windowSize)
+	} else {
+		// 使用原始聚合状态管理器（向后兼容）
+		s.aggregateMutex.Lock()
+		var exists bool
+		state, exists = s.aggregateStates[stateKey]
+		if !exists {
+			state = &AggregateState{
+				Buffer:     make([]model.Point, 0, windowSize),
+				GroupKey:   groupKey,
+				WindowSize: windowSize,
+			}
+			s.aggregateStates[stateKey] = state
 		}
-		s.aggregateStates[stateKey] = state
+		
+		// 添加数据点到缓冲区
+		state.Buffer = append(state.Buffer, point)
+		state.LastUpdate = time.Now()
+		windowReady = len(state.Buffer) >= windowSize
+		s.aggregateMutex.Unlock()
 	}
 
-	// 添加数据点到缓冲区
-	state.Buffer = append(state.Buffer, point)
-	state.LastUpdate = time.Now()
-
 	// 检查是否达到窗口大小
-	if len(state.Buffer) >= windowSize {
+	if windowReady {
 		// 计算聚合结果
 		result, err := s.calculateAggregateResult(state.Buffer, functions)
 		if err != nil {
@@ -767,22 +1004,25 @@ func (s *RuleEngineService) executeAggregateAction(action *Action, point model.P
 		}
 
 		// 创建结果数据点
+		// 创建安全的Tags副本 - 使用GetTagsCopy()获取SafeTags
+		safeTags := point.GetTagsCopy()
+		
 		resultPoint := model.Point{
 			DeviceID:  point.DeviceID,
 			Key:       s.formatOutputKey(outputKey, point),
 			Value:     result,
 			Type:      model.TypeFloat,
 			Timestamp: time.Now(),
-			Tags:      point.Tags,
 		}
-
+		// Go 1.24安全：复制安全标签到结果数据点
+		for k, v := range safeTags {
+			resultPoint.AddTag(k, v)
+		}
 		// 添加聚合标签
-		if resultPoint.Tags == nil {
-			resultPoint.Tags = make(map[string]string)
-		}
-		resultPoint.Tags["aggregated"] = "true"
-		resultPoint.Tags["window_size"] = fmt.Sprintf("%d", windowSize)
-		resultPoint.Tags["source_rule"] = rule.ID
+		// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+		resultPoint.AddTag("aggregated", "true")
+		resultPoint.AddTag("window_size", fmt.Sprintf("%d", windowSize))
+		resultPoint.AddTag("source_rule", rule.ID)
 
 		log.Info().
 			Str("rule_id", rule.ID).
@@ -799,10 +1039,103 @@ func (s *RuleEngineService) executeAggregateAction(action *Action, point model.P
 		}
 
 		// 清空缓冲区（滑动窗口）
-		state.Buffer = state.Buffer[:0]
+		if s.useShardedAggregates {
+			s.shardedAggregates.ClearStateBuffer(stateKey)
+		} else {
+			state.Buffer = state.Buffer[:0]
+		}
 	}
 
 	return nil
+}
+
+// handleOptimizedAggregateResult 处理优化聚合结果
+func (s *RuleEngineService) handleOptimizedAggregateResult(aggregateResult map[string]interface{}, originalPoint model.Point, rule *Rule, action *Action) error {
+	// 提取聚合结果信息
+	deviceID, _ := aggregateResult["device_id"].(string)
+	functions, _ := aggregateResult["functions"].(map[string]interface{})
+	timestamp, _ := aggregateResult["timestamp"].(time.Time)
+	
+	// 处理输出配置
+	config := action.Config
+	var outputKey string
+	var forward bool
+	
+	if output, ok := config["output"].(map[string]interface{}); ok {
+		if keyTemplate, ok := output["key_template"].(string); ok {
+			outputKey = s.formatOutputKey(keyTemplate, originalPoint)
+		}
+		if forwardFlag, ok := output["forward"].(bool); ok {
+			forward = forwardFlag
+		}
+	} else {
+		outputKey, _ = config["output_key"].(string)
+		forward, _ = config["forward"].(bool)
+	}
+	
+	if outputKey == "" {
+		outputKey = "aggregated_result"
+	}
+	
+	// 获取聚合函数的第一个结果作为值
+	var aggregatedValue interface{} = 0.0
+	if len(functions) > 0 {
+		for _, value := range functions {
+			aggregatedValue = value
+			break
+		}
+	}
+	
+	// 创建结果数据点，使用安全的Tags复制
+	resultPoint := model.Point{
+		DeviceID:  deviceID,
+		Key:       outputKey,
+		Value:     aggregatedValue,
+		Type:      model.TypeFloat,
+		Timestamp: timestamp,
+	}
+	// Go 1.24安全：复制原始数据点的安全标签
+	originalTags := originalPoint.GetTagsCopy()
+	for k, v := range originalTags {
+		resultPoint.AddTag(k, v)
+	}
+	// 添加聚合标签（Tags字段已通过AddTag方法初始化）
+	// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
+	resultPoint.AddTag("aggregated", "true")
+	resultPoint.AddTag("source_rule", rule.ID)
+	resultPoint.AddTag("optimized", "true")
+	
+	log.Info().
+		Str("rule_id", rule.ID).
+		Str("output_key", resultPoint.Key).
+		Interface("result", aggregatedValue).
+		Str("engine", "optimized").
+		Msg("优化聚合计算完成")
+	
+	// 如果配置了转发，发送结果到数据总线
+	if forward {
+		if err := s.publishPoint(resultPoint); err != nil {
+			log.Error().Err(err).Msg("发布优化聚合结果失败")
+			return err
+		}
+	}
+	
+	return nil
+}
+
+// OptimizedAggregateHandler 优化聚合处理器接口声明
+type OptimizedAggregateHandler interface {
+	Execute(ctx context.Context, point model.Point, rule *Rule, config map[string]interface{}) (*ActionResult, error)
+	Close()
+	GetMetrics() map[string]interface{}
+}
+
+// OptimizedAggregateHandlerFactory 优化聚合处理器工厂函数
+var OptimizedAggregateHandlerFactory func() OptimizedAggregateHandler
+
+// SetOptimizedAggregateHandlerFactory 设置优化聚合处理器工厂
+func SetOptimizedAggregateHandlerFactory(factory func() OptimizedAggregateHandler) {
+	OptimizedAggregateHandlerFactory = factory
 }
 
 // generateGroupKey 生成分组键
@@ -822,10 +1155,9 @@ func (s *RuleEngineService) generateGroupKey(point model.Point, groupBy []interf
 		case "type":
 			keyParts = append(keyParts, string(point.Type))
 		default:
-			if point.Tags != nil {
-				if tagValue, exists := point.Tags[fieldStr]; exists {
-					keyParts = append(keyParts, tagValue)
-				}
+			// Go 1.24安全：使用GetTag方法替代直接Tags[]访问
+			if tagValue, exists := point.GetTag(fieldStr); exists {
+				keyParts = append(keyParts, tagValue)
 			}
 		}
 	}
@@ -916,7 +1248,7 @@ func (s *RuleEngineService) calculateAggregateResult(buffer []model.Point, funct
 	}
 }
 
-// convertToFloat64 将值转换为float64
+// convertToFloat64 将值转换为float64，支持复杂数据类型
 func (s *RuleEngineService) convertToFloat64(value interface{}) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
@@ -936,7 +1268,87 @@ func (s *RuleEngineService) convertToFloat64(value interface{}) (float64, bool) 
 			fmt.Sscanf(v, "%f", &result)
 			return result, true
 		}
+	case map[string]interface{}:
+		// 处理复杂数据类型
+		return s.extractNumericFromComplexType(v)
 	}
+	return 0, false
+}
+
+// extractNumericFromComplexType 从复杂数据类型中提取数值用于聚合
+func (s *RuleEngineService) extractNumericFromComplexType(data map[string]interface{}) (float64, bool) {
+	// 1. 数组数据类型 - 取第一个数值元素
+	if elements, ok := data["elements"]; ok {
+		if elemArray, ok := elements.([]interface{}); ok && len(elemArray) > 0 {
+			if val, ok := s.convertToFloat64(elemArray[0]); ok {
+				return val, true
+			}
+		}
+	}
+	
+	// 2. 向量数据类型 - 取第一个数值或计算向量模长
+	if values, ok := data["values"]; ok {
+		if valArray, ok := values.([]interface{}); ok && len(valArray) > 0 {
+			if val, ok := s.convertToFloat64(valArray[0]); ok {
+				return val, true
+			}
+		}
+		if valArray, ok := values.([]float64); ok && len(valArray) > 0 {
+			return valArray[0], true
+		}
+	}
+	
+	// 3. 3D向量 - 计算向量模长
+	if x, okX := data["x"]; okX {
+		if y, okY := data["y"]; okY {
+			if z, okZ := data["z"]; okZ {
+				if xVal, ok := s.convertToFloat64(x); ok {
+					if yVal, ok := s.convertToFloat64(y); ok {
+						if zVal, ok := s.convertToFloat64(z); ok {
+							// 计算3D向量模长 sqrt(x² + y² + z²)
+							magnitude := math.Sqrt(xVal*xVal + yVal*yVal + zVal*zVal)
+							return magnitude, true
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// 4. GPS位置数据 - 优先使用速度或海拔
+	if speed, ok := data["speed"]; ok {
+		if val, ok := s.convertToFloat64(speed); ok {
+			return val, true
+		}
+	}
+	if altitude, ok := data["altitude"]; ok {
+		if val, ok := s.convertToFloat64(altitude); ok {
+			return val, true
+		}
+	}
+	
+	// 5. 颜色数据 - 使用亮度值
+	if lightness, ok := data["lightness"]; ok {
+		if val, ok := s.convertToFloat64(lightness); ok {
+			return val, true
+		}
+	}
+	if brightness, ok := data["brightness"]; ok {
+		if val, ok := s.convertToFloat64(brightness); ok {
+			return val, true
+		}
+	}
+	
+	// 6. 通用数值字段检查
+	numericFields := []string{"value", "magnitude", "norm", "length", "size", "count", "temperature", "humidity", "pressure"}
+	for _, field := range numericFields {
+		if fieldValue, exists := data[field]; exists {
+			if val, ok := s.convertToFloat64(fieldValue); ok {
+				return val, true
+			}
+		}
+	}
+	
 	return 0, false
 }
 
@@ -974,7 +1386,7 @@ func (s *RuleEngineService) executeTransformAction(action *Action, point model.P
 			"value":     SafeValueForJSON(transformedPoint.Value),
 			"type":      string(transformedPoint.Type),
 			"timestamp": transformedPoint.Timestamp,
-			"tags":      SafeValueForJSON(transformedPoint.Tags),
+			"tags":      SafeValueForJSON(transformedPoint.GetTagsCopy()),
 			"transform_info": map[string]interface{}{
 				"rule_id":        rule.ID,
 				"rule_name":      rule.Name,
@@ -1038,7 +1450,7 @@ func (s *RuleEngineService) executeForwardAction(action *Action, point model.Poi
 		"value":     point.Value,
 		"type":      string(point.Type),
 		"timestamp": point.Timestamp,
-		"tags":      point.Tags,
+		"tags":      SafeValueForJSON(point.GetTagsCopy()), // 使用安全的JSON转换
 		"rule_info": map[string]interface{}{
 			"rule_id":   rule.ID,
 			"rule_name": rule.Name,
@@ -1165,22 +1577,29 @@ func (s *RuleEngineService) aggregateStatesCleaner() {
 
 // cleanExpiredAggregateStates 清理过期的聚合状态
 func (s *RuleEngineService) cleanExpiredAggregateStates() {
-	s.aggregateMutex.Lock()
-	defer s.aggregateMutex.Unlock()
-
 	expireTime := time.Now().Add(-10 * time.Minute)
-	cleanedCount := 0
-	for key, state := range s.aggregateStates {
-		if state.LastUpdate.Before(expireTime) {
-			delete(s.aggregateStates, key)
-			cleanedCount++
+	var cleanedCount int
+	
+	if s.useShardedAggregates {
+		// 使用分片清理，支持并行
+		cleanedCount = s.shardedAggregates.CleanExpiredStates(10 * time.Minute)
+	} else {
+		// 使用原始清理方式
+		s.aggregateMutex.Lock()
+		defer s.aggregateMutex.Unlock()
+		
+		cleanedCount = 0
+		for key, state := range s.aggregateStates {
+			if state.LastUpdate.Before(expireTime) {
+				delete(s.aggregateStates, key)
+				cleanedCount++
+			}
 		}
 	}
 	
 	if cleanedCount > 0 {
 		log.Debug().
 			Int("cleaned_count", cleanedCount).
-			Int("remaining_count", len(s.aggregateStates)).
 			Msg("清理过期聚合状态")
 	}
 }
@@ -1278,6 +1697,9 @@ func (h *BuiltinAlertHandler) Execute(ctx context.Context, point model.Point, ru
 		message = "触发告警"
 	}
 	
+	// 创建安全的Tags副本 - 使用GetTagsCopy()获取SafeTags
+	alertTags := point.GetTagsCopy()
+
 	// 创建告警消息
 	alert := &Alert{
 		ID:        generateAlertID(),
@@ -1289,7 +1711,7 @@ func (h *BuiltinAlertHandler) Execute(ctx context.Context, point model.Point, ru
 		Key:       point.Key,
 		Value:     point.Value,
 		Timestamp: time.Now(),
-		Tags:      point.Tags,
+		Tags:      alertTags,
 	}
 	
 	// 发布到NATS
@@ -1326,7 +1748,10 @@ func (s *RuleEngineService) publishRuleEvent(eventType string, rule *Rule, point
 		return
 	}
 
-	// 构建事件数据
+	// 构建事件数据 - Go 1.24增强版：在调用点增加额外保护
+	// 使用专门的安全包装器处理潜在的并发map访问
+	safePointTags := safeExtractMapForEventPublishing(point.GetTagsCopy())
+	
 	event := map[string]interface{}{
 		"event_type": eventType,
 		"timestamp":  time.Now(),
@@ -1342,7 +1767,7 @@ func (s *RuleEngineService) publishRuleEvent(eventType string, rule *Rule, point
 			"value":     SafeValueForJSON(point.Value),
 			"type":      string(point.Type),
 			"timestamp": point.Timestamp,
-			"tags":      SafeValueForJSON(point.Tags),
+			"tags":      safePointTags, // 使用预处理的安全tags
 		},
 	}
 

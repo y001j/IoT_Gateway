@@ -13,9 +13,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// 获取ISP端口
-	ispPort := "50052" // 默认ISP端口
+	ispPort := "62000" // 临时硬编码使用62000端口进行调试
 	if port := os.Getenv("ISP_PORT"); port != "" {
 		ispPort = port
+		log.Printf("从环境变量读取到 ISP_PORT: %s", port)
+	} else {
+		log.Printf("未设置ISP_PORT环境变量，使用默认端口: %s", ispPort)
 	}
 
 	address := ":" + ispPort

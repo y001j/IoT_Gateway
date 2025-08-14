@@ -1,0 +1,48 @@
+{
+  "id": "lookup_mapping_example",
+  "name": "查找表映射示例",
+  "description": "状态码映射为文本描述的标准配置",
+  "enabled": true,
+  "priority": 100,
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "complex_sensor_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "status_code"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "transform",
+      "config": {
+        "type": "lookup",
+        "lookup_table": {
+          "0": "正常",
+          "1": "警告", 
+          "2": "错误",
+          "3": "离线"
+        },
+        "default_value": "未知状态",
+        "output_key": "status_text"
+      }
+    },
+    {
+      "type": "alert",
+      "config": {
+        "level": "info",
+        "message": "📊 状态码转换: {{device_id}} 状态={{status_text}}",
+        "channels": ["console"]
+      }
+    }
+  ]
+}

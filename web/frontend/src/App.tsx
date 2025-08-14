@@ -21,11 +21,13 @@ import './App.css';
 const PageLoader = () => (
   <div style={{ 
     display: 'flex', 
+    flexDirection: 'column',
     justifyContent: 'center', 
     alignItems: 'center', 
     height: '200px' 
   }}>
-    <Spin size="large" tip="页面加载中..." />
+    <Spin size="large" />
+    <div style={{ marginTop: '12px', color: '#666' }}>页面加载中...</div>
   </div>
 );
 
@@ -39,8 +41,11 @@ const AppLoader = () => (
     height: '100vh',
     background: '#f0f2f5'
   }}>
-    <Spin size="large" tip="正在初始化应用..." />
-    <div style={{ marginTop: '16px', color: '#666' }}>
+    <Spin size="large" />
+    <div style={{ marginTop: '16px', color: '#666', fontSize: '16px' }}>
+      正在初始化应用...
+    </div>
+    <div style={{ marginTop: '8px', color: '#999', fontSize: '14px' }}>
       正在验证登录状态...
     </div>
   </div>
@@ -97,6 +102,44 @@ function App() {
       locale={zhCN}
       theme={{
         algorithm: theme.defaultAlgorithm,
+        token: {
+          colorPrimary: '#16a34a', // 绿色主色调
+          colorSuccess: '#16a34a',
+          colorInfo: '#16a34a',
+          colorLink: '#16a34a',
+          borderRadius: 6,
+        },
+        components: {
+          Button: {
+            colorPrimary: '#16a34a',
+            colorPrimaryHover: '#15803d',
+            colorPrimaryActive: '#166534',
+          },
+          Menu: {
+            colorPrimary: '#16a34a',
+            colorPrimaryBorder: '#16a34a',
+            colorPrimaryHover: '#15803d',
+          },
+          Tabs: {
+            colorPrimary: '#16a34a',
+            colorPrimaryHover: '#15803d',
+            colorPrimaryActive: '#166534',
+          },
+          Select: {
+            colorPrimary: '#16a34a',
+            colorPrimaryHover: '#15803d',
+          },
+          Input: {
+            colorPrimary: '#16a34a',
+            colorPrimaryHover: '#15803d',
+          },
+          Switch: {
+            colorPrimary: '#16a34a',
+          },
+          Progress: {
+            colorPrimary: '#16a34a',
+          },
+        }
       }}
     >
       <AntdApp>

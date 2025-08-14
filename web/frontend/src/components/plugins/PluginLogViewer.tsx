@@ -9,7 +9,9 @@ import {
   Row,
   Col,
   Button,
-  message
+  message,
+  Space,
+  Statistic
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
@@ -156,10 +158,28 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
   }, [pagination.current, pagination.pageSize, filters]);
 
   return (
-    <Card title={`插件日志 - ${pluginName}`}>
+    <Card 
+      title={
+        <Space>
+          <span>插件日志 - {pluginName}</span>
+          <Tag color="blue">{logs.length} 条日志</Tag>
+        </Space>
+      }
+      extra={
+        <Button
+          type="primary"
+          size="small"
+          icon={<ReloadOutlined />}
+          onClick={fetchLogs}
+          loading={loading}
+        >
+          刷新
+        </Button>
+      }
+    >
       {/* 筛选栏 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={4}>
+        <Col xs={24} sm={6} md={4}>
           <Select
             placeholder="日志级别"
             allowClear
@@ -167,13 +187,21 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
             value={filters.level}
             onChange={(value) => handleFilterChange('level', value)}
           >
-            <Option value="error">ERROR</Option>
-            <Option value="warn">WARN</Option>
-            <Option value="info">INFO</Option>
-            <Option value="debug">DEBUG</Option>
+            <Option value="error">
+              <Tag color="red">ERROR</Tag>
+            </Option>
+            <Option value="warn">
+              <Tag color="orange">WARN</Tag>
+            </Option>
+            <Option value="info">
+              <Tag color="blue">INFO</Tag>
+            </Option>
+            <Option value="debug">
+              <Tag color="default">DEBUG</Tag>
+            </Option>
           </Select>
         </Col>
-        <Col span={4}>
+        <Col xs={24} sm={6} md={4}>
           <Select
             placeholder="日志来源"
             allowClear
@@ -181,30 +209,86 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
             value={filters.source}
             onChange={(value) => handleFilterChange('source', value)}
           >
-            <Option value="main">主程序</Option>
-            <Option value="plugin">插件</Option>
+            <Option value={pluginName}>{pluginName}</Option>
             <Option value="system">系统</Option>
+            <Option value="gateway">网关</Option>
           </Select>
         </Col>
-        <Col span={8}>
+        <Col xs={24} sm={12} md={8}>
           <RangePicker
             style={{ width: '100%' }}
             value={filters.dateRange}
             onChange={(dates) => handleFilterChange('dateRange', dates)}
             showTime
             format="YYYY-MM-DD HH:mm:ss"
+            placeholder={['开始时间', '结束时间']}
           />
         </Col>
-        <Col span={4}>
+        <Col xs={24} sm={12} md={4}>
           <Button
             icon={<ReloadOutlined />}
             onClick={fetchLogs}
+            loading={loading}
             style={{ width: '100%' }}
           >
             刷新
           </Button>
         </Col>
+        <Col xs={24} sm={12} md={4}>
+          <Button
+            type="default"
+            style={{ width: '100%' }}
+            onClick={() => {
+              setFilters({ level: '', source: '', dateRange: null });
+              setPagination(prev => ({ ...prev, current: 1 }));
+            }}
+          >
+            清空筛选
+          </Button>
+        </Col>
       </Row>
+
+      {/* 日志统计 */}
+      {logs.length > 0 && (
+        <Row gutter={16} style={{ marginBottom: 16 }}>
+          <Col span={6}>
+            <Card size="small">
+              <Statistic 
+                title="总日志数" 
+                value={pagination.total} 
+                valueStyle={{ fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small">
+              <Statistic 
+                title="错误日志" 
+                value={logs.filter(log => log.level === 'error').length}
+                valueStyle={{ color: '#f5222d', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small">
+              <Statistic 
+                title="警告日志" 
+                value={logs.filter(log => log.level === 'warn' || log.level === 'warning').length}
+                valueStyle={{ color: '#faad14', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small">
+              <Statistic 
+                title="信息日志" 
+                value={logs.filter(log => log.level === 'info').length}
+                valueStyle={{ color: '#1890ff', fontSize: '16px' }}
+              />
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* 日志表格 */}
       <Table
@@ -220,11 +304,45 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
           showSizeChanger: true,
           showQuickJumper: true,
           showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`,
-          pageSizeOptions: ['20', '50', '100']
+          pageSizeOptions: ['10', '20', '50', '100']
         }}
         onChange={handleTableChange}
         scroll={{ y: 400 }}
+        rowClassName={(record) => {
+          switch (record.level.toLowerCase()) {
+            case 'error':
+              return 'log-row-error';
+            case 'warn':
+            case 'warning':
+              return 'log-row-warning';
+            case 'debug':
+              return 'log-row-debug';
+            default:
+              return '';
+          }
+        }}
       />
+
+      {/* 自定义样式 */}
+      <style jsx global>{`
+        .log-row-error {
+          background-color: #fff2f0;
+          border-left: 3px solid #f5222d;
+        }
+        .log-row-warning {
+          background-color: #fffbe6;
+          border-left: 3px solid #faad14;
+        }
+        .log-row-debug {
+          background-color: #f6f6f6;
+          border-left: 3px solid #d9d9d9;
+        }
+        .log-row-error:hover,
+        .log-row-warning:hover,
+        .log-row-debug:hover {
+          background-color: #e6f7ff;
+        }
+      `}</style>
     </Card>
   );
 };

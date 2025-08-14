@@ -1,0 +1,76 @@
+# 新格式的 Sidecar 插件配置示例
+
+# 插件元数据（可选，也可以在主配置文件中直接定义）
+metadata:
+  name: "modbus-sensor"
+  version: "1.0.0"
+  type: "adapter"
+  mode: "isp-sidecar"
+  description: "Modbus适配器（ISP Sidecar模式）"
+  author: "IoT Gateway Team"
+  license: "MIT"
+  tags:
+    category: "industrial"
+    protocol: "modbus"
+
+# Sidecar 插件配置
+config:
+  name: "modbus-sensor"
+  type: "sidecar"
+  enabled: true
+  description: "Production Modbus sensor via sidecar"
+  tags:
+    location: "factory-floor"
+    zone: "production"
+  
+  # ISP 通信配置
+  isp_port: 50052
+  isp_timeout: 30s
+  entry: "modbus-sidecar/modbus-sidecar.exe"
+  
+  # 插件管理配置
+  auto_restart: true
+  max_retries: 3
+  
+  # 传递给 sidecar 插件的配置
+  plugin_config:
+    # Modbus 连接配置
+    host: "192.168.1.100"
+    port: 502
+    protocol: "tcp"
+    slave_id: 1
+    timeout: 5s
+    interval: 2s
+    
+    # 寄存器配置
+    registers:
+      - address: 0
+        type: "holding_register"
+        data_type: "float32"
+        device_id: "temperature-sensor-001"
+        key: "temperature"
+        scale: 0.1
+        offset: 0.0
+        tags:
+          unit: "°C"
+          sensor_type: "PT100"
+      
+      - address: 2
+        type: "holding_register"
+        data_type: "float32"
+        device_id: "humidity-sensor-001"
+        key: "humidity"
+        scale: 0.1
+        offset: 0.0
+        tags:
+          unit: "%RH"
+          sensor_type: "SHT30"
+      
+      - address: 4
+        type: "coil"
+        data_type: "bool"
+        device_id: "pump-001"
+        key: "running_status"
+        tags:
+          equipment: "water_pump"
+          critical: "true"

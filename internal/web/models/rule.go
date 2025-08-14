@@ -6,16 +6,19 @@ import (
 
 // Rule 规则定义
 type Rule struct {
-	BaseModel
+	ID          string            `json:"id"`           // String ID from rule manager
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Enabled     bool              `json:"enabled"`
 	Priority    int               `json:"priority"`
 	Version     int               `json:"version"`
+	DataType    interface{}       `json:"data_type,omitempty"` // 数据类型：字符串或详细定义
 	Conditions  *RuleCondition    `json:"conditions"`
 	Actions     []RuleAction      `json:"actions"`
 	Tags        map[string]string `json:"tags,omitempty"`
 	Stats       *RuleStats        `json:"stats,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // RuleCondition 条件定义

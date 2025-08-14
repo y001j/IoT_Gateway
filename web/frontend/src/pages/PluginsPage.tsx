@@ -115,10 +115,26 @@ const PluginsPage: React.FC = () => {
   // 获取插件统计
   const fetchPluginStats = async (pluginName: string) => {
     try {
+      console.log('正在获取插件统计:', pluginName);
       const stats = await pluginService.getPluginStats(pluginName);
+      console.log('插件统计数据:', stats);
       setPluginStats(stats);
-    } catch (error) {
+    } catch (error: any) {
       console.error('获取插件统计失败:', error);
+      message.error('获取插件统计失败：' + (error.message || '未知错误'));
+      // 设置默认统计数据以避免显示错误
+      setPluginStats({
+        plugin_id: 0,
+        data_points_total: 0,
+        data_points_hour: 0,
+        errors_total: 0,
+        errors_hour: 0,
+        uptime_seconds: 0,
+        average_latency: 0,
+        memory_usage: 0,
+        cpu_usage: 0,
+        last_update: new Date().toISOString()
+      });
     }
   };
 
@@ -216,7 +232,7 @@ const PluginsPage: React.FC = () => {
       case 'adapter':
         return <Tag color="blue">适配器</Tag>;
       case 'sink':
-        return <Tag color="purple">数据汇</Tag>;
+        return <Tag color="purple">连接器</Tag>;
       default:
         return <Tag>{type}</Tag>;
     }
@@ -247,7 +263,7 @@ const PluginsPage: React.FC = () => {
       render: (type: PluginType) => getTypeTag(type),
       filters: [
         { text: '适配器', value: 'adapter' },
-        { text: '数据汇', value: 'sink' }
+        { text: '连接器', value: 'sink' }
       ]
     },
     {
@@ -262,7 +278,7 @@ const PluginsPage: React.FC = () => {
       render: (status: PluginStatus, record: Plugin) => (
         <Space>
           {getStatusTag(status)}
-          {record.error_count > 0 && (
+          {record.error_count && record.error_count > 0 && (
             <Tooltip title={`错误次数: ${record.error_count}`}>
               <Badge count={record.error_count} size="small">
                 <WarningOutlined style={{ color: '#ff4d4f' }} />
@@ -405,7 +421,7 @@ const PluginsPage: React.FC = () => {
                 onChange={setFilterType}
               >
                 <Option value="adapter">适配器</Option>
-                <Option value="sink">数据汇</Option>
+                <Option value="sink">连接器</Option>
               </Select>
               <Select
                 placeholder="状态"
@@ -486,35 +502,117 @@ const PluginsPage: React.FC = () => {
                   children: pluginStats ? (
                     <div style={{ marginTop: 24 }}>
                       <Title level={4}>运行统计</Title>
-                      <Row gutter={16}>
-                        <Col span={8}>
-                          <Statistic title="总数据点" value={pluginStats.data_points_total} />
+                      <Row gutter={[16, 16]}>
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="总数据点" 
+                              value={pluginStats.data_points_total} 
+                              valueStyle={{ color: '#1890ff' }}
+                              formatter={(value) => Number(value).toLocaleString()}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="小时数据点" value={pluginStats.data_points_hour} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="小时数据点" 
+                              value={pluginStats.data_points_hour}
+                              valueStyle={{ color: '#52c41a' }}
+                              formatter={(value) => Number(value).toLocaleString()}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="运行时间(秒)" value={pluginStats.uptime_seconds} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="运行时间" 
+                              value={Math.floor(pluginStats.uptime_seconds / 3600)} 
+                              suffix="小时"
+                              valueStyle={{ color: '#722ed1' }}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="总错误" value={pluginStats.errors_total} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="总错误" 
+                              value={pluginStats.errors_total} 
+                              valueStyle={{ 
+                                color: pluginStats.errors_total > 0 ? '#f5222d' : '#52c41a' 
+                              }}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="小时错误" value={pluginStats.errors_hour} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="小时错误" 
+                              value={pluginStats.errors_hour}
+                              valueStyle={{ 
+                                color: pluginStats.errors_hour > 0 ? '#f5222d' : '#52c41a' 
+                              }}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="平均延迟(ms)" value={pluginStats.average_latency} precision={2} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="平均延迟" 
+                              value={pluginStats.average_latency} 
+                              precision={2} 
+                              suffix="ms"
+                              valueStyle={{ 
+                                color: pluginStats.average_latency > 100 ? '#f5222d' : 
+                                       pluginStats.average_latency > 50 ? '#faad14' : '#52c41a' 
+                              }}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="内存使用(MB)" value={(pluginStats.memory_usage / 1024 / 1024).toFixed(2)} />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="内存使用" 
+                              value={(pluginStats.memory_usage / 1024 / 1024)} 
+                              precision={1}
+                              suffix="MB"
+                              valueStyle={{ color: '#13c2c2' }}
+                            />
+                          </Card>
                         </Col>
-                        <Col span={8}>
-                          <Statistic title="CPU使用率" value={pluginStats.cpu_usage} precision={2} suffix="%" />
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="CPU使用率" 
+                              value={pluginStats.cpu_usage} 
+                              precision={1} 
+                              suffix="%"
+                              valueStyle={{ 
+                                color: pluginStats.cpu_usage > 80 ? '#f5222d' : 
+                                       pluginStats.cpu_usage > 50 ? '#faad14' : '#52c41a' 
+                              }}
+                            />
+                          </Card>
+                        </Col>
+                        <Col xs={24} sm={12} lg={8}>
+                          <Card size="small">
+                            <Statistic 
+                              title="最后更新" 
+                              value={new Date(pluginStats.last_update).toLocaleString()}
+                              valueStyle={{ color: '#666', fontSize: '14px' }}
+                            />
+                          </Card>
                         </Col>
                       </Row>
                     </div>
                   ) : (
-                    <div>暂无统计数据</div>
+                    <div style={{ 
+                      padding: '24px', 
+                      textAlign: 'center',
+                      color: '#999'
+                    }}>
+                      <Text type="secondary">暂无统计数据</Text>
+                    </div>
                   )
                 },
                 {

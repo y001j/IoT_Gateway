@@ -13,7 +13,6 @@ import {
   Badge,
   Tag,
   Tooltip,
-  Divider,
 } from 'antd';
 import {
   ReloadOutlined,

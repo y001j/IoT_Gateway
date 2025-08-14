@@ -28,13 +28,13 @@ import {
   PlusOutlined,
   DeleteOutlined,
   EditOutlined,
-  TestOutlined
+  ExperimentOutlined as TestOutlined
 } from '@ant-design/icons';
 import { settingsService } from '../../services/settingsService';
 import type { AlertConfig, AlertChannel } from '../../types/settings';
 
 const { Option } = Select;
-const { Title, Text } = Typography;
+// const { Title } = Typography;
 const { TextArea } = Input;
 
 const AlertSettings: React.FC = () => {

@@ -10,12 +10,14 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { isAuthenticated, isInitialized, accessToken, user } = useAuthStore();
 
   useEffect(() => {
-    console.log('ProtectedRoute渲染:');
-    console.log('- isInitialized:', isInitialized);
-    console.log('- isAuthenticated:', isAuthenticated);
-    console.log('- accessToken:', accessToken ? `${accessToken.substring(0, 20)}...` : 'null');
-    console.log('- user:', user);
-    console.log('- children:', !!children);
+    console.log('ProtectedRoute状态更新:', {
+      isInitialized,
+      isAuthenticated,
+      hasToken: !!accessToken,
+      hasUser: !!user,
+      hasChildren: !!children,
+      timestamp: new Date().toISOString()
+    });
   }, [isInitialized, isAuthenticated, accessToken, user, children]);
 
   // 如果还在初始化，不做任何跳转（App.tsx会处理初始化加载状态）

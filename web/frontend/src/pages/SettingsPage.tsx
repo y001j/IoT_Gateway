@@ -51,13 +51,13 @@ type SettingsTab =
 
 const SettingsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('gateway');
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
 
   const menuItems = [
     {
       key: 'core',
       label: '核心配置',
-      type: 'group',
+      type: 'group' as const,
       children: [
         {
           key: 'gateway',
@@ -84,7 +84,7 @@ const SettingsPage: React.FC = () => {
     {
       key: 'monitoring',
       label: '监控告警',
-      type: 'group',
+      type: 'group' as const,
       children: [
         {
           key: 'monitoring',
@@ -106,7 +106,7 @@ const SettingsPage: React.FC = () => {
     {
       key: 'access',
       label: '用户权限',
-      type: 'group',
+      type: 'group' as const,
       children: [
         {
           key: 'users',
@@ -187,7 +187,7 @@ const SettingsPage: React.FC = () => {
           <Card 
             title={getPageTitle()}
             style={{ minHeight: '60vh' }}
-            bodyStyle={{ padding: '24px' }}
+            styles={{ body: { padding: '24px' } }}
           >
             <Spin spinning={loading}>
               {renderContent()}

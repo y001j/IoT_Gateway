@@ -4,7 +4,7 @@
   "description": "监控湿度变化",
   "enabled": true,
   "priority": 50,
-  "version": 1,
+  "version": 194,
   "conditions": {
     "type": "simple",
     "field": "key",
@@ -30,6 +30,6 @@
       }
     }
   ],
-  "created_at": "2025-07-17T05:07:31.693127082+08:00",
-  "updated_at": "2025-07-17T05:07:31.693127146+08:00"
+  "created_at": "2025-08-10T01:49:19.1633283+08:00",
+  "updated_at": "2025-08-15T01:54:19.906595+08:00"
 }

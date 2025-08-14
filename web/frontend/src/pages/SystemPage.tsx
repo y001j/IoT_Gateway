@@ -13,11 +13,7 @@ import {
   Space,
   Tabs,
   Switch,
-  Select,
   Divider,
-  Table,
-  DatePicker,
-  Popconfirm,
   App
 } from 'antd';
 import {
@@ -26,17 +22,17 @@ import {
   SaveOutlined,
   PlusOutlined,
   DeleteOutlined,
-  EditOutlined,
-  KeyOutlined,
   SecurityScanOutlined,
   DatabaseOutlined,
   CloudServerOutlined
 } from '@ant-design/icons';
 import { systemService } from '../services/systemService';
-import { useAuthStore } from '../store/authStore';
+import { lightweightMetricsService, type LightweightMetrics } from '../services/lightweightMetricsService';
+// import { useAuthStore } from '../store/authStore';
 import type {
   SystemStatus,
   SystemMetrics,
+  HealthCheck,
 } from '../types/system';
 
 const { Title } = Typography;
@@ -46,6 +42,8 @@ const SystemPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+  const [systemHealth, setSystemHealth] = useState<HealthCheck | null>(null);
+  const [lightweightMetrics, setLightweightMetrics] = useState<LightweightMetrics | null>(null);
   const [systemConfig, setSystemConfig] = useState<any>(null);
   // 移除未使用的状态变量
   const [configForm] = Form.useForm();
@@ -163,11 +161,25 @@ const SystemPage: React.FC = () => {
   const fetchHealthCheck = async () => {
     try {
       const health = await systemService.getHealth();
-      // 健康检查数据获取成功，但暂时不使用
+      setSystemHealth(health);
       console.log('健康检查数据:', health);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       message.error('获取健康检查失败：' + errorMessage);
+    }
+  };
+
+  // 获取轻量级指标
+  const fetchLightweightMetrics = async () => {
+    try {
+      const metrics = await systemService.getLightweightMetrics();
+      setLightweightMetrics(metrics);
+      console.log('轻量级指标数据:', metrics);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      console.warn('获取轻量级指标失败，使用默认数据：', errorMessage);
+      // 设置默认的轻量级指标数据
+      setLightweightMetrics(null);
     }
   };
 
@@ -198,6 +210,7 @@ const SystemPage: React.FC = () => {
         fetchSystemStatus(),
         fetchSystemMetrics(),
         fetchHealthCheck(),
+        fetchLightweightMetrics(),
         fetchSystemConfig()
       ]);
     } finally {
@@ -291,30 +304,111 @@ const SystemPage: React.FC = () => {
       children: (
         <div>
           <Row gutter={[16, 16]}>
-            <Col span={12}>
+            <Col span={8}>
               <Card title="基本信息" size="small">
                 {systemStatus && (
                   <div>
                     <p><strong>状态:</strong> <Tag color={getStatusColor(systemStatus.status)}>{systemStatus.status}</Tag></p>
                     <p><strong>版本:</strong> {systemStatus.version}</p>
-                    <p><strong>运行时间:</strong> {formatUptime(systemStatus.uptime)}</p>
-                    <p><strong>Go版本:</strong> {systemStatus.go_version}</p>
+                    <p><strong>运行时间:</strong> {systemStatus.uptime}</p>
+                    <p><strong>启动时间:</strong> {new Date(systemStatus.start_time).toLocaleString()}</p>
                   </div>
                 )}
               </Card>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Card title="资源使用" size="small">
-                {systemMetrics && (
+                {lightweightMetrics ? (
                   <div>
-                    <p><strong>CPU:</strong> {systemMetrics.cpu_percent ? systemMetrics.cpu_percent.toFixed(1) : '0.0'}%</p>
-                    <p><strong>内存:</strong> {formatFileSize(systemMetrics.memory_used || 0)} / {formatFileSize(systemMetrics.memory_total || 0)}</p>
-                    <p><strong>磁盘:</strong> {formatFileSize(systemMetrics.disk_used || 0)} / {formatFileSize(systemMetrics.disk_total || 0)}</p>
+                    <p><strong>CPU使用率:</strong> {lightweightMetrics.system.cpu_usage_percent.toFixed(1)}%</p>
+                    <p><strong>内存使用:</strong> {lightweightMetricsService.formatBytes(lightweightMetrics.system.memory_usage_bytes)}</p>
+                    <p><strong>磁盘使用率:</strong> {lightweightMetrics.system.disk_usage_percent.toFixed(1)}%</p>
+                    <p><strong>数据吞吐:</strong> {lightweightMetrics.data.data_points_per_second.toFixed(2)} 点/秒</p>
+                  </div>
+                ) : systemMetrics ? (
+                  <div>
+                    <p><strong>CPU使用率:</strong> {systemMetrics.cpu_usage ? systemMetrics.cpu_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>内存使用率:</strong> {systemMetrics.memory_usage ? systemMetrics.memory_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>磁盘使用率:</strong> {systemMetrics.disk_usage ? systemMetrics.disk_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>数据吞吐:</strong> {systemMetrics.data_points_per_second || 0} 点/秒</p>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ color: '#999' }}>正在加载资源使用数据...</p>
+                  </div>
+                )}
+              </Card>
+            </Col>
+            <Col span={8}>
+              <Card title="连接状态" size="small">
+                {systemStatus && (
+                  <div>
+                    <p><strong>活跃连接:</strong> {systemStatus.active_connections || 0}</p>
+                    <p><strong>总连接数:</strong> {systemStatus.total_connections || 0}</p>
+                    <p><strong>网络接收:</strong> {formatFileSize(systemStatus.network_in || 0)}</p>
+                    <p><strong>网络发送:</strong> {formatFileSize(systemStatus.network_out || 0)}</p>
                   </div>
                 )}
               </Card>
             </Col>
           </Row>
+
+          {/* 系统健康检查 */}
+          {systemHealth && (
+            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+              <Col span={24}>
+                <Card title="系统健康检查" size="small">
+                  <div style={{ marginBottom: 16 }}>
+                    <p><strong>服务:</strong> {systemHealth.service}</p>
+                    <p><strong>整体状态:</strong> <Tag color={getStatusColor(systemHealth.status)}>{systemHealth.status}</Tag></p>
+                    <p><strong>检查时间:</strong> {new Date(systemHealth.timestamp).toLocaleString()}</p>
+                    <p><strong>版本:</strong> {systemHealth.version}</p>
+                  </div>
+                  
+                  <div>
+                    <strong>健康检查项:</strong>
+                    <div style={{ marginTop: 8 }}>
+                      {systemHealth.checks?.map((check: any, index: number) => (
+                        <Tag 
+                          key={index} 
+                          color={getStatusColor(check.status)}
+                          style={{ marginBottom: 4 }}
+                        >
+                          {check.name}: {check.status} ({check.duration})
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          )}
+
+          {/* 轻量级指标显示 */}
+          {lightweightMetrics && (
+            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+              <Col span={12}>
+                <Card title="性能指标" size="small">
+                  <div>
+                    <p><strong>数据处理:</strong> {lightweightMetrics.data.data_points_per_second || 0} 点/秒</p>
+                    <p><strong>总数据点:</strong> {lightweightMetrics.data.total_data_points || 0}</p>
+                    <p><strong>平均延迟:</strong> {lightweightMetrics.data.average_latency_ms || 0} ms</p>
+                    <p><strong>队列长度:</strong> {lightweightMetrics.data.data_queue_length || 0}</p>
+                  </div>
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card title="规则引擎" size="small">
+                  <div>
+                    <p><strong>状态:</strong> <Tag color={getStatusColor(lightweightMetrics.rules.rule_engine_status)}>{lightweightMetrics.rules.rule_engine_status}</Tag></p>
+                    <p><strong>规则总数:</strong> {lightweightMetrics.rules.total_rules}</p>
+                    <p><strong>启用规则:</strong> {lightweightMetrics.rules.enabled_rules}</p>
+                    <p><strong>动作执行:</strong> {lightweightMetrics.rules.actions_executed}</p>
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          )}
         </div>
       )
     },

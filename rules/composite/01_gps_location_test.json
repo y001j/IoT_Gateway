@@ -1,0 +1,40 @@
+{
+  "id": "gps_location_test",
+  "name": "GPS位置数据测试",
+  "description": "测试GPS复合数据的条件匹配和字段访问",
+  "enabled": true,
+  "priority": 10,
+  "data_type": "location",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "device_id",
+        "operator": "eq",
+        "value": "gps_device_01"
+      },
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "location"
+      },
+      {
+        "type": "simple",
+        "field": "location.latitude",
+        "operator": "gt",
+        "value": 39.90
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "level": "info",
+        "message": "GPS位置数据接收: 纬度={{location.latitude}}, 经度={{location.longitude}}, 海拔={{location.altitude}}m"
+      }
+    }
+  ]
+}

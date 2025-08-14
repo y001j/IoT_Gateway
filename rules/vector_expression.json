@@ -1,0 +1,54 @@
+{
+  "id": "vector_expression",
+  "name": "向量表达式函数测试",
+  "description": "使用表达式引擎中的向量函数进行计算",
+  "enabled": false,
+  "priority": 40,
+  "version": 3,
+  "data_type": "vector3d",
+  "conditions": {
+    "type": "and",
+    "and": [
+      {
+        "type": "simple",
+        "field": "key",
+        "operator": "eq",
+        "value": "acceleration"
+      },
+      {
+        "type": "simple",
+        "field": "type",
+        "operator": "eq",
+        "value": "vector3d"
+      },
+      {
+        "type": "expression",
+        "expression": "value.magnitude > 5.0"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "message": "高加速度检测: X={{acceleration.x}}, Y={{acceleration.y}}, Z={{acceleration.z}}, 模长={{acceleration.magnitude}}",
+        "level": "warning",
+        "channels": ["console"]
+      }
+    },
+    {
+      "type": "transform",
+      "config": {
+        "add_tags": {
+          "extracted_from": "vector3d",
+          "field_name": "magnitude"
+        },
+        "type": "expression",
+        "expression": "value.magnitude",
+        "output_key": "extracted_magnitude"
+      }
+    }
+  ],
+  "created_at": "2025-08-12T21:46:32.6056361+08:00",
+  "updated_at": "2025-08-12T23:56:35.3651743+08:00"
+}

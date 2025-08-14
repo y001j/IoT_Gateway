@@ -17,8 +17,7 @@ import {
   Modal,
   Popconfirm,
   Tag,
-  Tooltip,
-  Divider
+  Tooltip
 } from 'antd';
 import {
   SaveOutlined,
@@ -36,7 +35,7 @@ import { settingsService } from '../../services/settingsService';
 import type { ApiPermissionRule, ApiEndpoint } from '../../types/settings';
 
 const { Option } = Select;
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const ApiPermissions: React.FC = () => {
   const [ruleForm] = Form.useForm();
@@ -44,7 +43,7 @@ const ApiPermissions: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [globalConfig, setGlobalConfig] = useState<any>(null);
   const [rules, setRules] = useState<ApiPermissionRule[]>([]);
-  const [endpoints, setEndpoints] = useState<ApiEndpoint[]>([]);
+  const [, setEndpoints] = useState<ApiEndpoint[]>([]);
   const [ruleModalVisible, setRuleModalVisible] = useState(false);
   const [editingRule, setEditingRule] = useState<ApiPermissionRule | null>(null);
 

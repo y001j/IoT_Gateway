@@ -1,0 +1,230 @@
+[
+  {
+    "id": "quality_filter_example",
+    "name": "数据质量过滤示例",
+    "description": "过滤设备质量码异常的数据，只允许质量码为0的正常数据通过",
+    "enabled": true,
+    "priority": 100,
+    "conditions": {
+      "type": "simple",
+      "field": "type",
+      "operator": "ne",
+      "value": "string"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "quality",
+          "parameters": {
+            "allowed_quality": [0]
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "quality",
+      "type": "data_reliability"
+    }
+  },
+  {
+    "id": "change_rate_filter_example", 
+    "name": "变化率过滤示例",
+    "description": "过滤变化过快的传感器数据，防止设备故障导致的数值跳变",
+    "enabled": true,
+    "priority": 90,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "key",
+          "operator": "eq",
+          "value": "temperature"
+        },
+        {
+          "type": "simple",
+          "field": "type",
+          "operator": "eq",
+          "value": "float"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "change_rate",
+          "parameters": {
+            "max_change_rate": 5.0,
+            "time_window": "10s"
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "stability",
+      "type": "change_rate_control"
+    }
+  },
+  {
+    "id": "statistical_anomaly_example",
+    "name": "统计异常检测示例", 
+    "description": "基于移动统计窗口检测异常数值，自适应阈值检测",
+    "enabled": true,
+    "priority": 80,
+    "conditions": {
+      "type": "and",
+      "conditions": [
+        {
+          "type": "simple",
+          "field": "key",
+          "operator": "eq",
+          "value": "pressure"
+        },
+        {
+          "type": "simple",
+          "field": "type",
+          "operator": "eq",
+          "value": "float"
+        }
+      ]
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "statistical_anomaly",
+          "parameters": {
+            "window_size": 20,
+            "std_threshold": 2.5,
+            "min_samples": 8
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "anomaly_detection",
+      "type": "statistical"
+    }
+  },
+  {
+    "id": "consecutive_anomaly_example",
+    "name": "连续异常过滤示例",
+    "description": "只有连续3次超出阈值才触发过滤，减少偶发异常的误报",
+    "enabled": true,
+    "priority": 70,
+    "conditions": {
+      "type": "simple",
+      "field": "key",
+      "operator": "eq",
+      "value": "vibration"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "consecutive",
+          "parameters": {
+            "consecutive_count": 3,
+            "inner_filter": {
+              "type": "threshold",
+              "parameters": {
+                "threshold": 8.0,
+                "operator": "gt"
+              }
+            }
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "stability", 
+      "type": "consecutive_check"
+    }
+  },
+  {
+    "id": "multi_quality_filter_example",
+    "name": "多质量码过滤示例",
+    "description": "允许多种质量码通过，适用于不同设备类型",
+    "enabled": true,
+    "priority": 95,
+    "conditions": {
+      "type": "simple",
+      "field": "tags.device_type",
+      "operator": "eq", 
+      "value": "modbus_sensor"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "quality",
+          "parameters": {
+            "allowed_quality": [0, 64, 128]
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "quality",
+      "type": "multi_quality_support"
+    }
+  },
+  {
+    "id": "combined_filter_example",
+    "name": "组合过滤器示例",
+    "description": "展示多个过滤器组合使用的效果",
+    "enabled": true,
+    "priority": 60,
+    "conditions": {
+      "type": "simple",
+      "field": "key",
+      "operator": "startswith",
+      "value": "sensor_"
+    },
+    "actions": [
+      {
+        "type": "filter",
+        "config": {
+          "type": "quality",
+          "parameters": {
+            "allowed_quality": [0]
+          },
+          "action": "drop"
+        }
+      },
+      {
+        "type": "filter",
+        "config": {
+          "type": "range",
+          "parameters": {
+            "min": -100,
+            "max": 1000
+          },
+          "action": "drop"
+        }
+      },
+      {
+        "type": "filter",
+        "config": {
+          "type": "change_rate",
+          "parameters": {
+            "max_change_rate": 10.0,
+            "time_window": "5s"
+          },
+          "action": "drop"
+        }
+      }
+    ],
+    "tags": {
+      "category": "comprehensive",
+      "type": "multi_stage_filtering"
+    }
+  }
+]

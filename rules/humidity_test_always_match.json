@@ -1,0 +1,22 @@
+{
+  "id": "humidity_test_always_match", 
+  "name": "湿度测试规则（总是匹配）",
+  "description": "匹配所有湿度数据，用于测试规则引擎",
+  "enabled": true,
+  "priority": 200,
+  "conditions": {
+    "type": "simple",
+    "field": "key",
+    "operator": "eq", 
+    "value": "humidity"
+  },
+  "actions": [
+    {
+      "type": "alert",
+      "config": {
+        "level": "info",
+        "message": "湿度数据: 设备{{.DeviceID}} = {{.Value}}%"
+      }
+    }
+  ]
+}

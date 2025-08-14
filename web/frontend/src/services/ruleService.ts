@@ -13,13 +13,26 @@ import type {
 export const ruleService = {
   // 获取规则列表
   async getRules(params: RuleListRequest): Promise<RuleListResponse> {
-    const response = await api.get('/plugins/rules', { params });
+    const response = await api.get('/plugins/rules', { 
+      params,
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'If-Modified-Since': '0'
+      }
+    });
     return response.data.data;
   },
 
   // 获取单个规则
   async getRule(id: string): Promise<Rule> {
-    const response = await api.get(`/plugins/rules/${id}`);
+    const response = await api.get(`/plugins/rules/${id}`, {
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'If-Modified-Since': '0'
+      }
+    });
     return response.data.data;
   },
 

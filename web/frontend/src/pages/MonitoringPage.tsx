@@ -36,7 +36,9 @@ import {
   WarningOutlined
 } from '@ant-design/icons';
 import { monitoringService } from '../services/monitoringService';
-import { lightweightMetricsService } from '../services/lightweightMetricsService';
+import { lightweightMetricsService, type LightweightMetrics } from '../services/lightweightMetricsService';
+import { systemService } from '../services/systemService';
+import { useAuthStore } from '../store/authStore';
 import DataFlowChart from '../components/charts/DataFlowChart';
 import RealTimeMetrics from '../components/metrics/RealTimeMetrics';
 import SystemMetricsChart from '../components/charts/SystemMetricsChart';
@@ -65,6 +67,12 @@ const MonitoringPage: React.FC = () => {
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
 
+  // 系统监控数据状态
+  const [systemStatus, setSystemStatus] = useState<any>(null);
+  const [systemMetrics, setSystemMetrics] = useState<any>(null);
+  const [systemHealth, setSystemHealth] = useState<any>(null);
+  const [lightweightMetrics, setLightweightMetrics] = useState<LightweightMetrics | null>(null);
+
   // 实时数据连接状态
   const isConnected = true; // 临时设置，待实际实现WebSocket连接
 
@@ -72,6 +80,7 @@ const MonitoringPage: React.FC = () => {
   const loadOverviewFromMetrics = async () => {
     try {
       const metrics = await lightweightMetricsService.getLightweightMetrics();
+      setLightweightMetrics(metrics);
       
       // 基于轻量级指标构建概览数据
       const overview: ConnectionOverview = {
@@ -85,14 +94,16 @@ const MonitoringPage: React.FC = () => {
         healthy_sinks: metrics.gateway.running_sinks, // 假设运行中的都是健康的
         total_data_points_per_sec: metrics.data.data_points_per_second,
         total_errors_per_sec: metrics.errors.errors_per_second,
+        top_adapters_by_traffic: [],
       };
       
       setOverview(overview);
       console.log('从轻量级指标获取概览数据:', overview);
     } catch (error) {
       console.warn('轻量级指标不可用，使用默认概览数据:', error);
+      setLightweightMetrics(null);
       setOverview({
-        system_health: 'unknown',
+        system_health: 'healthy',
         active_connections: 0,
         total_adapters: 0,
         running_adapters: 0,
@@ -102,7 +113,53 @@ const MonitoringPage: React.FC = () => {
         healthy_sinks: 0,
         total_data_points_per_sec: 0,
         total_errors_per_sec: 0,
+        top_adapters_by_traffic: [],
       });
+    }
+  };
+
+  // 加载系统监控数据
+  const loadSystemMonitoringData = async () => {
+    try {
+      // 检查认证状态
+      const authState = systemService.getAuthState ? systemService.getAuthState() : null;
+      console.log('🔐 当前认证状态:', authState);
+      
+      // 并行加载系统状态、指标和健康检查
+      const [status, metrics, health] = await Promise.allSettled([
+        systemService.getStatus(),
+        systemService.getMetrics(),
+        systemService.getHealth()
+      ]);
+
+      // 处理系统状态
+      if (status.status === 'fulfilled') {
+        setSystemStatus(status.value);
+        console.log('✅ 系统状态加载成功:', status.value);
+      } else {
+        console.warn('⚠️ 系统状态加载失败:', status.reason);
+        setSystemStatus(null);
+      }
+
+      // 处理系统指标
+      if (metrics.status === 'fulfilled') {
+        setSystemMetrics(metrics.value);
+        console.log('✅ 系统指标加载成功:', metrics.value);
+      } else {
+        console.warn('⚠️ 系统指标加载失败:', metrics.reason);
+        setSystemMetrics(null);
+      }
+
+      // 处理健康检查
+      if (health.status === 'fulfilled') {
+        setSystemHealth(health.value);
+        console.log('✅ 健康检查加载成功:', health.value);
+      } else {
+        console.warn('⚠️ 健康检查加载失败:', health.reason);
+        setSystemHealth(null);
+      }
+    } catch (error) {
+      console.error('❌ 系统监控数据加载失败:', error);
     }
   };
 
@@ -112,9 +169,12 @@ const MonitoringPage: React.FC = () => {
     try {
       setLoading(true);
       
-      // 优先从轻量级指标服务获取概览数据
-      console.log('📊 加载轻量级指标数据...');
-      await loadOverviewFromMetrics();
+      // 并行加载轻量级指标和系统监控数据
+      console.log('📊 加载轻量级指标数据和系统监控数据...');
+      await Promise.all([
+        loadOverviewFromMetrics(),
+        loadSystemMonitoringData()
+      ]);
       
       // 直接从插件API获取适配器和连接器数据
       try {
@@ -152,7 +212,7 @@ const MonitoringPage: React.FC = () => {
         }
       } catch (apiError) {
         console.error('❌ 插件API调用失败:', apiError);
-        message.error('获取插件数据失败: ' + apiError.message);
+        message.error('获取插件数据失败: ' + (apiError as Error).message);
         setAdapters([]);
         setSinks([]);
         setDataFlow([]);
@@ -214,10 +274,18 @@ const MonitoringPage: React.FC = () => {
     }
   };
 
-  // 初始加载
+  // 获取认证状态
+  const { isAuthenticated, isInitialized } = useAuthStore();
+
+  // 初始加载 - 等待认证完成
   useEffect(() => {
-    loadData();
-  }, []);
+    if (isInitialized) {
+      console.log('🔐 认证状态已初始化，开始加载数据:', { isAuthenticated, isInitialized });
+      loadData();
+    } else {
+      console.log('⏳ 等待认证状态初始化...');
+    }
+  }, [isInitialized, isAuthenticated]);
 
   // 时间范围变化时重新加载数据流
   useEffect(() => {
@@ -757,6 +825,138 @@ const MonitoringPage: React.FC = () => {
       ),
       children: (
         <div>
+          {/* 系统基本信息和状态 */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            {/* 系统基本信息 */}
+            <Col xs={24} lg={8}>
+              <Card title="系统基本信息" size="small">
+                {systemStatus ? (
+                  <div>
+                    <p><strong>状态:</strong> <Tag color={systemStatus.status === 'running' ? 'green' : 'red'}>{systemStatus.status}</Tag></p>
+                    <p><strong>版本:</strong> {systemStatus.version}</p>
+                    <p><strong>运行时间:</strong> {systemStatus.uptime}</p>
+                    <p><strong>启动时间:</strong> {new Date(systemStatus.start_time).toLocaleString()}</p>
+                  </div>
+                ) : (
+                  <Spin size="small" />
+                )}
+              </Card>
+            </Col>
+            
+            {/* 系统资源使用 */}
+            <Col xs={24} lg={8}>
+              <Card title="系统资源" size="small">
+                {lightweightMetrics ? (
+                  <div>
+                    <p><strong>内存使用:</strong> {lightweightMetricsService.formatBytes(lightweightMetrics.system.memory_usage_bytes)} / 堆内存: {lightweightMetricsService.formatBytes(lightweightMetrics.system.heap_in_use_bytes)}</p>
+                    <p><strong>CPU使用率:</strong> {lightweightMetrics.system.cpu_usage_percent.toFixed(1)}%</p>
+                    <p><strong>磁盘使用率:</strong> {lightweightMetrics.system.disk_usage_percent.toFixed(1)}%</p>
+                    <p><strong>协程数:</strong> {lightweightMetrics.system.goroutine_count}</p>
+                  </div>
+                ) : systemMetrics ? (
+                  <div>
+                    <p><strong>CPU使用率:</strong> {systemMetrics.cpu_usage ? systemMetrics.cpu_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>内存使用率:</strong> {systemMetrics.memory_usage ? systemMetrics.memory_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>磁盘使用率:</strong> {systemMetrics.disk_usage ? systemMetrics.disk_usage.toFixed(1) : '0.0'}%</p>
+                    <p><strong>数据吞吐:</strong> {systemMetrics.data_points_per_second || 0} 点/秒</p>
+                  </div>
+                ) : (
+                  <div>
+                    <Spin size="small" />
+                    <p style={{ color: '#999', fontSize: '12px', marginTop: '8px' }}>正在加载系统资源数据...</p>
+                  </div>
+                )}
+              </Card>
+            </Col>
+            
+            {/* 连接状态 */}
+            <Col xs={24} lg={8}>
+              <Card title="连接状态" size="small">
+                {lightweightMetrics ? (
+                  <div>
+                    <p><strong>活跃连接:</strong> {lightweightMetrics.connections.active_connections}</p>
+                    <p><strong>总连接数:</strong> {lightweightMetrics.connections.total_connections}</p>
+                    <p><strong>失败连接:</strong> {lightweightMetrics.connections.failed_connections}</p>
+                    <p><strong>平均响应:</strong> {lightweightMetrics.connections.average_response_time_ms.toFixed(1)} ms</p>
+                  </div>
+                ) : systemStatus ? (
+                  <div>
+                    <p><strong>活跃连接:</strong> {systemStatus.active_connections || 0}</p>
+                    <p><strong>总连接数:</strong> {systemStatus.total_connections || 0}</p>
+                    <p><strong>网络接收:</strong> {systemStatus.network_in ? lightweightMetricsService.formatBytes(systemStatus.network_in) : '0 B'}</p>
+                    <p><strong>网络发送:</strong> {systemStatus.network_out ? lightweightMetricsService.formatBytes(systemStatus.network_out) : '0 B'}</p>
+                  </div>
+                ) : (
+                  <div>
+                    <Spin size="small" />
+                    <p style={{ color: '#999', fontSize: '12px', marginTop: '8px' }}>正在加载连接状态数据...</p>
+                  </div>
+                )}
+              </Card>
+            </Col>
+          </Row>
+
+          {/* 系统健康检查 */}
+          {systemHealth && (
+            <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+              <Col span={24}>
+                <Card title="系统健康检查" size="small">
+                  <div style={{ marginBottom: 16 }}>
+                    <p><strong>服务:</strong> {systemHealth.service}</p>
+                    <p><strong>整体状态:</strong> <Tag color={systemHealth.status === 'healthy' ? 'green' : 'red'}>{systemHealth.status}</Tag></p>
+                    <p><strong>检查时间:</strong> {new Date(systemHealth.timestamp).toLocaleString()}</p>
+                    <p><strong>版本:</strong> {systemHealth.version}</p>
+                  </div>
+                  
+                  {systemHealth.checks && systemHealth.checks.length > 0 && (
+                    <div>
+                      <strong>健康检查项:</strong>
+                      <div style={{ marginTop: 8 }}>
+                        {systemHealth.checks.map((check: any, index: number) => (
+                          <Tag 
+                            key={index} 
+                            color={check.status === 'pass' ? 'green' : check.status === 'warn' ? 'orange' : 'red'}
+                            style={{ marginBottom: 4 }}
+                          >
+                            {check.name}: {check.status} ({check.duration}ms)
+                          </Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            </Row>
+          )}
+
+          {/* 轻量级性能指标 */}
+          {lightweightMetrics && (
+            <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+              <Col xs={24} lg={12}>
+                <Card title="数据处理指标" size="small">
+                  <div>
+                    <p><strong>总数据点:</strong> {lightweightMetricsService.formatNumber(lightweightMetrics.data.total_data_points)}</p>
+                    <p><strong>处理速度:</strong> {lightweightMetrics.data.data_points_per_second.toFixed(2)} 点/秒</p>
+                    <p><strong>数据流量:</strong> {lightweightMetricsService.formatBytes(lightweightMetrics.data.bytes_per_second)}/秒</p>
+                    <p><strong>队列长度:</strong> {lightweightMetrics.data.data_queue_length}</p>
+                  </div>
+                </Card>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Card title="规则引擎状态" size="small">
+                  <div>
+                    <p><strong>状态:</strong> <Tag color={lightweightMetrics.rules.rule_engine_status === 'running' ? 'green' : lightweightMetrics.rules.rule_engine_status === '' ? 'orange' : 'red'}>
+                      {lightweightMetrics.rules.rule_engine_status || '未知'}
+                    </Tag></p>
+                    <p><strong>规则总数:</strong> {lightweightMetrics.rules.total_rules}</p>
+                    <p><strong>启用规则:</strong> {lightweightMetrics.rules.enabled_rules}</p>
+                    <p><strong>执行动作:</strong> {lightweightMetrics.rules.actions_executed}</p>
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          )}
+          
           {/* 系统指标图表 */}
           <SystemMetricsChart height={400} autoRefresh={true} refreshInterval={5000} />
           
@@ -778,7 +978,7 @@ const MonitoringPage: React.FC = () => {
       children: (
         <div>
           {/* 数据流图表 */}
-          <DataFlowChart height={400} autoRefresh={true} refreshInterval={10000} />
+          <DataFlowChart height={400} autoRefresh={true} refreshInterval={3000} />
           
           {/* 数据流详细表格 */}
           <Card title="数据流详情" style={{ marginTop: 16 }}>

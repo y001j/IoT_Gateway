@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/y001j/iot-gateway/internal/metrics"
 	"github.com/y001j/iot-gateway/internal/web/models"
@@ -87,6 +88,45 @@ func (h *SystemHandler) GetLightweightMetrics(c *gin.Context) {
 	// 由于import cycle问题，这里暂时返回一个基本的响应
 	// 实际的轻量级指标可以通过Gateway主服务的/metrics端点获取
 	h.ErrorResponse(c, http.StatusNotImplemented, "轻量级指标请通过Gateway主服务的/metrics端点获取 (端口8080)")
+}
+
+// GetSystemHealth 获取系统健康状态
+// @Summary 获取系统健康状态
+// @Description 获取系统健康状态和详细的系统指标
+// @Tags 系统管理
+// @Security ApiKeyAuth
+// @Produce json
+// @Success 200 {object} APIResponse{data=map[string]interface{}}
+// @Failure 401 {object} APIResponse
+// @Failure 500 {object} APIResponse
+// @Router /system/health/detailed [get]
+func (h *SystemHandler) GetSystemHealth(c *gin.Context) {
+	// 尝试获取系统服务的监控服务
+	systemService := h.systemService
+	if systemService == nil {
+		h.ErrorResponse(c, http.StatusInternalServerError, "System service not available")
+		return
+	}
+	
+	// 通过类型断言获取监控相关方法
+	type MonitoringService interface {
+		GetMonitoringService() interface{}
+	}
+	
+	response := map[string]interface{}{
+		"timestamp": time.Now(),
+		"status": "healthy",
+		"monitoring_available": false,
+	}
+	
+	if monitoringProvider, ok := systemService.(MonitoringService); ok {
+		if monitoringService := monitoringProvider.GetMonitoringService(); monitoringService != nil {
+			response["monitoring_available"] = true
+			response["status"] = "healthy"
+		}
+	}
+	
+	h.SuccessResponse(c, response)
 }
 
 // GetHealth 获取健康状态

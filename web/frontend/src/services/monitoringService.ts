@@ -1,6 +1,5 @@
 import api from './api';
 import type {
-  AdapterStatusResponse,
   DataFlowMetricsResponse,
   AdapterDiagnosticsResponse,
   AdapterStatus,
@@ -24,7 +23,7 @@ class MonitoringService {
     // 直接使用 api 实例调用插件API，它会自动处理认证
     const [pluginsResponse, metricsResponse] = await Promise.all([
       api.get('/plugins'),
-      fetch('/metrics').catch(() => null) // 轻量级指标失败时返回null
+      fetch(`${import.meta.env.VITE_GATEWAY_URL || 'http://localhost:8080'}/metrics`).catch(() => null) // 从Gateway主服务获取轻量级指标
     ]);
     
     const pluginsData = pluginsResponse.data;
@@ -94,6 +93,8 @@ class MonitoringService {
           adapters.push({
             ...baseInfo,
             data_points_count: dataPointsCount,
+            last_error: '',
+            tags: {},
           });
         } else if (plugin.type === 'sink') {
           // 对于连接器，只使用真实数据
@@ -107,6 +108,8 @@ class MonitoringService {
           sinks.push({
             ...baseInfo,
             messages_published: messagesPublished,
+            last_error: '',
+            tags: {},
           });
         }
       }));
@@ -133,7 +136,7 @@ class MonitoringService {
       // 从轻量级指标服务获取概览数据
       let lightweightMetrics;
       try {
-        lightweightMetrics = await fetch('/metrics').then(res => res.json());
+        lightweightMetrics = await fetch(`${import.meta.env.VITE_GATEWAY_URL || 'http://localhost:8080'}/metrics`).then(res => res.json());
       } catch (metricsError) {
         console.warn('轻量级指标服务不可用，使用默认值:', metricsError);
         lightweightMetrics = {
@@ -155,6 +158,7 @@ class MonitoringService {
         healthy_sinks: sinks.filter(s => s.health === 'healthy').length,
         total_data_points_per_sec: lightweightMetrics.data.data_points_per_second,
         total_errors_per_sec: lightweightMetrics.errors.errors_per_second,
+        top_adapters_by_traffic: [],
       };
       
       return { adapters, sinks, overview };

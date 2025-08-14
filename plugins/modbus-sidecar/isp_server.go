@@ -478,11 +478,24 @@ func (c *ISPClientConn) handleMessage(msg *plugin.ISPMessage) {
 
 // handleConfigMessage 处理配置消息
 func (c *ISPClientConn) handleConfigMessage(msg *plugin.ISPMessage) {
+	log.Info().
+		Str("client_id", c.id).
+		Msg("🔵 [Sidecar调试] 收到配置消息")
+
 	var config plugin.ConfigPayload
 	if err := json.Unmarshal(msg.Payload, &config); err != nil {
 		c.sendErrorResponse(msg.ID, fmt.Sprintf("解析配置失败: %v", err))
 		return
 	}
+
+	log.Info().
+		Str("client_id", c.id).
+		Str("mode", config.Mode).
+		Str("address", config.Address).
+		Int("timeout_ms", config.TimeoutMS).
+		Int("interval_ms", config.IntervalMS).
+		Int("registers_count", len(config.Registers)).
+		Msg("🔵 [Sidecar调试] 配置解析成功")
 
 	// 保存配置
 	c.server.modbusConf = &config
@@ -494,9 +507,15 @@ func (c *ISPClientConn) handleConfigMessage(msg *plugin.ISPMessage) {
 	}
 
 	// 启动数据采集
+	log.Info().
+		Str("client_id", c.id).
+		Msg("🔵 [Sidecar调试] 准备启动数据采集")
 	c.server.startDataCollection()
 
 	// 启动心跳机制
+	log.Info().
+		Str("client_id", c.id).
+		Msg("🔵 [Sidecar调试] 准备启动心跳机制")
 	c.server.startHeartbeat()
 
 	// 发送成功响应
@@ -507,7 +526,7 @@ func (c *ISPClientConn) handleConfigMessage(msg *plugin.ISPMessage) {
 		Str("mode", config.Mode).
 		Str("address", config.Address).
 		Int("registers", len(config.Registers)).
-		Msg("Modbus配置成功")
+		Msg("🔵 [Sidecar调试] Modbus配置成功")
 }
 
 // initModbusClient 初始化Modbus客户端（使用长连接）
@@ -619,13 +638,24 @@ func (s *ISPServer) sendHeartbeat() {
 
 // collectData 采集数据
 func (s *ISPServer) collectData() {
+	log.Info().
+		Msg("🔵 [Sidecar调试] 开始数据采集")
+
 	if s.modbusConf == nil || s.longConn == nil {
+		log.Error().
+			Bool("has_config", s.modbusConf != nil).
+			Bool("has_conn", s.longConn != nil).
+			Msg("🔵 [Sidecar调试] 数据采集条件不满足")
 		return
 	}
 
 	var points []plugin.DataPoint
 	now := time.Now().UnixNano()
 	collectStart := time.Now()
+
+	log.Info().
+		Int("registers_count", len(s.modbusConf.Registers)).
+		Msg("🔵 [Sidecar调试] 准备读取寄存器")
 
 	for _, reg := range s.modbusConf.Registers {
 		regStart := time.Now()
