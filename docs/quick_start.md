@@ -4,7 +4,7 @@
 
 在开始使用规则引擎之前，请确保：
 
-1. **Go环境**: Go 1.24.3 或更高版本
+1. **Go环境**: Go 1.24 或更高版本
 2. **NATS服务器**: 运行中的NATS服务器
 3. **IoT Gateway核心模块**: Core Runtime、Plugin Manager、Southbound Adapters、Northbound Sinks
 
@@ -13,8 +13,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/y001j/iot-gateway.git
-cd iot-gateway
+git clone https://github.com/y001j/IoT_Gateway.git
+cd IoT_Gateway
 ```
 
 ### 2. 安装依赖
@@ -118,7 +118,7 @@ import (
     "os/signal"
     "syscall"
     
-    "github.com/y001j/iot-gateway/internal/rules"
+    "github.com/y001j/IoT_Gateway/internal/rules"
     "github.com/nats-io/nats.go"
 )
 
@@ -346,7 +346,7 @@ import (
     "fmt"
     "log"
     
-    "github.com/y001j/iot-gateway/internal/rules"
+    "github.com/y001j/IoT_Gateway/internal/rules"
 )
 
 func main() {
@@ -425,6 +425,6 @@ chmod 644 logs/sensor_data.json
 如果遇到问题：
 
 1. 查看 [故障排除指南](rule_engine.md#故障排除)
-2. 搜索现有的 [Issues](https://github.com/y001j/iot-gateway/issues)
+2. 搜索现有的 [Issues](https://github.com/y001j/IoT_Gateway/issues)
 3. 创建新的 Issue 描述问题
 4. 联系维护团队获取支持 

@@ -345,20 +345,19 @@ IoT Gateway规则引擎是一个强大的事件驱动数据处理系统，作为
 
 ### 4. Aggregate 动作 - 数据聚合
 
-对时间序列数据进行聚合计算。
+对时间序列数据进行聚合计算，支持复杂数据类型和28种聚合函数。
 
+**基本配置**:
 ```json
 {
   "type": "aggregate",
   "config": {
-    "window": {
-      "type": "time",
-      "size": "5m"
-    },
-    "functions": ["avg", "max", "min", "count"],
+    "window_type": "time",
+    "window": "5m",
+    "functions": ["avg", "max", "min", "count", "p95"],
     "group_by": ["device_id"],
     "trigger": {
-      "type": "time",
+      "type": "time", 
       "interval": "1m"
     },
     "output_subject": "aggregated.{{.device_id}}"
@@ -366,17 +365,82 @@ IoT Gateway规则引擎是一个强大的事件驱动数据处理系统，作为
 }
 ```
 
-**聚合函数**:
+**窗口类型**:
+- `time`: 时间窗口（如 "5m", "1h"）
+- `count`: 数量窗口（如 10个数据点）
+
+**高级配置**:
+```json
+{
+  "type": "aggregate",
+  "config": {
+    "window_type": "count",
+    "size": 100,
+    "functions": ["avg", "p90", "p95", "p99", "volatility", "outlier_count"],
+    "group_by": ["device_id", "sensor_type"],
+    "thresholds": {
+      "upper_limit": 100.0,
+      "lower_limit": 0.0
+    },
+    "trigger": {
+      "type": "count",
+      "count": 50
+    }
+  }
+}
+```
+
+**聚合函数** (共28个):
+
+**基础统计函数** (13个):
 - `count`: 计数
 - `sum`: 求和
-- `avg`: 平均值
-- `min`: 最小值
+- `avg` / `mean` / `average`: 平均值
+- `min`: 最小值 
 - `max`: 最大值
 - `median`: 中位数
-- `stddev`: 标准差
-- `range`: 范围
+- `stddev` / `std`: 标准差
+- `variance`: 方差
 - `first`: 第一个值
 - `last`: 最后一个值
+
+**百分位数函数** (6个):
+- `p25`: 25%分位数
+- `p50`: 50%分位数（中位数）
+- `p75`: 75%分位数
+- `p90`: 90%分位数
+- `p95`: 95%分位数
+- `p99`: 99%分位数
+
+**数据质量函数** (3个):
+- `null_rate`: 空值率
+- `completeness`: 完整性（1-空值率）
+- `outlier_count`: 异常值数量
+
+**变化检测函数** (4个):
+- `change`: 变化量（当前值-上一个值）
+- `change_rate`: 变化率
+- `volatility`: 波动性（价格变化的标准差）
+- `cv`: 变异系数（标准差/平均值）
+
+**阈值监控函数** (3个):
+- `above_count`: 超过阈值的数量
+- `below_count`: 低于阈值的数量
+- `in_range_count`: 在范围内的数量
+
+**复杂数据类型支持**:
+聚合功能支持以下复杂数据类型，自动提取数值进行聚合：
+- **数组数据**: 取第一个数值元素
+- **3D向量**: 使用幅值 (magnitude)
+- **GPS坐标**: 使用纬度值进行聚合
+- **颜色数据**: 提取红色通道值
+- **键值对**: 自动寻找数值字段
+
+**性能特性**:
+- **增量计算**: 高效的增量统计算法，避免重复计算
+- **内存优化**: 滑动窗口机制，控制内存使用
+- **缓存机制**: 智能缓存避免重复计算
+- **并发安全**: 线程安全的统计计算
 
 ### 5. Forward 动作 - 数据转发
 
@@ -541,7 +605,7 @@ import (
     "context"
     "log"
     
-    "github.com/y001j/iot-gateway/internal/rules"
+    "github.com/y001j/IoT_Gateway/internal/rules"
     "github.com/nats-io/nats.go"
 )
 
@@ -921,8 +985,8 @@ import (
     "context"
     "time"
     
-    "github.com/y001j/iot-gateway/internal/model"
-    "github.com/y001j/iot-gateway/internal/rules"
+    "github.com/y001j/IoT_Gateway/internal/model"
+    "github.com/y001j/IoT_Gateway/internal/rules"
 )
 
 // CustomHandler 自定义动作处理器
