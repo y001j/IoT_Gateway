@@ -144,7 +144,10 @@ const MainLayout: React.FC = () => {
           className="custom-sidebar-menu"
         />
         
-        <style jsx global>{`
+        {/* 全局样式 */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
           .custom-sidebar-menu .ant-menu-item {
             background: transparent !important;
             border-radius: 8px !important;
@@ -356,7 +359,9 @@ const MainLayout: React.FC = () => {
             color: #ffffff !important;
             font-weight: 500 !important;
           }
-        `}</style>
+        `
+          }}
+        />
       </Sider>
       <Layout className="site-layout" style={{ 
         background: 'linear-gradient(135deg, #f0fdf4 0%, #bbf7d0 30%, #f1f5f9 70%, #e2e8f0 100%)',

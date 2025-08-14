@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  # IoT Gateway 主服务
+  iot-gateway:
+    build: .
+    container_name: iot-gateway
+    ports:
+      - "8080:8080"  # API端口
+      - "8081:8081"  # Web UI端口
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./rules:/app/rules:ro
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - LOG_LEVEL=info
+      - NATS_URL=nats://nats-server:4222
+    depends_on:
+      - nats-server
+      - influxdb
+      - redis
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+  # NATS 消息服务器
+  nats-server:
+    image: nats:2.10-alpine
+    container_name: nats-server
+    ports:
+      - "4222:4222"  # NATS客户端连接
+      - "8222:8222"  # HTTP监控接口
+      - "6222:6222"  # 集群路由
+    command:
+      - "--config"
+      - "/etc/nats/nats-server.conf"
+    volumes:
+      - ./configs/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats-data:/data
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+  # InfluxDB 时序数据库
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=password123
+      - DOCKER_INFLUXDB_INIT_ORG=iot-gateway
+      - DOCKER_INFLUXDB_INIT_BUCKET=iot-data
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+  # Redis 缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --requirepass password123
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+  # MQTT Broker (Eclipse Mosquitto)
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mosquitto
+    ports:
+      - "1883:1883"  # MQTT
+      - "9001:9001"  # WebSocket
+    volumes:
+      - ./configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+  # Grafana 可视化面板
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+    networks:
+      - iot-network
+
+# 网络配置
+networks:
+  iot-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# 数据卷
+volumes:
+  nats-data:
+    driver: local
+  influxdb-data:
+    driver: local
+  influxdb-config:
+    driver: local
+  redis-data:
+    driver: local
+  mosquitto-data:
+    driver: local
+  mosquitto-logs:
+    driver: local
+  grafana-data:
+    driver: local
