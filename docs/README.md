@@ -15,6 +15,9 @@
 
 ### 📋 规则引擎
 - [规则引擎概览](rule_engine.md) - 规则引擎完整文档
+- [复合数据类型支持](complex_data_types.md) - GPS、3D向量、颜色等复合数据处理
+- [聚合函数详解](aggregation_functions.md) - 28种聚合函数的完整说明
+- [规则示例集合](rule_examples.md) - 丰富的规则配置示例和最佳实践
 - [规则引擎详细文档](rule_engine/) - 分模块详细文档
   - [01_概览](rule_engine/01_overview.md) - 规则引擎概述
   - [02_配置](rule_engine/02_configuration.md) - 规则配置详解
@@ -49,6 +52,9 @@
 
 **📡 数据处理**  
 - [规则引擎概览](rule_engine.md) - 数据处理规则系统
+- [复合数据类型支持](complex_data_types.md) - 高级数据类型处理能力
+- [聚合函数详解](aggregation_functions.md) - 28种统计分析函数
+- [规则示例集合](rule_examples.md) - 实用的规则配置案例
 - [NATS架构](nats_architecture.md) - 消息总线数据流
 
 **⚙️ 系统集成**
