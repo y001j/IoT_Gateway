@@ -17,7 +17,7 @@
 
 ## 📋 Overview
 
-**Myin IoT Gateway** is a high-performance IoT data gateway platform built on a revolutionary high-speed data bus architecture, specifically designed for collecting and preprocessing large-scale device data. It provides a complete solution for data collection, processing, routing, and management, supporting multiple communication protocols and data formats.
+**Maien IoT Gateway** is a high-performance IoT data gateway platform built on a revolutionary high-speed data bus architecture, specifically designed for collecting and preprocessing large-scale device data. It provides a complete solution for data collection, processing, routing, and management, supporting multiple communication protocols and data formats.
 
 ### 🎯 Key Advantages
 
