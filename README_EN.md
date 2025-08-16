@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![IoT Gateway Logo](web/frontend/public/logo.png)
+![IoT Gateway Logo](web/frontend/public/logo.svg)
 
 **High-performance, scalable IoT data processing and management platform**
 
@@ -17,7 +17,7 @@
 
 ## 📋 Overview
 
-IoT Gateway is an enterprise-grade IoT data gateway platform designed for processing large-scale IoT device data. It provides a complete solution for data collection, processing, routing, and management, supporting multiple communication protocols and data formats.
+**Myin IoT Gateway** is a high-performance IoT data gateway platform built on a revolutionary high-speed data bus architecture, specifically designed for collecting and preprocessing large-scale device data. It provides a complete solution for data collection, processing, routing, and management, supporting multiple communication protocols and data formats.
 
 ### 🎯 Key Advantages
 
@@ -200,7 +200,7 @@ rule_engine:
 │ • Modbus       │    │ • Protocol      │    │ • Rule Engine   │
 │ • MQTT         │    │   Adapters      │    │ • Data          │
 │ • HTTP         │    │ • Data          │    │   Transformation│
-│ • WebSocket    │    │   Validation    │    │ • Aggregation   │
+│                 │    │   Validation    │    │ • Aggregation   │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                     │
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -209,9 +209,10 @@ rule_engine:
 │ • InfluxDB     │    │ • Pub/Sub       │    │ • Web API       │
 │ • Redis        │    │ • Stream        │    │ • WebSocket     │
 │ • MQTT Broker  │    │   Processing    │    │ • Management UI │
-│ • Files        │    │ • Load Balancing│    │ • Monitoring    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
+
 ```
+![dataarch.png](dataarch.png)
 
 ### Core Components
 
