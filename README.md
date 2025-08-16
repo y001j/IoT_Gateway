@@ -92,7 +92,7 @@ npm run build
 #### 4. 配置文件
 ```bash
 # 复制示例配置
-cp config_rule_engine_test.yaml config.yaml
+cp config.yaml config.yaml
 
 # 编辑配置文件
 nano config.yaml
@@ -512,3 +512,43 @@ go tool cover -html=coverage.out -o coverage.html
 [⬆ 回到顶部](#iot-gateway---智能物联网数据网关平台)
 
 </div>
+
+---
+
+## 📸 界面截图
+
+### 📊 主控制台 - 实时监控仪表板
+![仪表板概览](docs/screen/dashboard-overview.png)
+*实时显示系统运行状态、设备连接数、数据处理统计和最近告警信息*
+
+### 📈 系统监控 - 性能指标
+![系统监控](docs/screen/system-monitoring.png)
+*详细的系统资源使用情况，包括CPU、内存、磁盘使用率和Go运行时统计*
+
+### 🔌 插件管理 - 适配器与接收器
+![插件管理](docs/screen/plugin-management.png)
+*管理南向适配器和北向接收器，支持动态配置和状态监控*
+
+### ⚙️ 规则引擎 - 数据处理规则
+![规则引擎管理](docs/screen/rule-engine-management.png)
+*可视化创建和管理数据处理规则，支持复杂条件和多种动作类型*
+
+### 🚨 告警管理 - 实时告警监控
+![告警管理](docs/screen/alert-management.png)
+*实时监控系统告警，支持告警统计、分类管理和处理跟踪*
+
+### 🌐 网络状态 - 连接监控
+![网络状态](docs/screen/network-status.png)
+*监控网络连接状态、数据吞吐量和规则引擎性能指标*
+
+### 📡 连接监控 - 实时数据流
+![连接监控](docs/screen/connection-monitoring.png)
+*实时显示数据流量图表、错误率统计和设备数据分布*
+
+### 📊 数据统计 - 设备数据详情
+![设备数据统计](docs/screen/device-data-statistics.png)
+*详细的设备数据统计，包括传感器数据、处理频率和数据质量指标*
+
+### ⚙️ 系统设置 - 配置管理
+![系统设置](docs/screen/system-settings.png)
+*系统配置管理，包括基本信息、资源使用情况、健康检查和规则引擎设置*

@@ -92,7 +92,7 @@ npm run build
 #### 4. Configuration
 ```bash
 # Copy example configuration
-cp config_rule_engine_test.yaml config.yaml
+cp config.yaml config.yaml
 
 # Edit configuration
 nano config.yaml
@@ -456,3 +456,43 @@ Thanks to the following open source projects:
 [⬆ Back to Top](#iot-gateway---intelligent-iot-data-gateway-platform)
 
 </div>
+
+---
+
+## 📸 Interface Screenshots
+
+### 📊 Main Dashboard - Real-time Monitoring
+![Dashboard Overview](docs/screen/dashboard-overview.png)
+*Real-time display of system status, device connections, data processing statistics, and recent alerts*
+
+### 📈 System Monitoring - Performance Metrics
+![System Monitoring](docs/screen/system-monitoring.png)
+*Detailed system resource usage including CPU, memory, disk utilization, and Go runtime statistics*
+
+### 🔌 Plugin Management - Adapters & Sinks
+![Plugin Management](docs/screen/plugin-management.png)
+*Manage southbound adapters and northbound sinks with dynamic configuration and status monitoring*
+
+### ⚙️ Rule Engine - Data Processing Rules
+![Rule Engine Management](docs/screen/rule-engine-management.png)
+*Visual creation and management of data processing rules with complex conditions and multiple action types*
+
+### 🚨 Alert Management - Real-time Alert Monitoring
+![Alert Management](docs/screen/alert-management.png)
+*Real-time system alert monitoring with alert statistics, categorization, and tracking*
+
+### 🌐 Network Status - Connection Monitoring
+![Network Status](docs/screen/network-status.png)
+*Monitor network connection status, data throughput, and rule engine performance metrics*
+
+### 📡 Connection Monitoring - Real-time Data Flow
+![Connection Monitoring](docs/screen/connection-monitoring.png)
+*Real-time data flow charts, error rate statistics, and device data distribution*
+
+### 📊 Data Statistics - Device Data Details
+![Device Data Statistics](docs/screen/device-data-statistics.png)
+*Detailed device data statistics including sensor data, processing frequency, and data quality metrics*
+
+### ⚙️ System Settings - Configuration Management
+![System Settings](docs/screen/system-settings.png)
+*System configuration management including basic information, resource usage, health checks, and rule engine settings*
