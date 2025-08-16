@@ -209,7 +209,9 @@ rule_engine:
 │ • Redis        │    │ • 流式处理       │    │ • WebSocket     │
 │ • MQTT Broker  │    │ • 负载均衡       │    │ • 管理界面       │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
+
 ```
+![dataarch.png](dataarch.png)
 
 ### 核心组件
 
