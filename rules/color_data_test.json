@@ -2,7 +2,7 @@
   "id": "color_data_test",
   "name": "颜色数据处理测试",
   "description": "测试颜色复合数据的处理和转换",
-  "enabled": true,
+  "enabled": false,
   "priority": 50,
   "version": 7,
   "data_type": "color",

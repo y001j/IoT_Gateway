@@ -25,11 +25,6 @@
     {
       "type": "transform",
       "config": {
-        "add_fields": {
-          "is_error_log": "true",
-          "needs_attention": "true",
-          "log_extracted": "true"
-        },
         "add_tags": {
           "log_level": "error_detected",
           "processing": "log_extraction"

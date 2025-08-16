@@ -2,7 +2,7 @@
   "id": "humidity_test_always_match", 
   "name": "湿度测试规则（总是匹配）",
   "description": "匹配所有湿度数据，用于测试规则引擎",
-  "enabled": true,
+  "enabled": false,
   "priority": 200,
   "conditions": {
     "type": "simple",

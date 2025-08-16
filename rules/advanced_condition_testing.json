@@ -2,7 +2,7 @@
   "id": "advanced_condition_testing", 
   "name": "高级条件测试规则",
   "description": "测试复杂条件逻辑、嵌套条件和表达式引擎",
-  "enabled": true,
+  "enabled": false,
   "priority": 15,
   "version": 1,
   "conditions": {

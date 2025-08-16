@@ -1,6 +1,6 @@
 # Plugin Manager 设计文档
 
-> 版本：v1.1 &nbsp;&nbsp; 作者：IoT Gateway Team  &nbsp;&nbsp; 日期：2024-08-14
+> 版本：v1.1 &nbsp;&nbsp; 作者：IoT Gateway Team  &nbsp;&nbsp; 日期：2025-08-14
 
 ## 1. 目标
 负责 IoT Gateway 插件的生命周期管理，主要支持内置（Builtin）和 ISP Sidecar 两种插件类型，为 Southbound `Adapter` 与 Northbound `Sink` 提供统一的加载和管理机制。实现热发现、加载、卸载、升级，并向 Core Runtime 注册可用服务。

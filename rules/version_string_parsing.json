@@ -26,10 +26,6 @@
     {
       "type": "transform",
       "config": {
-        "add_fields": {
-          "version_format": "semver",
-          "version_parsed": "true"
-        },
         "add_tags": {
           "parsing": "semver",
           "version_check": "valid"

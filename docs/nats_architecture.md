@@ -166,6 +166,115 @@ func (r *RuleEngine) publishResult(result ProcessedPoint) {
 }
 ```
 
+## Sink架构与NATS订阅机制
+
+### Sink类型分析
+
+IoT Gateway的Sink架构采用了**分离关注点**的设计原则，将Sink分为两类：
+
+#### 1. 被动接收型Sink（标准Sink接口）
+所有标准Sink只实现基础接口，**无法主动订阅NATS消息**：
+
+```go
+type Sink interface {
+    Name() string
+    Init(cfg json.RawMessage) error
+    Start(ctx context.Context) error
+    Publish(batch []model.Point) error  // 只能被动接收数据
+    Stop() error
+}
+```
+
+**被动型Sink包括**：
+- **InfluxDB Sink**: 时序数据库输出
+- **Redis Sink**: 缓存数据输出  
+- **Console Sink**: 控制台日志输出
+- **WebSocket Sink**: 实时Web数据推送
+- **MQTT Sink**: MQTT消息发布
+- **JetStream Sink**: 持久化存储（注：虽然有订阅方法，但不实现NATSAwareSink接口）
+
+#### 2. 主动订阅型Sink（NATSAwareSink接口）
+只有实现了`NATSAwareSink`接口的Sink才能获得NATS连接并主动订阅消息：
+
+```go
+type NATSAwareSink interface {
+    Sink
+    SetNATSConnection(conn *nats.Conn)  // 获得NATS连接的唯一途径
+}
+```
+
+**主动型Sink（当前仅有）**：
+- **nats_subscriber**: 专门的NATS订阅和数据路由中心
+
+### 关键架构限制
+
+**⚠️ 重要：规则处理数据的访问限制**
+
+由于插件管理器的NATS连接分配机制：
+
+```go
+// 只有nats_subscriber类型的sink才能获得NATS连接
+if sinkType == "nats_subscriber" {
+    if natsAwareSink, ok := sink.(northbound.NATSAwareSink); ok {
+        natsAwareSink.SetNATSConnection(m.bus)
+    }
+}
+```
+
+**这意味着**：
+- ❌ **其他Sink无法直接订阅规则处理的数据**
+- ❌ **InfluxDB、Redis、WebSocket等Sink无法直接访问`iot.rules.*`主题**
+- ✅ **必须通过nats_subscriber作为中介来访问规则数据**
+
+### 数据流路径
+
+#### 错误的理解（不可行）：
+```
+规则引擎 → iot.rules.* → InfluxDB Sink ❌
+规则引擎 → iot.alerts.* → WebSocket Sink ❌
+```
+
+#### 正确的数据流路径：
+```
+规则引擎 → iot.rules.* → nats_subscriber → 目标Sink ✅
+规则引擎 → iot.alerts.* → nats_subscriber → 多个目标Sink ✅
+```
+
+### nats_subscriber的关键作用
+
+**nats_subscriber不仅重要，而且是其他Sink访问规则处理数据的唯一桥梁**：
+
+```yaml
+# 正确配置：通过nats_subscriber访问规则数据
+- name: "rule_data_processor"
+  type: "nats_subscriber"
+  params:
+    subscriptions:
+      - subject: "iot.rules.*"        # 规则处理结果
+        data_type: "rule"
+        enabled: true
+      - subject: "iot.alerts.*"       # 告警数据
+        data_type: "alert"
+        enabled: true
+    target_sinks:
+      - name: "rule_storage"
+        type: "influxdb"              # 存储规则结果
+      - name: "alert_dashboard"  
+        type: "websocket"             # 实时告警显示
+      - name: "alert_cache"
+        type: "redis"                 # 告警缓存
+```
+
+### 架构设计优势
+
+这种设计带来以下好处：
+
+1. **统一管理**: 所有NATS订阅逻辑集中在nats_subscriber
+2. **简化配置**: 避免每个Sink都需要复杂的NATS订阅配置
+3. **易于调试**: 数据流路径清晰，便于监控和排错
+4. **灵活路由**: nats_subscriber支持复杂的数据转换、过滤和多目标分发
+5. **批处理优化**: 统一的批处理机制提高性能
+
 ## 核心模块NATS集成
 
 ### 1. Core Runtime

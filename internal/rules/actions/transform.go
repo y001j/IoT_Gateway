@@ -307,9 +307,9 @@ func (h *TransformHandler) transformPoint(point model.Point, config *TransformCo
 	// 设置转换后的值
 	transformedPoint.Value = transformedValue
 
-	// 设置输出字段
+	// 设置输出字段（支持模板替换）
 	if config.OutputKey != "" {
-		transformedPoint.Key = config.OutputKey
+		transformedPoint.Key = h.parseTemplateString(config.OutputKey, point)
 	}
 
 	// 添加新标签（保留原有标签）
@@ -4493,4 +4493,35 @@ func (h *TransformHandler) vectorRotationTransform(vectorData *model.VectorData,
 		Labels:    vectorData.Labels,
 		Unit:      vectorData.Unit,
 	}, nil
+}
+
+// parseTemplateString 解析模板字符串，支持{{.Key}}等占位符
+func (h *TransformHandler) parseTemplateString(templateStr string, point model.Point) string {
+	if templateStr == "" {
+		return templateStr
+	}
+	
+	result := templateStr
+	
+	// 替换基本变量
+	replacements := map[string]string{
+		"{{.DeviceID}}":  point.DeviceID,
+		"{{.Key}}":       point.Key,
+		"{{.Value}}":     fmt.Sprintf("%v", point.Value),
+		"{{.Type}}":      string(point.Type),
+		"{{.Timestamp}}": point.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+	}
+	
+	for placeholder, value := range replacements {
+		result = strings.ReplaceAll(result, placeholder, value)
+	}
+	
+	// 处理标签模板
+	pointTags := point.GetTagsSafe()
+	for key, value := range pointTags {
+		placeholder := fmt.Sprintf("{{.Tags.%s}}", key)
+		result = strings.ReplaceAll(result, placeholder, value)
+	}
+	
+	return result
 }

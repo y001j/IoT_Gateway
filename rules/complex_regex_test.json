@@ -2,7 +2,7 @@
   "id": "complex_regex_patterns",
   "name": "复杂正则模式测试",
   "description": "测试复杂的正则表达式模式匹配",
-  "enabled": true,
+  "enabled": false,
   "priority": 60,
   "conditions": {
     "type": "and",
@@ -42,10 +42,6 @@
     {
       "type": "transform",
       "config": {
-        "add_fields": {
-          "contact_info_validated": "true",
-          "validation_timestamp": "{{.timestamp}}"
-        },
         "add_tags": {
           "regex_validation": "passed",
           "test_type": "complex_regex"

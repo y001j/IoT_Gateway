@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +68,10 @@ type RuleEngineService struct {
 	
 	// 高性能聚合处理器
 	optimizedAggregateHandler OptimizedAggregateHandler
+	
+	// 规则索引系统
+	ruleIndex *Index
+	useRuleIndex bool
 }
 
 // GetRuleManager 获取规则管理器实例
@@ -111,6 +118,7 @@ func NewRuleEngineService() *RuleEngineService {
 		// 启用新的优化组件
 		useShardedAggregates: true,
 		useOptimizedPool:     true,
+		useRuleIndex:         true, // 启用规则索引系统
 	}
 	
 	// 初始化监控器
@@ -118,6 +126,9 @@ func NewRuleEngineService() *RuleEngineService {
 	
 	// 初始化分片聚合状态管理器
 	service.shardedAggregates = NewShardedAggregateStates(16) // 16个分片
+	
+	// 初始化规则索引
+	service.ruleIndex = NewIndex()
 	
 	return service
 }
@@ -311,6 +322,11 @@ func (s *RuleEngineService) Init(cfg any) error {
 	// 创建规则管理器
 	s.manager = NewManager(s.config.RulesDir)
 	s.evaluator = NewEvaluator()
+	
+	// 如果启用了规则索引，重新构建索引
+	if s.useRuleIndex && s.ruleIndex != nil {
+		s.rebuildRuleIndex()
+	}
 
 	log.Info().
 		Str("rules_dir", s.config.RulesDir).
@@ -341,6 +357,12 @@ func (s *RuleEngineService) Start(ctx context.Context) error {
 	if err := s.loadInlineRules(); err != nil {
 		log.Error().Err(err).Msg("加载内联规则失败")
 		return fmt.Errorf("加载内联规则失败: %w", err)
+	}
+	
+	// 构建规则索引
+	if s.useRuleIndex && s.ruleIndex != nil {
+		s.rebuildRuleIndex()
+		log.Info().Msg("🔍 规则索引系统已启用")
 	}
 
 	// 获取NATS连接
@@ -376,7 +398,13 @@ func (s *RuleEngineService) Start(ctx context.Context) error {
 	// 注册动作处理器
 	
 	// 注册内建的动作处理器
-	s.RegisterActionHandler("alert", &BuiltinAlertHandler{natsConn: s.bus})
+	builtinAlertHandler := &BuiltinAlertHandler{
+		natsConn:    s.bus,
+		throttleMap: make(map[string]time.Time),
+	}
+	// 启动清理协程
+	go builtinAlertHandler.startCleanupRoutine()
+	s.RegisterActionHandler("alert", builtinAlertHandler)
 	
 	// Transform和Forward处理器需要在外部注册，以避免循环导入
 	// 这些处理器应该在main函数或runtime中注册
@@ -536,14 +564,27 @@ func (s *RuleEngineService) handleDataPoint(msg *nats.Msg) {
 		Interface("value", point.Value).
 		Msg("开始处理数据点")
 
-	// 获取启用的规则
-	rules := s.manager.GetEnabledRules()
+	// 获取候选规则（使用索引优化）
+	var rules []*Rule
+	if s.useRuleIndex && s.ruleIndex != nil {
+		// 使用规则索引获取候选规则
+		rules = s.ruleIndex.Match(point)
+		log.Debug().Int("indexed_rules", len(rules)).Msg("🔍 使用规则索引获取候选规则")
+	} else {
+		// 回退到获取所有启用的规则
+		rules = s.manager.GetEnabledRules()
+		log.Debug().Int("all_rules", len(rules)).Msg("📝 使用所有启用规则")
+	}
+	
 	if len(rules) == 0 {
-		log.Warn().Msg("⚠️ 没有启用的规则")
+		log.Warn().Msg("⚠️ 没有匹配的规则")
 		return
 	}
 
-	log.Info().Int("rules_count", len(rules)).Msg("🔢 开始评估规则")
+	log.Info().
+		Int("rules_count", len(rules)).
+		Bool("use_index", s.useRuleIndex && s.ruleIndex != nil).
+		Msg("🔢 开始评估规则")
 
 	// 并行评估规则
 	successCount := 0
@@ -1525,6 +1566,11 @@ func (s *RuleEngineService) loadInlineRules() error {
 			log.Info().
 				Str("rule_id", rule.ID).
 				Msg("内联规则加载成功")
+			
+			// 更新规则索引
+			if s.useRuleIndex && s.ruleIndex != nil {
+				s.updateRuleIndex(rule, "add")
+			}
 		}
 	}
 
@@ -1554,6 +1600,16 @@ func (s *RuleEngineService) watchRuleChanges() {
 				Str("event_type", event.Type).
 				Str("rule_id", ruleID).
 				Msg("规则变化事件")
+			
+			// 更新规则索引
+			if event.Rule != nil {
+				switch event.Type {
+				case "created", "updated":
+					s.updateRuleIndex(event.Rule, "update")
+				case "deleted":
+					s.updateRuleIndex(event.Rule, "remove")
+				}
+			}
 		}
 	}
 }
@@ -1674,9 +1730,11 @@ func (s *RuleEngineService) GetMonitoringJSON() ([]byte, error) {
 	return s.monitor.ToJSON()
 }
 
-// BuiltinAlertHandler 内建告警处理器
+// BuiltinAlertHandler 内建告警处理器 - 增强版
 type BuiltinAlertHandler struct {
-	natsConn *nats.Conn
+	natsConn    *nats.Conn
+	throttleMap map[string]time.Time  // 节流控制
+	mu          sync.RWMutex          // 并发安全
 }
 
 // Name 返回处理器名称
@@ -1684,8 +1742,17 @@ func (h *BuiltinAlertHandler) Name() string {
 	return "BuiltinAlertHandler"
 }
 
-// Execute 执行告警动作
+// InitializeForTesting 为测试初始化处理器
+func (h *BuiltinAlertHandler) InitializeForTesting() {
+	if h.throttleMap == nil {
+		h.throttleMap = make(map[string]time.Time)
+	}
+}
+
+// Execute 执行告警动作 - 增强版
 func (h *BuiltinAlertHandler) Execute(ctx context.Context, point model.Point, rule *Rule, config map[string]interface{}) (*ActionResult, error) {
+	start := time.Now()
+	
 	// 解析告警配置
 	level, ok := config["level"].(string)
 	if !ok {
@@ -1697,9 +1764,17 @@ func (h *BuiltinAlertHandler) Execute(ctx context.Context, point model.Point, ru
 		message = "触发告警"
 	}
 	
-	// 创建安全的Tags副本 - 使用GetTagsCopy()获取SafeTags
-	alertTags := point.GetTagsCopy()
-
+	// 解析节流配置
+	var throttleDuration time.Duration
+	if throttleStr, ok := config["throttle"].(string); ok {
+		if duration, err := time.ParseDuration(throttleStr); err == nil {
+			throttleDuration = duration
+		}
+	}
+	
+	// 处理消息模板
+	message = h.parseMessageTemplate(message, point, rule)
+	
 	// 创建告警消息
 	alert := &Alert{
 		ID:        generateAlertID(),
@@ -1711,29 +1786,592 @@ func (h *BuiltinAlertHandler) Execute(ctx context.Context, point model.Point, ru
 		Key:       point.Key,
 		Value:     point.Value,
 		Timestamp: time.Now(),
-		Tags:      alertTags,
+		Tags:      point.GetTagsCopy(),
 	}
 	
+	// 检查节流
+	if throttleDuration > 0 && h.shouldThrottle(alert, throttleDuration) {
+		return &ActionResult{
+			Type:     "alert",
+			Success:  true,
+			Error:    "告警被节流跳过",
+			Duration: time.Since(start),
+			Output:   map[string]interface{}{"throttled": true},
+		}, nil
+	}
+	
+	// 记录节流时间
+	if throttleDuration > 0 {
+		h.recordThrottle(alert)
+	}
+	
+	// 发送告警到多个通道
+	results := h.sendToChannels(ctx, alert, config)
+	
 	// 发布到NATS
-	if h.natsConn != nil {
-		data, err := json.Marshal(alert)
-		if err == nil {
-			// 只发布到一个主题以避免重复
-			subject := "iot.alerts.triggered"
-			if err := h.natsConn.Publish(subject, data); err != nil {
-				log.Error().Err(err).Str("subject", subject).Msg("发布告警到NATS失败")
-			} else {
-				log.Info().Str("alert_id", alert.ID).Str("subject", subject).Str("level", level).Msg("告警发布到NATS成功")
-			}
+	h.publishToNATS(alert, level)
+	
+	// 统计结果
+	successCount := 0
+	var errors []string
+	for channel, result := range results {
+		if result.Success {
+			successCount++
+		} else {
+			errors = append(errors, fmt.Sprintf("%s: %s", channel, result.Error))
 		}
+	}
+	
+	success := successCount > 0 || len(results) == 0 // 如果没有配置通道，默认成功
+	errorMsg := ""
+	if len(errors) > 0 {
+		errorMsg = strings.Join(errors, "; ")
 	}
 	
 	return &ActionResult{
 		Type:     "alert",
-		Success:  true,
-		Duration: 0,
-		Output:   "告警发送成功",
+		Success:  success,
+		Error:    errorMsg,
+		Duration: time.Since(start),
+		Output: map[string]interface{}{
+			"alert_id":       alert.ID,
+			"channels_sent":  successCount,
+			"channels_total": len(results),
+			"results":        results,
+			"message":        alert.Message,
+			"level":          alert.Level,
+			"device_id":      alert.DeviceID,
+			"key":            alert.Key,
+			"value":          alert.Value,
+		},
 	}, nil
+}
+
+// parseMessageTemplate 解析消息模板，支持简单的占位符替换
+func (h *BuiltinAlertHandler) parseMessageTemplate(templateStr string, point model.Point, rule *Rule) string {
+	if templateStr == "" {
+		return templateStr
+	}
+	
+	message := templateStr
+	
+	// 替换基本变量
+	replacements := map[string]string{
+		"{{.RuleName}}":  rule.Name,
+		"{{.RuleID}}":    rule.ID,
+		"{{.DeviceID}}":  point.DeviceID,
+		"{{.Key}}":       point.Key,
+		"{{.Value}}":     fmt.Sprintf("%v", point.Value),
+		"{{.Type}}":      string(point.Type),
+		"{{.Timestamp}}": point.Timestamp.Format("2006-01-02 15:04:05"),
+	}
+	
+	for placeholder, value := range replacements {
+		message = strings.ReplaceAll(message, placeholder, value)
+	}
+	
+	// 处理复杂值的嵌套路径 (如 {{.value.speed}}, {{.value.magnitude}})
+	message = h.replaceNestedValuePaths(message, point.Value)
+	
+	// 替换标签
+	pointTags := point.GetTagsSafe()
+	for key, value := range pointTags {
+		placeholder := fmt.Sprintf("{{.Tags.%s}}", key)
+		message = strings.ReplaceAll(message, placeholder, value)
+	}
+	
+	return message
+}
+
+// replaceNestedValuePaths 处理嵌套值路径的替换，支持{{.value.field}}格式
+func (h *BuiltinAlertHandler) replaceNestedValuePaths(message string, value interface{}) string {
+	// 使用正则表达式匹配 {{.value.xxx}} 模式
+	re := regexp.MustCompile(`\{\{\.value\.([^}]+)\}\}`)
+	matches := re.FindAllStringSubmatch(message, -1)
+	
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		
+		placeholder := match[0] // 完整的占位符，如 {{.value.speed}}
+		fieldPath := match[1]   // 字段路径，如 speed
+		
+		// 尝试从value中提取字段值
+		fieldValue := h.extractFieldFromValue(value, fieldPath)
+		if fieldValue != nil {
+			message = strings.ReplaceAll(message, placeholder, fmt.Sprintf("%v", fieldValue))
+		}
+	}
+	
+	return message
+}
+
+// extractFieldFromValue 从复杂值中提取指定字段
+func (h *BuiltinAlertHandler) extractFieldFromValue(value interface{}, fieldPath string) interface{} {
+	if value == nil {
+		return nil
+	}
+	
+	// 尝试将value转换为map[string]interface{}
+	if valueMap, ok := value.(map[string]interface{}); ok {
+		if fieldValue, exists := valueMap[fieldPath]; exists {
+			return fieldValue
+		}
+		// 尝试不区分大小写的匹配
+		for key, val := range valueMap {
+			if strings.EqualFold(key, fieldPath) {
+				return val
+			}
+		}
+	}
+	
+	// 尝试JSON解析
+	// 情况1: value是JSON字符串
+	if jsonStr, ok := value.(string); ok {
+		var valueMap map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &valueMap); err == nil {
+			if fieldValue, exists := valueMap[fieldPath]; exists {
+				return fieldValue
+			}
+			// 尝试不区分大小写的匹配
+			for key, val := range valueMap {
+				if strings.EqualFold(key, fieldPath) {
+					return val
+				}
+			}
+		}
+	}
+	
+	// 情况2: value是其他类型，尝试通过Marshal/Unmarshal处理
+	if valueBytes, err := json.Marshal(value); err == nil {
+		var valueMap map[string]interface{}
+		if err := json.Unmarshal(valueBytes, &valueMap); err == nil {
+			if fieldValue, exists := valueMap[fieldPath]; exists {
+				return fieldValue
+			}
+			// 尝试不区分大小写的匹配
+			for key, val := range valueMap {
+				if strings.EqualFold(key, fieldPath) {
+					return val
+				}
+			}
+		}
+	}
+	
+	// 使用反射处理结构体字段
+	return h.extractFieldUsingReflection(value, fieldPath)
+}
+
+// extractFieldUsingReflection 使用反射从结构体中提取字段
+func (h *BuiltinAlertHandler) extractFieldUsingReflection(value interface{}, fieldPath string) interface{} {
+	if value == nil {
+		return nil
+	}
+	
+	v := reflect.ValueOf(value)
+	
+	// 如果是指针，解引用
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	
+	// 只处理结构体
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+	
+	// 查找字段（不区分大小写）
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		fieldName := field.Name
+		
+		// 检查字段名（不区分大小写）
+		if strings.EqualFold(fieldName, fieldPath) {
+			fieldValue := v.Field(i)
+			if fieldValue.CanInterface() {
+				return fieldValue.Interface()
+			}
+		}
+		
+		// 检查JSON标签
+		if jsonTag := field.Tag.Get("json"); jsonTag != "" {
+			jsonName := strings.Split(jsonTag, ",")[0]
+			if strings.EqualFold(jsonName, fieldPath) {
+				fieldValue := v.Field(i)
+				if fieldValue.CanInterface() {
+					return fieldValue.Interface()
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// shouldThrottle 检查是否应该节流
+func (h *BuiltinAlertHandler) shouldThrottle(alert *Alert, throttleDuration time.Duration) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	
+	throttleKey := fmt.Sprintf("%s:%s:%s", alert.RuleID, alert.DeviceID, alert.Key)
+	
+	if lastTime, exists := h.throttleMap[throttleKey]; exists {
+		return time.Since(lastTime) < throttleDuration
+	}
+	
+	return false
+}
+
+// recordThrottle 记录节流时间
+func (h *BuiltinAlertHandler) recordThrottle(alert *Alert) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	
+	throttleKey := fmt.Sprintf("%s:%s:%s", alert.RuleID, alert.DeviceID, alert.Key)
+	h.throttleMap[throttleKey] = time.Now()
+}
+
+// sendToChannels 发送到多个通道
+func (h *BuiltinAlertHandler) sendToChannels(ctx context.Context, alert *Alert, config map[string]interface{}) map[string]ChannelResult {
+	results := make(map[string]ChannelResult)
+	
+	// 解析通道配置
+	channels := h.parseChannelConfig(config)
+	
+	for i, channel := range channels {
+		channelKey := fmt.Sprintf("%s_%d", channel.Type, i)
+		start := time.Now()
+		var err error
+		
+		switch channel.Type {
+		case "console":
+			err = h.sendConsoleAlert(alert)
+		case "webhook":
+			err = h.sendWebhookAlert(ctx, alert, channel.Config)
+		case "nats":
+			err = h.sendNATSAlert(alert, channel.Config)
+		case "email":
+			err = h.sendEmailAlert(alert, channel.Config)
+		case "sms":
+			err = h.sendSMSAlert(alert, channel.Config)
+		default:
+			err = fmt.Errorf("不支持的通知渠道: %s", channel.Type)
+		}
+		
+		results[channelKey] = ChannelResult{
+			Success:  err == nil,
+			Error:    func() string { if err != nil { return err.Error() }; return "" }(),
+			Duration: time.Since(start),
+		}
+	}
+	
+	return results
+}
+
+// parseChannelConfig 解析通道配置
+func (h *BuiltinAlertHandler) parseChannelConfig(config map[string]interface{}) []ChannelConfig {
+	channels := []ChannelConfig{}
+	
+	if channelsData, ok := config["channels"]; ok {
+		channelsBytes, _ := json.Marshal(channelsData)
+		json.Unmarshal(channelsBytes, &channels)
+	}
+	
+	// 如果没有配置通道，默认添加console通道
+	if len(channels) == 0 {
+		channels = []ChannelConfig{
+			{Type: "console", Config: map[string]interface{}{}},
+		}
+	}
+	
+	return channels
+}
+
+// publishToNATS 发布到NATS
+func (h *BuiltinAlertHandler) publishToNATS(alert *Alert, level string) {
+	if h.natsConn != nil {
+		data, err := json.Marshal(alert)
+		if err == nil {
+			subjects := []string{
+				"iot.alerts.triggered",
+				fmt.Sprintf("iot.alerts.triggered.%s", level),
+			}
+			
+			for _, subject := range subjects {
+				if err := h.natsConn.Publish(subject, data); err != nil {
+					log.Error().Err(err).Str("subject", subject).Msg("发布告警到NATS失败")
+				} else {
+					log.Info().Str("alert_id", alert.ID).Str("subject", subject).Str("level", level).Msg("告警发布到NATS成功")
+				}
+			}
+		}
+	}
+}
+
+// sendConsoleAlert 发送控制台告警
+func (h *BuiltinAlertHandler) sendConsoleAlert(alert *Alert) error {
+	switch alert.Level {
+	case "critical", "error":
+		log.Error().
+			Str("alert_id", alert.ID).
+			Str("rule_id", alert.RuleID).
+			Str("rule_name", alert.RuleName).
+			Str("device_id", alert.DeviceID).
+			Str("key", alert.Key).
+			Interface("value", alert.Value).
+			Interface("tags", alert.Tags).
+			Msg(alert.Message)
+	case "warning":
+		log.Warn().
+			Str("alert_id", alert.ID).
+			Str("rule_id", alert.RuleID).
+			Str("rule_name", alert.RuleName).
+			Str("device_id", alert.DeviceID).
+			Str("key", alert.Key).
+			Interface("value", alert.Value).
+			Interface("tags", alert.Tags).
+			Msg(alert.Message)
+	default:
+		log.Info().
+			Str("alert_id", alert.ID).
+			Str("rule_id", alert.RuleID).
+			Str("rule_name", alert.RuleName).
+			Str("device_id", alert.DeviceID).
+			Str("key", alert.Key).
+			Interface("value", alert.Value).
+			Interface("tags", alert.Tags).
+			Msg(alert.Message)
+	}
+	
+	return nil
+}
+
+// sendWebhookAlert 发送Webhook告警
+func (h *BuiltinAlertHandler) sendWebhookAlert(ctx context.Context, alert *Alert, config map[string]interface{}) error {
+	url, ok := config["url"].(string)
+	if !ok || url == "" {
+		return fmt.Errorf("webhook URL未配置")
+	}
+	
+	payload := map[string]interface{}{
+		"alert_id":  alert.ID,
+		"rule_id":   alert.RuleID,
+		"rule_name": alert.RuleName,
+		"level":     alert.Level,
+		"message":   alert.Message,
+		"device_id": alert.DeviceID,
+		"key":       alert.Key,
+		"value":     alert.Value,
+		"tags":      alert.Tags,
+		"timestamp": alert.Timestamp.Unix(),
+	}
+	
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化数据失败: %w", err)
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %w", err)
+	}
+	
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "IoT-Gateway-Rules-Engine")
+	
+	if token, ok := config["token"].(string); ok && token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("发送请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("Webhook响应错误: %d", resp.StatusCode)
+	}
+	
+	return nil
+}
+
+// sendNATSAlert 发送NATS告警
+func (h *BuiltinAlertHandler) sendNATSAlert(alert *Alert, config map[string]interface{}) error {
+	subject, ok := config["subject"].(string)
+	if !ok || subject == "" {
+		subject = "alerts.default"
+	}
+	
+	data, err := json.Marshal(alert)
+	if err != nil {
+		return fmt.Errorf("序列化NATS消息失败: %w", err)
+	}
+	
+	if h.natsConn != nil {
+		return h.natsConn.Publish(subject, data)
+	}
+	
+	return fmt.Errorf("NATS连接未初始化")
+}
+
+// sendEmailAlert 发送邮件告警 (企业功能 - 占位符实现)
+func (h *BuiltinAlertHandler) sendEmailAlert(alert *Alert, config map[string]interface{}) error {
+	// TODO: 实现邮件发送功能
+	// 预期配置参数:
+	// - smtp_host: SMTP服务器地址
+	// - smtp_port: SMTP端口 (25/465/587)
+	// - username: 邮箱用户名
+	// - password: 邮箱密码或应用密码
+	// - from: 发件人邮箱
+	// - to: 收件人邮箱列表
+	// - subject: 邮件主题模板
+	// - template: 邮件内容模板 (支持HTML)
+	
+	log.Info().
+		Str("alert_id", alert.ID).
+		Str("type", "email").
+		Interface("config", config).
+		Msg("邮件告警发送 (占位符实现 - 待开发)")
+	
+	// 返回成功以避免影响其他通道
+	// 在实际实现时，应该返回真实的错误
+	return nil
+}
+
+// sendSMSAlert 发送短信告警 (企业功能 - 占位符实现)
+func (h *BuiltinAlertHandler) sendSMSAlert(alert *Alert, config map[string]interface{}) error {
+	// TODO: 实现短信发送功能
+	// 预期配置参数:
+	// - provider: 短信服务商 (aliyun/tencent/twilio)
+	// - access_key: 访问密钥
+	// - secret_key: 密钥
+	// - sign_name: 短信签名
+	// - template_code: 短信模板代码
+	// - phone_numbers: 接收手机号列表
+	// - template_params: 模板参数
+	
+	log.Info().
+		Str("alert_id", alert.ID).
+		Str("type", "sms").
+		Interface("config", config).
+		Msg("短信告警发送 (占位符实现 - 待开发)")
+	
+	// 返回成功以避免影响其他通道
+	// 在实际实现时，应该返回真实的错误
+	return nil
+}
+
+// sendToChannelsWithRetry 带重试机制的多通道发送 (企业功能 - 占位符实现)
+func (h *BuiltinAlertHandler) sendToChannelsWithRetry(ctx context.Context, alert *Alert, config map[string]interface{}) map[string]ChannelResult {
+	// TODO: 实现重试机制
+	// 预期功能:
+	// - 指数退避重试策略
+	// - 每个通道独立重试计数
+	// - 重试间隔可配置
+	// - 最大重试次数限制
+	// - 失败时的故障转移通道
+	// - 重试状态跟踪和日志
+	
+	// 目前回退到标准发送方式
+	// 当需要重试功能时，可以在Execute方法中调用此方法
+	log.Debug().
+		Str("alert_id", alert.ID).
+		Msg("重试机制发送 (占位符实现 - 使用标准发送)")
+	
+	return h.sendToChannels(ctx, alert, config)
+}
+
+// enableChannelFailover 启用通道故障转移 (企业功能 - 占位符实现)
+func (h *BuiltinAlertHandler) enableChannelFailover(config map[string]interface{}) []ChannelConfig {
+	// TODO: 实现故障转移机制
+	// 预期功能:
+	// - 主通道失败时自动切换到备用通道
+	// - 通道健康检查和监控
+	// - 故障转移策略配置 (立即/延迟/条件)
+	// - 故障恢复后的回切机制
+	// - 故障转移事件记录和告警
+	
+	// 目前返回标准通道配置
+	log.Debug().Msg("通道故障转移 (占位符实现 - 使用标准通道)")
+	
+	return h.parseChannelConfig(config)
+}
+
+// trackDeliveryStatus 跟踪投递状态 (企业功能 - 占位符实现)
+func (h *BuiltinAlertHandler) trackDeliveryStatus(alert *Alert, channel string, result ChannelResult) {
+	// TODO: 实现投递状态跟踪
+	// 预期功能:
+	// - 投递状态持久化存储
+	// - 投递成功率统计
+	// - 通道性能监控
+	// - 投递失败原因分析
+	// - 投递历史查询接口
+	// - 投递状态回调通知
+	
+	log.Debug().
+		Str("alert_id", alert.ID).
+		Str("channel", channel).
+		Bool("success", result.Success).
+		Dur("duration", result.Duration).
+		Msg("投递状态跟踪 (占位符实现 - 待开发)")
+}
+
+// validateChannelConfig 验证通道配置 (企业功能增强 - 占位符实现)
+func (h *BuiltinAlertHandler) validateChannelConfig(channels []ChannelConfig) error {
+	// TODO: 实现企业级配置验证
+	// 预期功能:
+	// - 邮件SMTP连接测试
+	// - 短信服务商API验证
+	// - Webhook端点可达性检查
+	// - 配置参数完整性验证
+	// - 安全配置检查 (SSL/TLS)
+	// - 配置模板语法验证
+	
+	for _, channel := range channels {
+		log.Debug().
+			Str("type", channel.Type).
+			Msg("通道配置验证 (占位符实现 - 跳过)")
+	}
+	
+	return nil
+}
+
+// startCleanupRoutine 启动清理协程
+func (h *BuiltinAlertHandler) startCleanupRoutine() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	
+	for range ticker.C {
+		h.mu.Lock()
+		now := time.Now()
+		for key, lastTime := range h.throttleMap {
+			// 清理超过1小时的记录
+			if now.Sub(lastTime) > time.Hour {
+				delete(h.throttleMap, key)
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
+// ChannelConfig 通知渠道配置
+type ChannelConfig struct {
+	Type   string                 `json:"type"`
+	Config map[string]interface{} `json:"config"`
+}
+
+// ChannelResult 渠道发送结果
+type ChannelResult struct {
+	Success  bool          `json:"success"`
+	Error    string        `json:"error,omitempty"`
+	Duration time.Duration `json:"duration"`
 }
 
 // generateAlertID 生成告警ID
@@ -1741,6 +2379,74 @@ func generateAlertID() string {
 	return fmt.Sprintf("alert_%d", time.Now().UnixNano())
 }
 
+
+// rebuildRuleIndex 重新构建规则索引
+func (s *RuleEngineService) rebuildRuleIndex() {
+	if s.ruleIndex == nil {
+		log.Warn().Msg("规则索引未初始化，跳过重建")
+		return
+	}
+	
+	start := time.Now()
+	
+	// 清空现有索引
+	s.ruleIndex.Clear()
+	
+	// 获取所有启用的规则
+	rules := s.manager.GetEnabledRules()
+	
+	// 添加规则到索引
+	for _, rule := range rules {
+		s.ruleIndex.AddRule(rule)
+	}
+	
+	duration := time.Since(start)
+	stats := s.ruleIndex.GetStats()
+	
+	log.Info().
+		Int("rules_indexed", len(rules)).
+		Dur("build_time", duration).
+		Interface("index_stats", stats).
+		Msg("🔍 规则索引重建完成")
+}
+
+// updateRuleIndex 更新规则索引（当规则变化时调用）
+func (s *RuleEngineService) updateRuleIndex(rule *Rule, operation string) {
+	if !s.useRuleIndex || s.ruleIndex == nil {
+		return
+	}
+	
+	switch operation {
+	case "add", "update":
+		s.ruleIndex.AddRule(rule)
+		log.Debug().
+			Str("rule_id", rule.ID).
+			Str("operation", operation).
+			Msg("更新规则索引")
+	case "remove":
+		s.ruleIndex.RemoveRule(rule)
+		log.Debug().
+			Str("rule_id", rule.ID).
+			Str("operation", operation).
+			Msg("从规则索引中移除")
+	}
+}
+
+// GetRuleIndexStats 获取规则索引统计信息
+func (s *RuleEngineService) GetRuleIndexStats() map[string]interface{} {
+	if !s.useRuleIndex || s.ruleIndex == nil {
+		return map[string]interface{}{
+			"enabled": false,
+			"reason": "规则索引未启用或未初始化",
+		}
+	}
+	
+	stats := s.ruleIndex.GetStats()
+	stats["enabled"] = true
+	stats["use_rule_index"] = s.useRuleIndex
+	
+	return stats
+}
 
 // publishRuleEvent 发布规则执行事件到NATS
 func (s *RuleEngineService) publishRuleEvent(eventType string, rule *Rule, point model.Point, eventData map[string]interface{}) {

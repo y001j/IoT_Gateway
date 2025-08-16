@@ -4,7 +4,7 @@
   "description": "分析GPS位置数据并计算移动距离",
   "enabled": true,
   "priority": 90,
-  "version": 8,
+  "version": 9,
   "conditions": {
     "type": "simple",
     "field": "key",
@@ -33,5 +33,5 @@
     }
   ],
   "created_at": "2025-08-14T21:46:15.558499+08:00",
-  "updated_at": "2025-08-15T01:54:19.9165472+08:00"
+  "updated_at": "2025-08-15T19:50:27.3206786+08:00"
 }

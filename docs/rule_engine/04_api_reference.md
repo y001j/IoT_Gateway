@@ -4,7 +4,7 @@
 
 ## 基础信息
 
-- **Base URL**: `http://localhost:8081/api`
+- **Base URL**: `http://localhost:8081/api/v1`
 - **Content-Type**: `application/json`
 - **认证**: 根据配置可能需要API密钥或身份认证
 
@@ -60,7 +60,7 @@ GET /api/rules
 获取特定规则的完整信息。
 
 ```http
-GET /api/rules/{rule_id}
+GET /api/v1/rules/{rule_id}
 ```
 
 **路径参数**:
@@ -109,7 +109,7 @@ GET /api/rules/{rule_id}
 创建新的规则。
 
 ```http
-POST /api/rules
+POST /api/v1/rules
 ```
 
 **请求体示例**:
@@ -164,7 +164,7 @@ POST /api/rules
 更新现有规则。
 
 ```http
-PUT /api/rules/{rule_id}
+PUT /api/v1/rules/{rule_id}
 ```
 
 **路径参数**:
@@ -190,7 +190,7 @@ PUT /api/rules/{rule_id}
 删除指定规则。
 
 ```http
-DELETE /api/rules/{rule_id}
+DELETE /api/v1/rules/{rule_id}
 ```
 
 **路径参数**:
@@ -209,7 +209,7 @@ DELETE /api/rules/{rule_id}
 切换规则的启用状态。
 
 ```http
-PATCH /api/rules/{rule_id}/toggle
+PATCH /api/v1/rules/{rule_id}/toggle
 ```
 
 **路径参数**:
@@ -241,7 +241,7 @@ PATCH /api/rules/{rule_id}/toggle
 获取规则引擎整体健康状态。
 
 ```http
-GET /api/rules/health
+GET /api/v1/rules/health
 ```
 
 **响应示例**:
@@ -273,7 +273,7 @@ GET /api/rules/health
 获取规则执行的统计信息。
 
 ```http
-GET /api/rules/metrics
+GET /api/v1/rules/metrics
 ```
 
 **查询参数**:
@@ -334,7 +334,7 @@ GET /api/rules/metrics
 获取规则执行过程中的错误信息。
 
 ```http
-GET /api/rules/errors
+GET /api/v1/rules/errors
 ```
 
 **查询参数**:
@@ -393,7 +393,7 @@ GET /api/rules/errors
 获取聚合动作的状态信息。
 
 ```http
-GET /api/rules/aggregates
+GET /api/v1/rules/aggregates
 ```
 
 **查询参数**:
@@ -442,7 +442,7 @@ GET /api/rules/aggregates
 测试规则条件和动作，不实际执行。
 
 ```http
-POST /api/rules/test
+POST /api/v1/rules/test
 ```
 
 **请求体**:
@@ -507,7 +507,7 @@ POST /api/rules/test
 验证规则配置的正确性。
 
 ```http
-POST /api/rules/validate
+POST /api/v1/rules/validate
 ```
 
 **请求体**:
@@ -570,7 +570,7 @@ POST /api/rules/validate
 重新加载指定文件或所有规则文件。
 
 ```http
-POST /api/rules/reload
+POST /api/v1/rules/reload
 ```
 
 **请求体**:
@@ -604,7 +604,7 @@ POST /api/rules/reload
 清理过期或特定的聚合状态。
 
 ```http
-POST /api/rules/aggregates/cleanup
+POST /api/v1/rules/aggregates/cleanup
 ```
 
 **请求体**:
@@ -637,7 +637,7 @@ POST /api/rules/aggregates/cleanup
 获取规则引擎的当前配置。
 
 ```http
-GET /api/rules/config
+GET /api/v1/rules/config
 ```
 
 **响应示例**:
@@ -673,7 +673,7 @@ GET /api/rules/config
 更新规则引擎配置（需要重启）。
 
 ```http
-PUT /api/rules/config
+PUT /api/v1/rules/config
 ```
 
 **请求体**:
@@ -743,13 +743,13 @@ PUT /api/rules/config
 
 ```bash
 # 获取系统健康状态
-curl http://localhost:8081/api/rules/health
+curl http://localhost:8081/api/v1/rules/health
 
 # 获取最近1小时的执行统计
-curl "http://localhost:8081/api/rules/metrics?time_range=1h"
+curl "http://localhost:8081/api/v1/rules/metrics?time_range=1h"
 
 # 获取最近错误信息
-curl "http://localhost:8081/api/rules/errors?limit=10&error_level=error"
+curl "http://localhost:8081/api/v1/rules/errors?limit=10&error_level=error"
 ```
 
 ### 规则管理操作
@@ -764,7 +764,7 @@ curl -X POST http://localhost:8081/api/rules \
   -d @new_rule.json
 
 # 禁用特定规则
-curl -X PATCH http://localhost:8081/api/rules/temp_monitor/toggle \
+curl -X PATCH http://localhost:8081/api/v1/rules/temp_monitor/toggle \
   -H "Content-Type: application/json" \
   -d '{"enabled": false}'
 ```
@@ -773,12 +773,12 @@ curl -X PATCH http://localhost:8081/api/rules/temp_monitor/toggle \
 
 ```bash
 # 验证规则配置
-curl -X POST http://localhost:8081/api/rules/validate \
+curl -X POST http://localhost:8081/api/v1/rules/validate \
   -H "Content-Type: application/json" \
   -d @test_rule.json
 
 # 测试规则执行
-curl -X POST http://localhost:8081/api/rules/test \
+curl -X POST http://localhost:8081/api/v1/rules/test \
   -H "Content-Type: application/json" \
   -d @test_data.json
 ```
@@ -945,7 +945,7 @@ GET /api/rules
 #### 2. 获取规则详情
 
 ```http
-GET /api/rules/{id}
+GET /api/v1/rules/{id}
 ```
 
 响应：
@@ -980,26 +980,26 @@ POST /api/rules
 #### 4. 更新规则
 
 ```http
-PUT /api/rules/{id}
+PUT /api/v1/rules/{id}
 ```
 
 #### 5. 删除规则
 
 ```http
-DELETE /api/rules/{id}
+DELETE /api/v1/rules/{id}
 ```
 
 #### 6. 启用/禁用规则
 
 ```http
-POST /api/rules/{id}/enable
-POST /api/rules/{id}/disable
+POST /api/v1/rules/{id}/enable
+POST /api/v1/rules/{id}/disable
 ```
 
 ### 规则验证
 
 ```http
-POST /api/rules/validate
+POST /api/v1/rules/validate
 ```
 
 请求体：
@@ -1021,7 +1021,7 @@ POST /api/rules/validate
 ### 规则测试
 
 ```http
-POST /api/rules/test
+POST /api/v1/rules/test
 ```
 
 请求体：

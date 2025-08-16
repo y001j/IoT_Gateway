@@ -2,7 +2,7 @@
   "id": "gps_location_test",
   "name": "GPS位置数据测试",
   "description": "测试GPS复合数据的条件匹配和字段访问",
-  "enabled": true,
+  "enabled": false,
   "priority": 10,
   "data_type": "location",
   "conditions": {

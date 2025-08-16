@@ -2,7 +2,7 @@
   "id": "vector_expression",
   "name": "向量表达式函数测试",
   "description": "使用表达式引擎中的向量函数进行计算",
-  "enabled": true,
+  "enabled": false,
   "priority": 40,
   "data_type": "vector3d",
   "conditions": {

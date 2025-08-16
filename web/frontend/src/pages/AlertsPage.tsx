@@ -156,6 +156,8 @@ export const AlertsPage: React.FC = () => {
   const [createAlertModalVisible, setCreateAlertModalVisible] = useState(false);
   const [createRuleModalVisible, setCreateRuleModalVisible] = useState(false);
   const [createChannelModalVisible, setCreateChannelModalVisible] = useState(false);
+  const [alertDetailModalVisible, setAlertDetailModalVisible] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   
   // 表单
   const [createAlertForm] = Form.useForm();
@@ -357,6 +359,12 @@ export const AlertsPage: React.FC = () => {
     }
   };
 
+  // 显示告警详情
+  const handleShowAlertDetail = (alert: Alert) => {
+    setSelectedAlert(alert);
+    setAlertDetailModalVisible(true);
+  };
+
   // 告警表格列
   const alertColumns = [
     {
@@ -364,6 +372,15 @@ export const AlertsPage: React.FC = () => {
       dataIndex: 'title',
       key: 'title',
       ellipsis: true,
+      render: (title: string, record: Alert) => (
+        <Button
+          type="link"
+          style={{ padding: 0, height: 'auto', fontWeight: 'normal' }}
+          onClick={() => handleShowAlertDetail(record)}
+        >
+          {title}
+        </Button>
+      ),
     },
     {
       title: '级别',
@@ -1020,6 +1037,215 @@ export const AlertsPage: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 告警详情弹窗 */}
+      <Modal
+        title="告警详情"
+        open={alertDetailModalVisible}
+        onCancel={() => setAlertDetailModalVisible(false)}
+        width={700}
+        footer={[
+          <Button key="close" onClick={() => setAlertDetailModalVisible(false)}>
+            关闭
+          </Button>,
+          selectedAlert?.status === 'active' && (
+            <Button 
+              key="acknowledge" 
+              type="default"
+              icon={<CheckCircleOutlined />}
+              onClick={() => {
+                if (selectedAlert) {
+                  handleAcknowledgeAlert(selectedAlert.id);
+                  setAlertDetailModalVisible(false);
+                }
+              }}
+            >
+              确认告警
+            </Button>
+          ),
+          (selectedAlert?.status === 'active' || selectedAlert?.status === 'acknowledged') && (
+            <Button 
+              key="resolve" 
+              type="primary"
+              icon={<CloseCircleOutlined />}
+              onClick={() => {
+                if (selectedAlert) {
+                  handleResolveAlert(selectedAlert.id);
+                  setAlertDetailModalVisible(false);
+                }
+              }}
+            >
+              解决告警
+            </Button>
+          ),
+        ]}
+      >
+        {selectedAlert && (
+          <div>
+            {/* 基本信息 */}
+            <Card size="small" title="基本信息" style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Text strong>告警ID: </Text>
+                  <Text code>{selectedAlert.id}</Text>
+                </Col>
+                <Col span={12}>
+                  <Text strong>状态: </Text>
+                  <Tag 
+                    color={alertService.getAlertStatusColor(selectedAlert.status)}
+                    icon={
+                      selectedAlert.status === 'active' ? <ExclamationCircleOutlined /> :
+                      selectedAlert.status === 'acknowledged' ? <CheckCircleOutlined /> :
+                      <CloseCircleOutlined />
+                    }
+                  >
+                    {alertService.getAlertStatusText(selectedAlert.status)}
+                  </Tag>
+                </Col>
+              </Row>
+              <Row gutter={16} style={{ marginTop: 8 }}>
+                <Col span={12}>
+                  <Text strong>级别: </Text>
+                  <Tag color={alertService.getAlertLevelColor(selectedAlert.level)}>
+                    {alertService.getAlertLevelText(selectedAlert.level)}
+                  </Tag>
+                </Col>
+                <Col span={12}>
+                  <Text strong>来源: </Text>
+                  <Text>{selectedAlert.source}</Text>
+                </Col>
+              </Row>
+              {selectedAlert.rule_name && (
+                <Row gutter={16} style={{ marginTop: 8 }}>
+                  <Col span={24}>
+                    <Text strong>触发规则: </Text>
+                    <Text>{selectedAlert.rule_name}</Text>
+                  </Col>
+                </Row>
+              )}
+            </Card>
+
+            {/* 告警内容 */}
+            <Card size="small" title="告警内容" style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 12 }}>
+                <Text strong>标题: </Text>
+                <Text>{selectedAlert.title}</Text>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <Text strong>描述: </Text>
+                <div style={{ 
+                  marginTop: 4, 
+                  padding: 12, 
+                  backgroundColor: '#f5f5f5', 
+                  borderRadius: 4,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word'
+                }}>
+                  {selectedAlert.description}
+                </div>
+              </div>
+            </Card>
+
+            {/* 设备信息 */}
+            {(selectedAlert.device_id || selectedAlert.key || selectedAlert.value !== undefined) && (
+              <Card size="small" title="设备信息" style={{ marginBottom: 16 }}>
+                <Row gutter={16}>
+                  {selectedAlert.device_id && (
+                    <Col span={8}>
+                      <Text strong>设备ID: </Text>
+                      <Text code>{selectedAlert.device_id}</Text>
+                    </Col>
+                  )}
+                  {selectedAlert.key && (
+                    <Col span={8}>
+                      <Text strong>数据键: </Text>
+                      <Text code>{selectedAlert.key}</Text>
+                    </Col>
+                  )}
+                  {selectedAlert.value !== undefined && (
+                    <Col span={8}>
+                      <Text strong>触发值: </Text>
+                      <Text code>{JSON.stringify(selectedAlert.value)}</Text>
+                    </Col>
+                  )}
+                </Row>
+                {selectedAlert.tags && Object.keys(selectedAlert.tags).length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <Text strong>标签信息: </Text>
+                    <div style={{ marginTop: 4 }}>
+                      {Object.entries(selectedAlert.tags).map(([key, value]) => (
+                        <Tag key={key} style={{ marginBottom: 4 }}>
+                          {key}: {value}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {/* 时间信息 */}
+            <Card size="small" title="时间信息" style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Text strong>创建时间: </Text>
+                  <br />
+                  <Text>{new Date(selectedAlert.createdAt).toLocaleString('zh-CN')}</Text>
+                </Col>
+                <Col span={12}>
+                  <Text strong>更新时间: </Text>
+                  <br />
+                  <Text>{new Date(selectedAlert.updatedAt).toLocaleString('zh-CN')}</Text>
+                </Col>
+              </Row>
+              {selectedAlert.acknowledgedAt && (
+                <Row gutter={16} style={{ marginTop: 8 }}>
+                  <Col span={12}>
+                    <Text strong>确认时间: </Text>
+                    <br />
+                    <Text>{new Date(selectedAlert.acknowledgedAt).toLocaleString('zh-CN')}</Text>
+                  </Col>
+                  <Col span={12}>
+                    <Text strong>确认人: </Text>
+                    <br />
+                    <Text>{selectedAlert.acknowledgedBy || '未知'}</Text>
+                  </Col>
+                </Row>
+              )}
+              {selectedAlert.resolvedAt && (
+                <Row gutter={16} style={{ marginTop: 8 }}>
+                  <Col span={12}>
+                    <Text strong>解决时间: </Text>
+                    <br />
+                    <Text>{new Date(selectedAlert.resolvedAt).toLocaleString('zh-CN')}</Text>
+                  </Col>
+                  <Col span={12}>
+                    <Text strong>解决人: </Text>
+                    <br />
+                    <Text>{selectedAlert.resolvedBy || '未知'}</Text>
+                  </Col>
+                </Row>
+              )}
+            </Card>
+
+            {/* 附加数据 */}
+            {selectedAlert.data && Object.keys(selectedAlert.data).length > 0 && (
+              <Card size="small" title="附加数据">
+                <pre style={{ 
+                  backgroundColor: '#f5f5f5', 
+                  padding: 12, 
+                  borderRadius: 4,
+                  fontSize: '12px',
+                  overflow: 'auto',
+                  maxHeight: '200px'
+                }}>
+                  {JSON.stringify(selectedAlert.data, null, 2)}
+                </pre>
+              </Card>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

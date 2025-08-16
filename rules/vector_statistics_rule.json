@@ -4,7 +4,7 @@
   "description": "对向量数据进行统计分析",
   "enabled": true,
   "priority": 65,
-  "version": 8,
+  "version": 9,
   "conditions": {
     "type": "simple",
     "field": "key",
@@ -43,5 +43,5 @@
     }
   ],
   "created_at": "2025-08-14T21:46:15.5754084+08:00",
-  "updated_at": "2025-08-15T01:54:19.9316116+08:00"
+  "updated_at": "2025-08-15T19:50:27.3357118+08:00"
 }

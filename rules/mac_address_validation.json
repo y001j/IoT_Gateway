@@ -25,10 +25,6 @@
     {
       "type": "transform",
       "config": {
-        "add_fields": {
-          "mac_format": "valid",
-          "network_validated": "true"
-        },
         "add_tags": {
           "validation": "mac_valid",
           "network_check": "passed"

@@ -1,8 +1,12 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ command, mode }) => {
+  // 加载环境变量
+  const env = loadEnv(mode, process.cwd(), '')
+  
+  return {
   plugins: [react()],
   resolve: {
     alias: {
@@ -17,16 +21,16 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: process.env.WEB_API_URL || 'http://localhost:8081',  // Web API服务端口
+        target: env.VITE_WEB_API_URL || env.WEB_API_URL || 'http://localhost:8081',  // Web API服务端口
         changeOrigin: true,
         secure: false,
         configure: (proxy, options) => {
           proxy.on('error', (err, req, res) => {
             console.log('API代理错误:', err);
-            console.log('尝试连接到:', process.env.WEB_API_URL || 'http://localhost:8081');
+            console.log('尝试连接到:', env.VITE_WEB_API_URL || env.WEB_API_URL || 'http://localhost:8081');
           });
           proxy.on('proxyReq', (proxyReq, req, res) => {
-            console.log('API代理请求:', req.method, req.url, '-> ' + (process.env.WEB_API_URL || 'http://localhost:8081') + req.url);
+            console.log('API代理请求:', req.method, req.url, '-> ' + (env.VITE_WEB_API_URL || env.WEB_API_URL || 'http://localhost:8081') + req.url);
           });
           proxy.on('proxyRes', (proxyRes, req, res) => {
             console.log('API代理响应:', proxyRes.statusCode, req.url);
@@ -41,16 +45,16 @@ export default defineConfig({
         secure: false,
       },
       '/metrics': {
-        target: process.env.GATEWAY_URL || 'http://localhost:8080',  // 根据配置文件更新：网关主服务的端口
+        target: env.VITE_GATEWAY_URL || env.GATEWAY_URL || 'http://localhost:8080',  // 根据配置文件更新：网关主服务的端口
         changeOrigin: true,
         secure: false,
         configure: (proxy, options) => {
           proxy.on('error', (err, req, res) => {
             console.log('Metrics代理错误:', err);
-            console.log('尝试连接到:', process.env.GATEWAY_URL || 'http://localhost:8080');
+            console.log('尝试连接到:', env.VITE_GATEWAY_URL || env.GATEWAY_URL || 'http://localhost:8080');
           });
           proxy.on('proxyReq', (proxyReq, req, res) => {
-            console.log('Metrics代理请求:', req.method, req.url, '-> ' + (process.env.GATEWAY_URL || 'http://localhost:8080') + req.url);
+            console.log('Metrics代理请求:', req.method, req.url, '-> ' + (env.VITE_GATEWAY_URL || env.GATEWAY_URL || 'http://localhost:8080') + req.url);
           });
         },
       },
@@ -85,4 +89,5 @@ export default defineConfig({
       },
     },
   },
-}) 
+  }
+})

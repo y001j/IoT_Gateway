@@ -2,7 +2,7 @@
   "id": "temperature_filter_test",
   "name": "温度数据过滤测试",
   "description": "过滤异常温度数据，去重处理，范围检查",
-  "enabled": true,
+  "enabled": false,
   "priority": 60,
   "version": 1,
   "conditions": {

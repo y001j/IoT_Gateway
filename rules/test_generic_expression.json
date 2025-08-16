@@ -2,7 +2,7 @@
   "id": "test_generic_expression",
   "name": "测试通用向量表达式",
   "description": "测试genericVectorMagnitude表达式",
-  "enabled": true,
+  "enabled": false,
   "priority": 30,
   "version": 3,
   "data_type": "vector_generic",

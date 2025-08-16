@@ -14,10 +14,6 @@
     {
       "type": "transform",
       "config": {
-        "add_fields": {
-          "device_format": "valid",
-          "validated_at": "{{.timestamp}}"
-        },
         "add_tags": {
           "validation": "passed",
           "pattern": "device_id_format"

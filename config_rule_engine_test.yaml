@@ -20,252 +20,252 @@ rule_engine:
   subject: "iot.data.>"
   
   # 内联规则定义
-  rules:
-    - id: "temperature_alert"
-      name: "温度报警规则"
-      description: "当温度超过40度时发送报警"
-      enabled: true
-      priority: 100
-      conditions:
-        type: "and"
-        and:
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "temperature"
-          - type: "simple"
-            field: "value"
-            operator: "gt"
-            value: 40
-      actions:
-        - type: "alert"
-          config:
-            level: "warning"
-            message: "设备{{.DeviceID}}温度过高: {{.Value}}°C"
-    
-    - id: "humidity_monitor"
-      name: "湿度监控规则"
-      description: "监控湿度变化"
-      enabled: true
-      priority: 50
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "humidity"
-      actions:
-        - type: "aggregate"
-          config:
-            window_type: "count"
-            size: 10
-            functions: ["avg", "max", "min"]
-            group_by: ["device_id"]
-            output_key: "{{.Key}}_stats"
-            forward: true
-    
-    - id: "pressure_range_check"
-      name: "压力范围检查"
-      description: "检查压力是否在正常范围内"
-      enabled: true
-      priority: 75
-      conditions:
-        or:
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "pressure"
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "altitude"
-      actions:
-        - type: "filter"
-          config:
-            type: "range"
-            min: 0
-            max: 2000
-            drop_on_match: false
-        - type: "transform"
-          config:
-            field: "value"
-            type: "round"
-            precision: 1
-            add_tags:
-              validated: "true"
-    
-    # 复杂数据类型规则 - GPS位置分析
-    - id: "location_analysis_rule"
-      name: "GPS位置数据分析"
-      description: "分析GPS位置数据并计算移动距离"
-      enabled: true
-      priority: 90
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "location"
-      actions:
-        - type: "transform"
-          config:
-            field: "value.latitude"
-            type: "round"
-            precision: 6
-            output_key: "rounded_lat"
-            add_tags:
-              location_processed: "true"
-        - type: "alert"
-          config:
-            level: "warning"
-            message: "设备{{.DeviceID}}移动速度过快: {{.value.speed}}km/h"
-
-    # 复杂数据类型规则 - 3D向量幅值分析
-    - id: "vector3d_magnitude_analysis"
-      name: "3D向量幅值分析"
-      description: "分析3D向量的幅值和方向"
-      enabled: true
-      priority: 85
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "acceleration"
-      actions:
-        - type: "transform"
-          config:
-            field: "value.magnitude"
-            type: "round"
-            precision: 3
-            output_key: "rounded_magnitude"
-            add_tags:
-              vector3d_processed: "true"
-        - type: "alert"
-          config:
-            level: "warning"
-            message: "设备{{.DeviceID}}加速度异常: {{.value.magnitude}}m/s²"
-
-    # 复杂数据类型规则 - 颜色数据分析
-    - id: "color_analysis_rule"
-      name: "颜色数据分析"
-      description: "分析RGB颜色数据"
-      enabled: true
-      priority: 70
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "color_reading"
-      actions:
-        - type: "transform"
-          config:
-            field: "value.hue"
-            type: "round"
-            precision: 1
-            output_key: "rounded_hue"
-            add_tags:
-              color_analyzed: "true"
-        - type: "aggregate"
-          config:
-            window_type: "time"
-            window: "5m"  # 5分钟窗口
-            functions: ["avg", "max", "min"]
-            group_by: ["device_id"]
-            output_key: "color_stats"
-            forward: true
-
-    # 复杂数据类型规则 - 向量数据统计
-    - id: "vector_statistics_rule"
-      name: "向量数据统计分析"
-      description: "对向量数据进行统计分析"
-      enabled: true
-      priority: 65
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "signal_vector"
-      actions:
-        - type: "aggregate"
-          config:
-            window_type: "count"
-            size: 10
-            functions: ["avg", "max", "min", "stddev"]
-            group_by: ["device_id"]
-            output_key: "vector_stats"
-            forward: true
-        - type: "transform"
-          config:
-            field: "value.values"
-            type: "round"
-            precision: 2
-            add_tags:
-              vector_processed: "true"
-
-    # 复杂数据类型规则 - 数组数据分析
-    - id: "array_analysis_rule"
-      name: "数组数据分析"
-      description: "对数组数据进行统计分析"
-      enabled: true
-      priority: 60
-      conditions:
-        type: "simple"
-        field: "key"
-        operator: "eq"
-        value: "measurement_array"
-      actions:
-        - type: "aggregate"
-          config:
-            window_type: "count"
-            size: 5
-            functions: ["avg", "max", "min", "p90", "p95"]
-            group_by: ["device_id"]
-            output_key: "array_stats"
-            forward: true
-        - type: "filter"
-          config:
-            type: "range"
-            field: "value.elements[0]"  # 分析第一个元素
-            min: 20.0
-            max: 80.0
-            drop_on_match: false
-
-    # 复杂数据类型规则 - 综合数据监控
-    - id: "composite_data_monitor"
-      name: "复合数据综合监控"
-      description: "监控所有复合数据类型的健康状态"
-      enabled: true
-      priority: 50
-      conditions:
-        or:
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "location"
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "acceleration"
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "color_reading"
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "signal_vector"
-          - type: "simple"
-            field: "key"
-            operator: "eq"
-            value: "measurement_array"
-      actions:
-        - type: "transform"
-          config:
-            field: "timestamp"
-            type: "format"
-            format: "2006-01-02 15:04:05"
-            output_key: "formatted_time"
-            add_tags:
-              composite_data: "true"
-              monitoring: "active"
+#  rules:
+#    - id: "temperature_alert"
+#      name: "温度报警规则"
+#      description: "当温度超过40度时发送报警"
+#      enabled: true
+#      priority: 100
+#      conditions:
+#        type: "and"
+#        and:
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "temperature"
+#          - type: "simple"
+#            field: "value"
+#            operator: "gt"
+#            value: 40
+#      actions:
+#        - type: "alert"
+#          config:
+#            level: "warning"
+#            message: "设备{{.DeviceID}}温度过高: {{.Value}}°C"
+#
+#    - id: "humidity_monitor"
+#      name: "湿度监控规则"
+#      description: "监控湿度变化"
+#      enabled: true
+#      priority: 50
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "humidity"
+#      actions:
+#        - type: "aggregate"
+#          config:
+#            window_type: "count"
+#            size: 10
+#            functions: ["avg", "max", "min"]
+#            group_by: ["device_id"]
+#            output_key: "{{.Key}}_stats"
+#            forward: true
+#
+#    - id: "pressure_range_check"
+#      name: "压力范围检查"
+#      description: "检查压力是否在正常范围内"
+#      enabled: true
+#      priority: 75
+#      conditions:
+#        or:
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "pressure"
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "altitude"
+#      actions:
+#        - type: "filter"
+#          config:
+#            type: "range"
+#            min: 0
+#            max: 2000
+#            drop_on_match: false
+#        - type: "transform"
+#          config:
+#            field: "value"
+#            type: "round"
+#            precision: 1
+#            add_tags:
+#              validated: "true"
+#
+#    # 复杂数据类型规则 - GPS位置分析
+#    - id: "location_analysis_rule"
+#      name: "GPS位置数据分析"
+#      description: "分析GPS位置数据并计算移动距离"
+#      enabled: true
+#      priority: 90
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "location"
+#      actions:
+#        - type: "transform"
+#          config:
+#            field: "value.latitude"
+#            type: "round"
+#            precision: 6
+#            output_key: "rounded_lat"
+#            add_tags:
+#              location_processed: "true"
+#        - type: "alert"
+#          config:
+#            level: "warning"
+#            message: "设备{{.DeviceID}}移动速度过快: {{.value.speed}}km/h"
+#
+#    # 复杂数据类型规则 - 3D向量幅值分析
+#    - id: "vector3d_magnitude_analysis"
+#      name: "3D向量幅值分析"
+#      description: "分析3D向量的幅值和方向"
+#      enabled: true
+#      priority: 85
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "acceleration"
+#      actions:
+#        - type: "transform"
+#          config:
+#            field: "value.magnitude"
+#            type: "round"
+#            precision: 3
+#            output_key: "rounded_magnitude"
+#            add_tags:
+#              vector3d_processed: "true"
+#        - type: "alert"
+#          config:
+#            level: "warning"
+#            message: "设备{{.DeviceID}}加速度异常: {{.value.magnitude}}m/s²"
+#
+#    # 复杂数据类型规则 - 颜色数据分析
+#    - id: "color_analysis_rule"
+#      name: "颜色数据分析"
+#      description: "分析RGB颜色数据"
+#      enabled: true
+#      priority: 70
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "color_reading"
+#      actions:
+#        - type: "transform"
+#          config:
+#            field: "value.hue"
+#            type: "round"
+#            precision: 1
+#            output_key: "rounded_hue"
+#            add_tags:
+#              color_analyzed: "true"
+#        - type: "aggregate"
+#          config:
+#            window_type: "time"
+#            window: "5m"  # 5分钟窗口
+#            functions: ["avg", "max", "min"]
+#            group_by: ["device_id"]
+#            output_key: "color_stats"
+#            forward: true
+#
+#    # 复杂数据类型规则 - 向量数据统计
+#    - id: "vector_statistics_rule"
+#      name: "向量数据统计分析"
+#      description: "对向量数据进行统计分析"
+#      enabled: true
+#      priority: 65
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "signal_vector"
+#      actions:
+#        - type: "aggregate"
+#          config:
+#            window_type: "count"
+#            size: 10
+#            functions: ["avg", "max", "min", "stddev"]
+#            group_by: ["device_id"]
+#            output_key: "vector_stats"
+#            forward: true
+#        - type: "transform"
+#          config:
+#            field: "value.values"
+#            type: "round"
+#            precision: 2
+#            add_tags:
+#              vector_processed: "true"
+#
+#    # 复杂数据类型规则 - 数组数据分析
+#    - id: "array_analysis_rule"
+#      name: "数组数据分析"
+#      description: "对数组数据进行统计分析"
+#      enabled: true
+#      priority: 60
+#      conditions:
+#        type: "simple"
+#        field: "key"
+#        operator: "eq"
+#        value: "measurement_array"
+#      actions:
+#        - type: "aggregate"
+#          config:
+#            window_type: "count"
+#            size: 5
+#            functions: ["avg", "max", "min", "p90", "p95"]
+#            group_by: ["device_id"]
+#            output_key: "array_stats"
+#            forward: true
+#        - type: "filter"
+#          config:
+#            type: "range"
+#            field: "value.elements[0]"  # 分析第一个元素
+#            min: 20.0
+#            max: 80.0
+#            drop_on_match: false
+#
+#    # 复杂数据类型规则 - 综合数据监控
+#    - id: "composite_data_monitor"
+#      name: "复合数据综合监控"
+#      description: "监控所有复合数据类型的健康状态"
+#      enabled: true
+#      priority: 50
+#      conditions:
+#        or:
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "location"
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "acceleration"
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "color_reading"
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "signal_vector"
+#          - type: "simple"
+#            field: "key"
+#            operator: "eq"
+#            value: "measurement_array"
+#      actions:
+#        - type: "transform"
+#          config:
+#            field: "timestamp"
+#            type: "format"
+#            format: "2006-01-02 15:04:05"
+#            output_key: "formatted_time"
+#            add_tags:
+#              composite_data: "true"
+#              monitoring: "active"
 
 # 南向适配器配置 - 数据源
 southbound:

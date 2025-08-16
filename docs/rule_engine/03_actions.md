@@ -598,6 +598,57 @@
 - **错误重试**: 可靠的错误处理机制
 - **异步处理**: 支持异步转发
 
+### ⚠️ 重要架构说明：Forward vs nats_subscriber
+
+Forward动作主要用于**直接转发到外部系统**，但对于规则处理数据的**内部流转**，需要理解以下架构特点：
+
+#### 两种数据转发路径
+
+**1. 直接外部转发** (Forward动作)：
+```
+规则引擎 → Forward Action → 外部API/服务
+```
+- 适用于：向外部系统发送HTTP请求、MQTT消息等
+- 特点：直接、低延迟、适合实时通知
+
+**2. 内部NATS转发** (通过nats_subscriber)：
+```
+规则引擎 → NATS主题 → nats_subscriber → 内部Sink
+```
+- 适用于：将规则数据发送到InfluxDB、Redis、WebSocket等内部Sink
+- 特点：需要通过nats_subscriber作为中介
+
+#### 关键限制
+
+**❌ 其他Sink无法直接订阅规则数据**：
+- InfluxDB、Redis、WebSocket等标准Sink无法直接订阅`iot.rules.*`或`iot.alerts.*`主题
+- 只有`nats_subscriber`具备NATS订阅能力
+
+**✅ 正确的内部数据流配置**：
+```yaml
+# 规则中使用Forward发布到NATS
+actions:
+  - type: "forward"
+    config:
+      subject: "iot.rules.processed"
+
+# 然后通过nats_subscriber分发到内部Sink
+sinks:
+  - name: "rule_data_router"
+    type: "nats_subscriber"
+    params:
+      subscriptions:
+        - subject: "iot.rules.*"
+          data_type: "rule"
+      target_sinks:
+        - name: "storage"
+          type: "influxdb"
+        - name: "cache"
+          type: "redis"
+```
+
+**详细说明请参考**: [NATS架构文档 - Sink架构与NATS订阅机制](../nats_architecture.md#sink架构与nats订阅机制)
+
 ### 配置选项
 
 ```json

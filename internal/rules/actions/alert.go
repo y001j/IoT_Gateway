@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"text/template"
@@ -277,6 +279,7 @@ func (h *AlertHandler) parseMessageTemplate(templateStr string, point model.Poin
 		"DeviceID":  point.DeviceID,
 		"Key":       point.Key,
 		"Value":     point.Value,
+		"value":     point.Value,  // 添加小写版本以支持 {{.value.field}} 语法
 		"Type":      string(point.Type),
 		"Timestamp": point.Timestamp,
 		"Level":     config.Level,
@@ -355,6 +358,7 @@ func (h *AlertHandler) parseMessageTemplate(templateStr string, point model.Poin
 
 // parseMessageTemplateFallback 简单字符串替换的回退方法
 func (h *AlertHandler) parseMessageTemplateFallback(templateStr string, point model.Point, rule *rules.Rule, config *AlertConfig) string {
+	fmt.Printf("🔄 parseMessageTemplateFallback 被调用: template=%s\n", templateStr)
 	message := templateStr
 
 	// 替换基本变量
@@ -373,6 +377,9 @@ func (h *AlertHandler) parseMessageTemplateFallback(templateStr string, point mo
 		message = strings.ReplaceAll(message, placeholder, value)
 	}
 
+	// 处理复杂值的嵌套路径 (如 {{.value.speed}}, {{.value.magnitude}})
+	message = h.replaceNestedValuePaths(message, point.Value)
+
 	// 替换模板参数
 	for key, value := range config.Template {
 		placeholder := fmt.Sprintf("{{.%s}}", key)
@@ -387,6 +394,159 @@ func (h *AlertHandler) parseMessageTemplateFallback(templateStr string, point mo
 	}
 
 	return message
+}
+
+// replaceNestedValuePaths 处理嵌套值路径的替换，支持{{.value.field}}格式
+func (h *AlertHandler) replaceNestedValuePaths(message string, value interface{}) string {
+	// 使用正则表达式匹配 {{.value.xxx}} 模式
+	re := regexp.MustCompile(`\{\{\.value\.([^}]+)\}\}`)
+	matches := re.FindAllStringSubmatch(message, -1)
+	
+	log.Debug().
+		Str("message", message).
+		Interface("value", value).
+		Int("matches_count", len(matches)).
+		Msg("开始处理嵌套值路径")
+	
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		
+		placeholder := match[0] // 完整的占位符，如 {{.value.speed}}
+		fieldPath := match[1]   // 字段路径，如 speed
+		
+		log.Debug().
+			Str("placeholder", placeholder).
+			Str("field_path", fieldPath).
+			Msg("处理占位符")
+		
+		// 尝试从value中提取字段值
+		fieldValue := h.extractFieldFromValue(value, fieldPath)
+		
+		log.Debug().
+			Str("field_path", fieldPath).
+			Interface("field_value", fieldValue).
+			Msg("字段值提取结果")
+		
+		if fieldValue != nil {
+			replacement := fmt.Sprintf("%v", fieldValue)
+			message = strings.ReplaceAll(message, placeholder, replacement)
+			log.Debug().
+				Str("placeholder", placeholder).
+				Str("replacement", replacement).
+				Str("new_message", message).
+				Msg("替换完成")
+		}
+	}
+	
+	return message
+}
+
+// extractFieldFromValue 从复杂值中提取指定字段
+func (h *AlertHandler) extractFieldFromValue(value interface{}, fieldPath string) interface{} {
+	if value == nil {
+		return nil
+	}
+	
+	// 尝试将value转换为map[string]interface{}
+	if valueMap, ok := value.(map[string]interface{}); ok {
+		if fieldValue, exists := valueMap[fieldPath]; exists {
+			return fieldValue
+		}
+		// 尝试不区分大小写的匹配
+		for key, val := range valueMap {
+			if strings.EqualFold(key, fieldPath) {
+				return val
+			}
+		}
+	}
+	
+	// 尝试JSON解析
+	// 情况1: value是JSON字符串
+	if jsonStr, ok := value.(string); ok {
+		var valueMap map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &valueMap); err == nil {
+			if fieldValue, exists := valueMap[fieldPath]; exists {
+				return fieldValue
+			}
+			// 尝试不区分大小写的匹配
+			for key, val := range valueMap {
+				if strings.EqualFold(key, fieldPath) {
+					return val
+				}
+			}
+		}
+	}
+	
+	// 情况2: value是其他类型，尝试通过Marshal/Unmarshal处理
+	if valueBytes, err := json.Marshal(value); err == nil {
+		var valueMap map[string]interface{}
+		if err := json.Unmarshal(valueBytes, &valueMap); err == nil {
+			if fieldValue, exists := valueMap[fieldPath]; exists {
+				return fieldValue
+			}
+			// 尝试不区分大小写的匹配
+			for key, val := range valueMap {
+				if strings.EqualFold(key, fieldPath) {
+					return val
+				}
+			}
+		}
+	}
+	
+	// 使用反射处理结构体字段
+	return h.extractFieldUsingReflection(value, fieldPath)
+}
+
+// extractFieldUsingReflection 使用反射从结构体中提取字段
+func (h *AlertHandler) extractFieldUsingReflection(value interface{}, fieldPath string) interface{} {
+	if value == nil {
+		return nil
+	}
+	
+	v := reflect.ValueOf(value)
+	
+	// 如果是指针，解引用
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
+	}
+	
+	// 只处理结构体
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+	
+	// 查找字段（不区分大小写）
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		fieldName := field.Name
+		
+		// 检查字段名（不区分大小写）
+		if strings.EqualFold(fieldName, fieldPath) {
+			fieldValue := v.Field(i)
+			if fieldValue.CanInterface() {
+				return fieldValue.Interface()
+			}
+		}
+		
+		// 检查JSON标签
+		if jsonTag := field.Tag.Get("json"); jsonTag != "" {
+			jsonName := strings.Split(jsonTag, ",")[0]
+			if strings.EqualFold(jsonName, fieldPath) {
+				fieldValue := v.Field(i)
+				if fieldValue.CanInterface() {
+					return fieldValue.Interface()
+				}
+			}
+		}
+	}
+	
+	return nil
 }
 
 // toFloat64 辅助函数，尝试将值转换为float64
