@@ -47,19 +47,18 @@ func (tms *TagsMigrationStrategy) ConvertMapToThreadSafeTags(sourceMap map[strin
 
 // convertWithGo124Safety Go 1.24安全转换
 func (tms *TagsMigrationStrategy) convertWithGo124Safety(sourceMap map[string]string) *ThreadSafeTags {
-	// 创建新的ThreadSafeTags，但不访问原始map
-	tags := NewThreadSafeTags()
+	// Go 1.24安全解决方案：使用ShardedTags进行安全转换
+	shardedTags := NewShardedTagsFromMap(sourceMap)
+	allTags := shardedTags.GetAll()
 	
-	// 添加转换标记
-	tags.Set("_converted_from", "unsafe_map")
-	tags.Set("_conversion_mode", "go124_safe")
-	tags.Set("_data_loss", "prevented_fatal_crash")
+	// 创建ThreadSafeTags并设置从ShardedTags获得的数据
+	tags := NewThreadSafeTagsFromMap(allTags)
 	
 	tms.mu.Lock()
 	tms.conversions++
 	tms.mu.Unlock()
 	
-	log.Printf("INFO: Go 1.24安全转换 - 避免访问原始map，返回安全容器")
+	log.Printf("INFO: Go 1.24安全转换 - 使用ShardedTags系统成功转换")
 	return tags
 }
 

@@ -281,9 +281,22 @@ func (s *NATSSubscriberSink) parseMessage(data []byte, subConfig SubscriptionCon
 		}
 
 	case "rule":
-		// 规则处理后的数据
-		if err := json.Unmarshal(data, &point); err != nil {
-			return point, fmt.Errorf("解析规则数据失败: %w", err)
+		// 规则处理后的数据 - 解析规则引擎事件格式
+		var ruleEvent map[string]interface{}
+		if err := json.Unmarshal(data, &ruleEvent); err != nil {
+			return point, fmt.Errorf("解析规则事件数据失败: %w", err)
+		}
+		
+		// 提取data_point字段
+		if dataPointData, exists := ruleEvent["data_point"]; exists {
+			if dataPointMap, ok := dataPointData.(map[string]interface{}); ok {
+				// 转换为model.Point结构
+				point = s.convertMapToPoint(dataPointMap)
+			} else {
+				return point, fmt.Errorf("规则事件中data_point格式无效")
+			}
+		} else {
+			return point, fmt.Errorf("规则事件中缺少data_point字段")
 		}
 
 	case "alert":
@@ -341,6 +354,58 @@ func (s *NATSSubscriberSink) parseMessage(data []byte, subConfig SubscriptionCon
 	}
 
 	return point, nil
+}
+
+// convertMapToPoint 将map数据转换为model.Point结构
+func (s *NATSSubscriberSink) convertMapToPoint(dataMap map[string]interface{}) model.Point {
+	point := model.Point{
+		Timestamp: time.Now(), // 默认时间戳
+	}
+	
+	// 提取基础字段
+	if deviceID, ok := dataMap["device_id"].(string); ok {
+		point.DeviceID = deviceID
+	}
+	if key, ok := dataMap["key"].(string); ok {
+		point.Key = key
+	}
+	if value := dataMap["value"]; value != nil {
+		point.Value = value
+	}
+	if pointType, ok := dataMap["type"].(string); ok {
+		point.Type = model.DataType(pointType)
+	}
+	
+	// 处理时间戳
+	if timestampStr, ok := dataMap["timestamp"].(string); ok {
+		if parsedTime, err := time.Parse(time.RFC3339Nano, timestampStr); err == nil {
+			point.Timestamp = parsedTime
+		}
+	}
+	
+	// 处理标签
+	if tagsData, exists := dataMap["tags"]; exists {
+		if tagsMap, ok := tagsData.(map[string]interface{}); ok {
+			for k, v := range tagsMap {
+				if strVal, ok := v.(string); ok {
+					point.AddTag(k, strVal)
+				} else {
+					// 对于非string类型的标签值，转换为字符串
+					point.AddTag(k, fmt.Sprintf("%v", v))
+				}
+			}
+		}
+	}
+	
+	log.Debug().
+		Str("name", s.Name()).
+		Str("device_id", point.DeviceID).
+		Str("key", point.Key).
+		Interface("value", point.Value).
+		Interface("tags", point.GetTagsCopy()).
+		Msg("✅ 成功转换规则数据为数据点")
+	
+	return point
 }
 
 // convertAlertToPoint 将告警数据转换为数据点

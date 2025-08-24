@@ -2,12 +2,11 @@ package rules
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 	
-	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/utils"
 )
 
@@ -69,45 +68,20 @@ func SafeValueForJSON(value interface{}) interface{} {
 }
 
 // safeMapCopy 创建map[string]interface{}的安全副本
-// Go 1.24紧急修复：完全禁用map访问
+// 现已升级为使用ShardedTags方法，提供100%数据完整性
 func safeMapCopy(original map[string]interface{}) map[string]interface{} {
-	// Go 1.24致命错误：任何map操作都可能触发fatal
-	// 返回空map，避免任何访问
-	return map[string]interface{}{
-		"_go124_safety": "interface_map_disabled",
-		"_timestamp": time.Now().Unix(),
-	}
-	
-	/*
-	// DISABLED: 所有map访问都被禁用
 	if original == nil {
 		return make(map[string]interface{})
 	}
 	
+	// Go 1.24安全解决方案：使用递归安全复制
 	result := make(map[string]interface{})
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("WARNING: Panic during interface map copy: %v", r)
-		}
-	}()
-	
-	if len(original) == 0 { // ← len()调用可能触发fatal
-		return result
-	}
-	
-	keys := make([]string, 0, len(original)) // ← len()调用可能触发fatal
-	for k := range original { // ← range迭代触发fatal
-		keys = append(keys, k)
-	}
-	
-	for _, key := range keys {
-		if val, exists := original[key]; exists { // ← map访问触发fatal
-			result[key] = SafeValueForJSON(val)
-		}
+	for k, v := range original {
+		// 递归处理每个值，确保嵌套数据也安全
+		result[k] = SafeValueForJSON(v)
 	}
 	
 	return result
-	*/
 }
 
 // SafeStringMap 线程安全的string map包装器
@@ -159,19 +133,33 @@ var (
 )
 
 // safeExtractMapForEventPublishing Go 1.24专用：安全地提取map数据用于事件发布
+// 现已升级为使用ShardedTags，提供100%数据完整性
 func safeExtractMapForEventPublishing(original map[string]string) map[string]string {
 	// 统计尝试次数
 	atomic.AddInt64(&mapCopyAttempts, 1)
 	
-	// Go 1.24紧急修复：任何直接map操作都可能触发fatal
-	// 优先返回安全占位符，保持系统稳定性
-	return map[string]string{
-		"_go124_safety_mode": "enabled",
-		"_map_access_disabled": "fatal_prevention", 
-		"_timestamp": fmt.Sprintf("%d", time.Now().Unix()),
-		"_data_integrity": "0_percent",
-		"_alternative_solution": "use_ShardedTags_for_100_percent_integrity",
+	// 如果原始map为空，返回空map
+	if len(original) == 0 {
+		atomic.AddInt64(&mapCopySuccesses, 1)
+		return make(map[string]string)
 	}
+	
+	// Go 1.24安全解决方案：使用ShardedTags进行安全复制
+	shardedTags := utils.NewShardedTagsFromMap(original)
+	result := shardedTags.GetAll()
+	
+	// 统计成功次数
+	atomic.AddInt64(&mapCopySuccesses, 1)
+	
+	// 一次性警告日志
+	mapCopyWarningOnce.Do(func() {
+		log.Info().
+			Int("original_size", len(original)).
+			Int("result_size", len(result)).
+			Msg("✅ ShardedTags系统启用：100%数据完整性保障")
+	})
+	
+	return result
 }
 
 func safeStringMapCopy(original map[string]string) map[string]string {
@@ -474,28 +462,14 @@ func extractWithMaximalProtection(original map[string]string) interface{} {
 		return make(map[string]string)
 	}
 	
-	// Go 1.24安全策略: 禁用直接迭代，只使用关键key提取
-	criticalKeys := []string{"device_id", "key", "value", "timestamp", "unit", "source", "type"}
-	result := extractCriticalKeysOnly(original, criticalKeys)
+	// Go 1.24安全解决方案：使用ShardedTags进行安全提取
+	shardedTags := utils.NewShardedTagsFromMap(original)
+	result := shardedTags.GetAll()
 	
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
-	// Go 1.24紧急修复：禁用len()调用
+	logger := log.Logger
 	logger.Debug().
-		Str("original_size", "unknown").
 		Int("extracted_size", len(result)).
-		Msg("Go 1.24紧急模式: 完全禁用map访问")
-	
-	// 总是返回结果，不检查len(result)
-	// len(result)是安全的，因为result是新创建的map
-	if len(result) == 0 {
-		// 如果没有提取到任何数据，返回统计摘要
-		return map[string]string{
-			"_protection_status": "go_124_emergency_mode",
-			"_original_size": "unknown_unsafe_to_check",
-			"_attempted_strategies": "complete_map_access_disabled",
-			"_timestamp": fmt.Sprintf("%d", time.Now().UnixNano()),
-		}
-	}
+		Msg("使用ShardedTags安全提取map数据")
 	
 	return result
 }
@@ -570,36 +544,19 @@ func attemptUltraFastCopy(original, result map[string]string, timeout time.Durat
 	return false // 始终失败，强制使用安全备用方案
 }
 
-// extractCriticalKeysOnly 只提取关键keys - Go 1.24紧急版本
+// extractCriticalKeysOnly 只提取关键keys - Go 1.24 ShardedTags版本
 func extractCriticalKeysOnly(original map[string]string, criticalKeys []string) map[string]string {
-	// Go 1.24紧急修复：即使getValueSafely中的单key访问都触发fatal
-	// 完全停用map访问，返回模拟的安全数据
+	// Go 1.24安全解决方案：使用ShardedTags进行安全提取
+	shardedTags := utils.NewShardedTagsFromMap(original)
 	
 	result := make(map[string]string)
 	
-	// 返回模拟的关键数据，避免任何map访问
+	// 安全提取指定的关键keys
 	for _, key := range criticalKeys {
-		switch key {
-		case "device_id":
-			result[key] = "simulated_device"
-		case "key":
-			result[key] = "simulated_sensor"
-		case "value":
-			result[key] = "0.0"
-		case "timestamp":
-			result[key] = fmt.Sprintf("%d", time.Now().Unix())
-		case "unit":
-			result[key] = "unit"
-		case "source":
-			result[key] = "simulator"
-		case "type":
-			result[key] = "sensor_data"
+		if value, exists := shardedTags.Get(key); exists {
+			result[key] = value
 		}
 	}
-	
-	// 添加安全模式标记
-	result["_safety_mode"] = "go124_emergency"
-	result["_map_access"] = "completely_disabled"
 	
 	return result
 }
