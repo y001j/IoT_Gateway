@@ -11,6 +11,9 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](#)
 
+**📖 语言版本 | Language Versions**: 
+[🇨🇳 中文](README.md) | [🇺🇸 English](README_EN.md)
+
 [功能特性](#功能特性) • [快速开始](#快速开始) • [文档](#文档) • [贡献指南](#贡献指南)
 
 </div>
@@ -450,6 +453,149 @@ npm test
 ```bash
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out -o coverage.html
+```
+
+## 🔌 嵌入式系统支持
+
+IoT Gateway 专门针对嵌入式系统进行了优化，完全支持在资源受限的ARM设备上运行。
+
+### 支持的架构
+
+- **32位ARM系统**: ARMv5, ARMv6, ARMv7 (armhf)
+- **64位ARM系统**: ARM64 (aarch64)
+- **x86架构**: AMD64, 386 (兼容性支持)
+
+### 内存对齐优化
+
+针对32位ARM架构的特殊要求，我们已经修复了所有64位整数的内存对齐问题：
+- 所有包含`int64`和`uint64`字段的结构体已重新排序
+- 原子操作变量已正确对齐到8字节边界
+- 确保在ARMv5/ARMv6/ARMv7平台上稳定运行
+
+### 交叉编译脚本
+
+#### ARM64 (64位ARM)
+```bash
+# 编译Gateway主程序
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o bin/gateway-arm64 cmd/gateway/main.go
+
+# 编译Web服务器（可选）
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o bin/server-arm64 cmd/server/main.go
+```
+
+#### ARM32 (32位ARM)
+```bash
+# ARMv7 (推荐用于树莓派3/4等现代ARM设备)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-w -s" -o bin/gateway-armv7 cmd/gateway/main.go
+
+# ARMv6 (兼容树莓派1/Zero等较老设备)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="-w -s" -o bin/gateway-armv6 cmd/gateway/main.go
+
+# ARMv5 (兼容更老的ARM设备)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-w -s" -o bin/gateway-armv5 cmd/gateway/main.go
+```
+
+#### 批量编译脚本
+```bash
+#!/bin/bash
+# build-arm.sh - 批量编译脚本
+
+# 创建输出目录
+mkdir -p bin/
+
+# 编译参数
+LDFLAGS="-w -s"
+CGO_ENABLED=0
+
+# 编译64位ARM
+echo "编译ARM64版本..."
+GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o bin/gateway-arm64 cmd/gateway/main.go
+
+# 编译32位ARM各版本
+echo "编译ARMv7版本..."
+GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="$LDFLAGS" -o bin/gateway-armv7 cmd/gateway/main.go
+
+echo "编译ARMv6版本..."
+GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="$LDFLAGS" -o bin/gateway-armv6 cmd/gateway/main.go
+
+echo "编译ARMv5版本..."
+GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="$LDFLAGS" -o bin/gateway-armv5 cmd/gateway/main.go
+
+echo "编译完成！查看 bin/ 目录获取编译结果"
+ls -la bin/gateway-arm*
+```
+
+### 嵌入式系统部署配置
+
+针对资源受限的嵌入式设备，推荐以下配置调整：
+
+```yaml
+# config_embedded.yaml - 嵌入式系统配置示例
+gateway:
+  name: "IoT Gateway Embedded"
+  log_level: "warn"  # 降低日志级别节省资源
+  http_port: 8080
+  nats_url: "embedded"  # 使用内嵌NATS减少依赖
+
+# 热重载配置（某些嵌入式系统可能需要关闭）
+hot_reload:
+  enabled: true
+  graceful_fallback: true  # 自动降级以兼容不支持文件监控的系统
+  retry_interval: "60s"    # 增加重试间隔
+  max_retries: 3
+
+# 规则引擎资源优化
+rule_engine:
+  enabled: true
+  worker_pool_size: 2      # 减少工作协程数
+  buffer_size: 1000        # 降低缓冲区大小
+  batch_size: 50           # 减少批处理大小
+  rules_dir: "./rules"
+
+# Web界面可选配置（节省资源）
+web_ui:
+  enabled: true
+  port: 8081
+  static_dir: "./web/dist"
+  api_timeout: "30s"
+```
+
+### 性能调优建议
+
+#### 内存优化
+```yaml
+gateway:
+  gc_percent: 50        # 降低GC阈值，减少内存使用
+  memory_limit: "256MB" # 根据设备内存调整
+```
+
+#### 网络优化
+```yaml
+gateway:
+  nats_options:
+    max_payload: 65536   # 减少单次传输大小
+    max_pending: 1024    # 降低待处理消息数
+```
+
+### 常见嵌入式设备推荐配置
+
+| 设备类型 | 架构 | 编译目标 | 推荐内存 | 配置调整 |
+|---------|------|---------|----------|----------|
+| 树莓派4 | ARM64 | `arm64` | 1GB+ | 默认配置 |
+| 树莓派3 | ARMv7 | `arm GOARM=7` | 512MB+ | 减少worker数量 |
+| 树莓派Zero | ARMv6 | `arm GOARM=6` | 256MB+ | 最小化配置 |
+| 工业网关 | ARMv7 | `arm GOARM=7` | 256MB+ | 关闭Web界面 |
+
+### 部署验证
+
+编译完成后，在目标设备上验证部署：
+```bash
+# 检查架构兼容性
+file ./gateway-armv7
+ldd --version  # 检查glibc版本
+
+# 运行测试
+./gateway-armv7 -config config_embedded.yaml -version
 ```
 
 ## 📚 文档

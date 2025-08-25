@@ -11,6 +11,9 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](#)
 
+**📖 Language Versions | 语言版本**: 
+[🇺🇸 English](README_EN.md) | [🇨🇳 中文](README.md)
+
 [Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Contributing](#contributing)
 
 </div>
@@ -393,6 +396,149 @@ npm test
 ```bash
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out -o coverage.html
+```
+
+## 🔌 Embedded Systems Support
+
+IoT Gateway has been specially optimized for embedded systems and fully supports running on resource-constrained ARM devices.
+
+### Supported Architectures
+
+- **32-bit ARM Systems**: ARMv5, ARMv6, ARMv7 (armhf)
+- **64-bit ARM Systems**: ARM64 (aarch64)
+- **x86 Architectures**: AMD64, 386 (compatibility support)
+
+### Memory Alignment Optimization
+
+For the special requirements of 32-bit ARM architectures, we have fixed all 64-bit integer memory alignment issues:
+- All structs containing `int64` and `uint64` fields have been reordered
+- Atomic operation variables are correctly aligned to 8-byte boundaries
+- Ensures stable operation on ARMv5/ARMv6/ARMv7 platforms
+
+### Cross-Compilation Scripts
+
+#### ARM64 (64-bit ARM)
+```bash
+# Compile Gateway main program
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o bin/gateway-arm64 cmd/gateway/main.go
+
+# Compile Web server (optional)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o bin/server-arm64 cmd/server/main.go
+```
+
+#### ARM32 (32-bit ARM)
+```bash
+# ARMv7 (recommended for modern ARM devices like Raspberry Pi 3/4)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-w -s" -o bin/gateway-armv7 cmd/gateway/main.go
+
+# ARMv6 (compatible with older devices like Raspberry Pi 1/Zero)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="-w -s" -o bin/gateway-armv6 cmd/gateway/main.go
+
+# ARMv5 (compatible with older ARM devices)
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-w -s" -o bin/gateway-armv5 cmd/gateway/main.go
+```
+
+#### Batch Compilation Script
+```bash
+#!/bin/bash
+# build-arm.sh - Batch compilation script
+
+# Create output directory
+mkdir -p bin/
+
+# Compilation parameters
+LDFLAGS="-w -s"
+CGO_ENABLED=0
+
+# Compile 64-bit ARM
+echo "Building ARM64 version..."
+GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o bin/gateway-arm64 cmd/gateway/main.go
+
+# Compile 32-bit ARM variants
+echo "Building ARMv7 version..."
+GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="$LDFLAGS" -o bin/gateway-armv7 cmd/gateway/main.go
+
+echo "Building ARMv6 version..."
+GOOS=linux GOARCH=arm GOARM=6 go build -ldflags="$LDFLAGS" -o bin/gateway-armv6 cmd/gateway/main.go
+
+echo "Building ARMv5 version..."
+GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="$LDFLAGS" -o bin/gateway-armv5 cmd/gateway/main.go
+
+echo "Compilation complete! Check bin/ directory for results"
+ls -la bin/gateway-arm*
+```
+
+### Embedded System Deployment Configuration
+
+For resource-constrained embedded devices, the following configuration adjustments are recommended:
+
+```yaml
+# config_embedded.yaml - Embedded system configuration example
+gateway:
+  name: "IoT Gateway Embedded"
+  log_level: "warn"  # Lower log level to save resources
+  http_port: 8080
+  nats_url: "embedded"  # Use embedded NATS to reduce dependencies
+
+# Hot reload configuration (some embedded systems may need to disable this)
+hot_reload:
+  enabled: true
+  graceful_fallback: true  # Auto-fallback for systems without file monitoring support
+  retry_interval: "60s"    # Increase retry interval
+  max_retries: 3
+
+# Rule engine resource optimization
+rule_engine:
+  enabled: true
+  worker_pool_size: 2      # Reduce worker goroutines
+  buffer_size: 1000        # Lower buffer size
+  batch_size: 50           # Reduce batch processing size
+  rules_dir: "./rules"
+
+# Web UI optional configuration (save resources)
+web_ui:
+  enabled: true
+  port: 8081
+  static_dir: "./web/dist"
+  api_timeout: "30s"
+```
+
+### Performance Tuning Recommendations
+
+#### Memory Optimization
+```yaml
+gateway:
+  gc_percent: 50        # Lower GC threshold, reduce memory usage
+  memory_limit: "256MB" # Adjust according to device memory
+```
+
+#### Network Optimization
+```yaml
+gateway:
+  nats_options:
+    max_payload: 65536   # Reduce single transmission size
+    max_pending: 1024    # Lower pending message count
+```
+
+### Common Embedded Device Configuration Recommendations
+
+| Device Type | Architecture | Build Target | Recommended Memory | Configuration Adjustments |
+|-------------|--------------|--------------|-------------------|---------------------------|
+| Raspberry Pi 4 | ARM64 | `arm64` | 1GB+ | Default configuration |
+| Raspberry Pi 3 | ARMv7 | `arm GOARM=7` | 512MB+ | Reduce worker count |
+| Raspberry Pi Zero | ARMv6 | `arm GOARM=6` | 256MB+ | Minimal configuration |
+| Industrial Gateway | ARMv7 | `arm GOARM=7` | 256MB+ | Disable Web UI |
+
+### Deployment Verification
+
+After compilation, verify deployment on target device:
+```bash
+# Check architecture compatibility
+file ./gateway-armv7
+ldd --version  # Check glibc version
+
+# Run test
+./gateway-armv7 -config config_embedded.yaml -version
 ```
 
 ## 📚 Documentation
