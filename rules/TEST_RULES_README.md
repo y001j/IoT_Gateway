@@ -136,7 +136,7 @@
 ### 测试命令
 ```bash
 # 启动系统
-go run cmd/gateway/main.go -config config_rule_engine_test.yaml
+go run cmd/gateway/main.go -config config.yaml
 
 # 监控NATS消息
 nats sub "iot.data.>"

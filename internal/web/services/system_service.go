@@ -25,10 +25,10 @@ type SystemService interface {
 
 // systemService 系统服务实现
 type systemService struct {
-	startTime        time.Time
-	authConfig       *models.AuthConfig
-	configService    ConfigService
-	mainConfigPath   string // 主配置文件路径
+	startTime         time.Time
+	authConfig        *models.AuthConfig
+	configService     ConfigService
+	mainConfigPath    string              // 主配置文件路径
 	monitoringService *monitoring.Service // 监控服务
 }
 
@@ -36,7 +36,7 @@ type systemService struct {
 func NewSystemService(authConfig *models.AuthConfig, configService ConfigService) SystemService {
 	// 创建监控服务
 	monitoringService := monitoring.NewService(monitoring.DefaultServiceConfig())
-	
+
 	return &systemService{
 		startTime:         time.Now(),
 		authConfig:        authConfig,
@@ -49,13 +49,13 @@ func NewSystemService(authConfig *models.AuthConfig, configService ConfigService
 func NewSystemServiceWithMainConfig(authConfig *models.AuthConfig, configService ConfigService, mainConfigPath string) SystemService {
 	// 创建监控服务
 	monitoringService := monitoring.NewService(monitoring.DefaultServiceConfig())
-	
+
 	// 启动监控服务
 	if err := monitoringService.Start(); err != nil {
 		// 记录错误但继续创建服务
 		fmt.Printf("Warning: Failed to start monitoring service: %v\n", err)
 	}
-	
+
 	return &systemService{
 		startTime:         time.Now(),
 		authConfig:        authConfig,
@@ -128,7 +128,7 @@ func (s *systemService) GetMetrics() (*models.SystemMetrics, error) {
 			NetworkOutBytes:     lightweightMetrics.DataMetrics.TotalBytesProcessed,
 			DiskUsage:           0.0, // 默认值，将从监控服务获取
 		}
-		
+
 		// 尝试从监控服务获取更详细的系统指标
 		if s.monitoringService != nil && s.monitoringService.IsStarted() {
 			if sysMetrics, err := s.monitoringService.GetSystemMetrics(); err == nil {
@@ -140,7 +140,7 @@ func (s *systemService) GetMetrics() (*models.SystemMetrics, error) {
 				metrics.NetworkOutBytes = int64(sysMetrics.NetworkOutBytes)
 			}
 		}
-		
+
 		return metrics, nil
 	}
 
@@ -221,7 +221,7 @@ func (s *systemService) GetConfig() (*models.SystemConfig, error) {
 	if s.configService != nil {
 		return s.configService.GetConfig()
 	}
-	
+
 	// 如果没有配置服务，返回默认配置
 	return s.getDefaultConfig(), nil
 }
@@ -231,7 +231,7 @@ func (s *systemService) UpdateConfig(config *models.SystemConfig) error {
 	if s.configService != nil {
 		return s.configService.UpdateConfig(config)
 	}
-	
+
 	// 如果没有配置服务，只返回成功
 	return nil
 }
@@ -280,7 +280,7 @@ type MainConfigForSystem struct {
 // loadMainConfigForSystem 加载主配置文件
 func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) {
 	var possiblePaths []string
-	
+
 	// 如果指定了主配置文件路径，优先使用它
 	if s.mainConfigPath != "" {
 		possiblePaths = []string{s.mainConfigPath}
@@ -288,12 +288,12 @@ func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) 
 		// 否则尝试从几个可能的路径加载主配置文件
 		possiblePaths = []string{
 			"./config.yaml",
-			"./config_rule_engine_test.yaml",
+			"./config.yaml",
 			"../config.yaml",
 			"../../config.yaml",
 		}
 	}
-	
+
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
 			data, err := ioutil.ReadFile(path)
@@ -304,7 +304,7 @@ func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) 
 				}
 				continue
 			}
-			
+
 			var config MainConfigForSystem
 			if err := yaml.Unmarshal(data, &config); err != nil {
 				if s.mainConfigPath != "" {
@@ -313,15 +313,15 @@ func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) 
 				}
 				continue
 			}
-			
+
 			return &config, nil
 		}
 	}
-	
+
 	if s.mainConfigPath != "" {
 		return nil, fmt.Errorf("找不到指定的主配置文件: %s", s.mainConfigPath)
 	}
-	
+
 	return nil, nil // 找不到主配置文件时返回nil，使用默认值
 }
 
@@ -329,7 +329,7 @@ func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) 
 func (s *systemService) getDefaultConfig() *models.SystemConfig {
 	// 先尝试从主配置文件加载基本信息
 	mainConfig, _ := s.loadMainConfigForSystem()
-	
+
 	// 使用真实的认证配置
 	var authConfig models.AuthConfig
 	if s.authConfig != nil {
@@ -393,11 +393,11 @@ func (s *systemService) getDefaultConfig() *models.SystemConfig {
 		},
 		Database: models.DatabaseConfig{
 			SQLite: models.SQLiteConfig{
-				Path:              "./data/auth.db", // 默认路径，会被主配置覆盖
-				MaxOpenConns:      25,
-				MaxIdleConns:      5,
-				ConnMaxLifetime:   "5m",
-				ConnMaxIdleTime:   "1m",
+				Path:            "./data/auth.db", // 默认路径，会被主配置覆盖
+				MaxOpenConns:    25,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: "5m",
+				ConnMaxIdleTime: "1m",
 			},
 		},
 		Security: models.SecurityConfig{
@@ -423,7 +423,7 @@ func (s *systemService) getDefaultConfig() *models.SystemConfig {
 			Dir: "./rules",
 		},
 	}
-	
+
 	// 如果成功加载了主配置文件，使用其中的设置
 	if mainConfig != nil {
 		if mainConfig.Gateway.ID != "" {
@@ -441,13 +441,13 @@ func (s *systemService) getDefaultConfig() *models.SystemConfig {
 		if mainConfig.Gateway.PluginsDir != "" {
 			config.Gateway.PluginsDir = mainConfig.Gateway.PluginsDir
 		}
-		
+
 		// WebUI配置
 		if mainConfig.WebUI.Port > 0 {
 			config.WebUI.Port = mainConfig.WebUI.Port
 		}
 		config.WebUI.Enabled = mainConfig.WebUI.Enabled
-		
+
 		// 认证配置
 		if mainConfig.WebUI.Auth.JWTSecret != "" {
 			config.WebUI.Auth.JWTSecret = mainConfig.WebUI.Auth.JWTSecret
@@ -462,18 +462,18 @@ func (s *systemService) getDefaultConfig() *models.SystemConfig {
 			config.WebUI.Auth.BcryptCost = mainConfig.WebUI.Auth.BcryptCost
 		}
 		config.WebUI.Auth.EnableTwoFactor = mainConfig.WebUI.Auth.EnableTwoFactor
-		
+
 		// 数据库配置 - 最重要的修正
 		if mainConfig.Database.SQLite.Path != "" {
 			config.Database.SQLite.Path = mainConfig.Database.SQLite.Path
 		}
-		
+
 		// 规则配置
 		if mainConfig.Rules.Dir != "" {
 			config.Rules.Dir = mainConfig.Rules.Dir
 		}
 	}
-	
+
 	return config
 }
 

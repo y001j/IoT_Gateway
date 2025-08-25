@@ -116,10 +116,10 @@ const MainLayout: React.FC = () => {
             zIndex: 1
           }} 
         >
-          {/* 中集安瑞科官方标志 */}
+          {/* 麦恩官方标志 */}
           <img
             src="/logo.png"
-            alt="CIMC ENRIC"
+            alt="Maien IoT Gateway Logo"
             width={collapsed ? 78 : 108}
             height={collapsed ? 78 : 108}
             style={{

@@ -159,15 +159,15 @@ func (s *configService) UpdateConfig(config *models.SystemConfig) error {
 func (s *configService) ApplyConfig(config *models.SystemConfig) error {
 	// 这里可以实现配置的热重载逻辑
 	// 例如：重新初始化数据库连接池、更新NATS配置等
-	
+
 	// 对于数据库配置，可以重新创建连接池
 	// 对于NATS配置，可以重新连接NATS服务器
 	// 对于安全配置，可以更新API密钥等
-	
+
 	// 配置应用的逻辑应该在调用者处理，这里只是验证并保存配置
 	// 实际的服务重启和配置应用应该在上层服务中处理
-	
-	fmt.Printf("配置已更新并应用: 网关端口=%d, 数据库路径=%s, NATS端口=%d\n", 
+
+	fmt.Printf("配置已更新并应用: 网关端口=%d, 数据库路径=%s, NATS端口=%d\n",
 		config.Gateway.HTTPPort, config.Database.SQLite.Path, config.NATS.Port)
 	return nil
 }
@@ -242,7 +242,7 @@ func (s *configService) validateConfig(config *models.SystemConfig) error {
 // loadMainConfig 加载主配置文件
 func (s *configService) loadMainConfig() (*MainConfig, error) {
 	var possiblePaths []string
-	
+
 	// 如果指定了主配置文件路径，优先使用它
 	if s.mainConfigPath != "" {
 		possiblePaths = []string{s.mainConfigPath}
@@ -250,12 +250,12 @@ func (s *configService) loadMainConfig() (*MainConfig, error) {
 		// 否则尝试从几个可能的路径加载主配置文件
 		possiblePaths = []string{
 			"./config.yaml",
-			"./config_rule_engine_test.yaml",
+			"./config.yaml",
 			"../config.yaml",
 			"../../config.yaml",
 		}
 	}
-	
+
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
 			data, err := ioutil.ReadFile(path)
@@ -266,7 +266,7 @@ func (s *configService) loadMainConfig() (*MainConfig, error) {
 				}
 				continue
 			}
-			
+
 			var config MainConfig
 			if err := yaml.Unmarshal(data, &config); err != nil {
 				if s.mainConfigPath != "" {
@@ -275,15 +275,15 @@ func (s *configService) loadMainConfig() (*MainConfig, error) {
 				}
 				continue
 			}
-			
+
 			return &config, nil
 		}
 	}
-	
+
 	if s.mainConfigPath != "" {
 		return nil, fmt.Errorf("找不到指定的主配置文件: %s", s.mainConfigPath)
 	}
-	
+
 	return nil, fmt.Errorf("未找到主配置文件")
 }
 
@@ -291,7 +291,7 @@ func (s *configService) loadMainConfig() (*MainConfig, error) {
 func (s *configService) getDefaultConfig() *models.SystemConfig {
 	// 先尝试从主配置文件加载基本信息
 	mainConfig, err := s.loadMainConfig()
-	
+
 	// 基础配置
 	config := &models.SystemConfig{
 		Gateway: models.GatewayConfig{
@@ -347,11 +347,11 @@ func (s *configService) getDefaultConfig() *models.SystemConfig {
 		},
 		Database: models.DatabaseConfig{
 			SQLite: models.SQLiteConfig{
-				Path:              "./data/auth.db", // 默认路径
-				MaxOpenConns:      25,
-				MaxIdleConns:      5,
-				ConnMaxLifetime:   "5m",
-				ConnMaxIdleTime:   "1m",
+				Path:            "./data/auth.db", // 默认路径
+				MaxOpenConns:    25,
+				MaxIdleConns:    5,
+				ConnMaxLifetime: "5m",
+				ConnMaxIdleTime: "1m",
 			},
 		},
 		Security: models.SecurityConfig{
@@ -377,7 +377,7 @@ func (s *configService) getDefaultConfig() *models.SystemConfig {
 			Dir: "./rules",
 		},
 	}
-	
+
 	// 如果成功加载了主配置文件，使用其中的设置
 	if err == nil && mainConfig != nil {
 		if mainConfig.Gateway.ID != "" {
@@ -395,13 +395,13 @@ func (s *configService) getDefaultConfig() *models.SystemConfig {
 		if mainConfig.Gateway.PluginsDir != "" {
 			config.Gateway.PluginsDir = mainConfig.Gateway.PluginsDir
 		}
-		
+
 		// WebUI配置
 		if mainConfig.WebUI.Port > 0 {
 			config.WebUI.Port = mainConfig.WebUI.Port
 		}
 		config.WebUI.Enabled = mainConfig.WebUI.Enabled
-		
+
 		// 认证配置
 		if mainConfig.WebUI.Auth.JWTSecret != "" {
 			config.WebUI.Auth.JWTSecret = mainConfig.WebUI.Auth.JWTSecret
@@ -416,17 +416,17 @@ func (s *configService) getDefaultConfig() *models.SystemConfig {
 			config.WebUI.Auth.BcryptCost = mainConfig.WebUI.Auth.BcryptCost
 		}
 		config.WebUI.Auth.EnableTwoFactor = mainConfig.WebUI.Auth.EnableTwoFactor
-		
+
 		// 数据库配置 - 这是最重要的
 		if mainConfig.Database.SQLite.Path != "" {
 			config.Database.SQLite.Path = mainConfig.Database.SQLite.Path
 		}
-		
+
 		// 规则配置
 		if mainConfig.Rules.Dir != "" {
 			config.Rules.Dir = mainConfig.Rules.Dir
 		}
 	}
-	
+
 	return config
 }
