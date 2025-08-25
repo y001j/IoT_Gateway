@@ -13,47 +13,44 @@ import (
 // OptimizedWorkerPool 优化的工作池
 // 特性：负载均衡、批量处理、自适应调度、NUMA感知
 type OptimizedWorkerPool struct {
-	// 基础配置
-	numWorkers    int
-	maxQueueSize  int
-	batchSize     int
-	batchTimeout  time.Duration
-	
-	// 工作队列 - 每个worker独立队列减少竞争
-	workerQueues []chan RuleTask
-	
-	// 任务分发器
-	dispatcherChan chan RuleTask
-	dispatcherStop chan struct{}
-	
-	// Worker状态跟踪
-	workerStats   []WorkerStats
-	statsLock     sync.RWMutex
-	
-	// 负载均衡
+	// 64-bit fields first for ARM32 alignment
 	nextWorker    uint64 // 原子计数器，轮询分发
-	busyWorkers   []int32 // 每个worker的繁忙度
-	
-	// 生命周期管理
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	
 	// 性能监控
 	totalTasks     int64
 	completedTasks int64
 	failedTasks    int64
 	avgLatency     int64 // 纳秒
-	
+	// Other fields
+	// 基础配置
+	numWorkers    int
+	maxQueueSize  int
+	batchSize     int
+	batchTimeout  time.Duration
+	// 工作队列 - 每个worker独立队列减少竞争
+	workerQueues []chan RuleTask
+	// 任务分发器
+	dispatcherChan chan RuleTask
+	dispatcherStop chan struct{}
+	// Worker状态跟踪
+	workerStats   []WorkerStats
+	statsLock     sync.RWMutex
+	// 负载均衡
+	busyWorkers   []int32 // 每个worker的繁忙度
+	// 生命周期管理
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
 	// 服务引用
 	service *RuleEngineService
 }
 
 // WorkerStats Worker统计信息
 type WorkerStats struct {
-	WorkerID       int           `json:"worker_id"`
+	// 64-bit fields first for ARM32 alignment
 	TasksProcessed int64         `json:"tasks_processed"`
 	TasksFailed    int64         `json:"tasks_failed"`
+	// Other fields
+	WorkerID       int           `json:"worker_id"`
 	AvgLatency     time.Duration `json:"avg_latency"`
 	QueueLength    int           `json:"queue_length"`
 	IsIdle         bool          `json:"is_idle"`

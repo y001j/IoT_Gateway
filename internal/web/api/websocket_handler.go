@@ -21,14 +21,16 @@ import (
 
 // SmartThrottler 智能限流器
 type SmartThrottler struct {
+	// 64-bit fields first for ARM32 alignment
 	enabled          int64              // 是否启用推送 (0=暂停, 1=启用)
+	pushCount       int64                    // 推送计数
+	droppedCount    int64                    // 丢弃计数
+	// Other fields
 	globalRate       time.Duration      // 全局推送间隔
 	sensorRates      map[string]time.Duration // 每个传感器的推送间隔
 	lastPushTimes    map[string]time.Time     // 每个传感器的最后推送时间
 	mutex           sync.RWMutex
 	messageBuffer   chan ThrottledMessage    // 消息缓冲区
-	pushCount       int64                    // 推送计数
-	droppedCount    int64                    // 丢弃计数
 	statsMutex      sync.RWMutex
 }
 
@@ -57,6 +59,10 @@ type WebSocketHandler struct {
 
 // WebSocketClient represents a connected WebSocket client
 type WebSocketClient struct {
+	// 64-bit fields first for ARM32 alignment
+	messageCount    int64     // 消息计数（改为int64支持原子操作）
+	pushEnabled     int64     // 是否启用推送 (0=暂停, 1=启用)
+	// Other fields
 	ID       string
 	Conn     *websocket.Conn
 	UserID   string
@@ -66,10 +72,8 @@ type WebSocketClient struct {
 	Hub      *WebSocketHandler
 	// 客户端管理字段
 	lastActivity    time.Time // 最后活动时间
-	messageCount    int64     // 消息计数（改为int64支持原子操作）
 	createdAt       time.Time // 创建时间
 	// 客户端推送控制
-	pushEnabled     int64     // 是否启用推送 (0=暂停, 1=启用)
 	subscriptions   map[string]bool // 订阅的数据类型
 	subsMutex       sync.RWMutex    // 订阅锁
 }

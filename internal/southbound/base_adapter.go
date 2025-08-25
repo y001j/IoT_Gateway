@@ -12,23 +12,23 @@ import (
 
 // BaseAdapter 提供适配器的基础实现，包含通用的监控和错误处理功能
 type BaseAdapter struct {
-	name           string
-	adapterType    string
-	running        int32 // 使用atomic操作
-	startTime      time.Time
-	mu             sync.RWMutex
-	
-	// 指标相关
+	// 64-bit fields first for ARM32 alignment
 	dataPointsCollected int64
 	errorsCount         int64
+	// 64-bit fields for time and float64
+	avgResponseTime     float64   // 平均响应时间(毫秒)
+	// 32-bit fields
+	running        int32 // 使用atomic操作
+	maxResponseTimes    int       // 最多保存的响应时间记录数
+	// Other fields
+	name           string
+	adapterType    string
+	startTime      time.Time
+	mu             sync.RWMutex
 	lastDataPointTime   time.Time
 	lastError           error
-	
 	// 响应时间统计
 	responseTimes       []float64 // 最近的响应时间记录
-	avgResponseTime     float64   // 平均响应时间(毫秒)
-	maxResponseTimes    int       // 最多保存的响应时间记录数
-	
 	// 健康状态
 	healthStatus   string
 	healthMessage  string

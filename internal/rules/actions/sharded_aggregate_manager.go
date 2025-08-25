@@ -24,10 +24,13 @@ type ShardedAggregateManager struct {
 
 // AggregateManagerShard 聚合管理器分片
 type AggregateManagerShard struct {
-	states         sync.Map                 // key: stateKey, value: *HighPerformanceStats
+	// 64-bit fields first for ARM32 alignment
 	lastCleanup    int64                    // atomic - 上次清理时间戳
+	// 32-bit fields
 	cleanupRunning int32                    // atomic - 清理是否在运行
 	shardID        int32
+	// Other fields
+	states         sync.Map                 // key: stateKey, value: *HighPerformanceStats
 }
 
 // BatchProcessor 批量处理器
@@ -50,6 +53,7 @@ type BatchedPoint struct {
 
 // PerformanceMetrics 性能指标
 type PerformanceMetrics struct {
+	// All 64-bit atomic fields grouped together for ARM32 alignment
 	processedCount    int64 // atomic - 处理的数据点数
 	batchCount        int64 // atomic - 批次数
 	averageLatency    int64 // atomic - 平均延迟(纳秒)

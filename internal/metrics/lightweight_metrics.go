@@ -34,9 +34,11 @@ type MetricsCache struct {
 
 // DataPointsTracker 数据点速率跟踪器
 type DataPointsTracker struct {
+	// 64-bit fields first for ARM32 alignment
 	lastCount       int64
-	lastTime        time.Time
 	lastBytesCount  int64
+	// Other fields
+	lastTime        time.Time
 	currentRate     float64
 	currentByteRate float64
 	initialized     bool
@@ -91,12 +93,8 @@ type LightweightMetrics struct {
 
 // SystemMetrics 系统指标
 type SystemMetrics struct {
-	UptimeSeconds     float64 `json:"uptime_seconds"`
+	// 64-bit fields first for ARM32 alignment
 	MemoryUsageBytes  int64   `json:"memory_usage_bytes"`
-	CPUUsagePercent   float64 `json:"cpu_usage_percent"`
-	DiskUsagePercent  float64 `json:"disk_usage_percent"`
-	GoroutineCount    int     `json:"goroutine_count"`
-	GCPauseMS         float64 `json:"gc_pause_ms"`
 	HeapSizeBytes     int64   `json:"heap_size_bytes"`
 	HeapInUseBytes    int64   `json:"heap_in_use_bytes"`
 	// 网络累计流量指标
@@ -104,6 +102,12 @@ type SystemMetrics struct {
 	NetworkOutBytes   int64   `json:"network_out_bytes"`
 	NetworkInPackets  int64   `json:"network_in_packets"`
 	NetworkOutPackets int64   `json:"network_out_packets"`
+	// Other fields
+	UptimeSeconds     float64 `json:"uptime_seconds"`
+	CPUUsagePercent   float64 `json:"cpu_usage_percent"`
+	DiskUsagePercent  float64 `json:"disk_usage_percent"`
+	GoroutineCount    int     `json:"goroutine_count"`
+	GCPauseMS         float64 `json:"gc_pause_ms"`
 	// 网络实时速率指标
 	NetworkInBytesPerSec    float64 `json:"network_in_bytes_per_sec"`
 	NetworkOutBytesPerSec   float64 `json:"network_out_bytes_per_sec"`
@@ -131,40 +135,46 @@ type GatewayMetrics struct {
 
 // DataMetrics 数据处理指标
 type DataMetrics struct {
+	// 64-bit fields first for ARM32 alignment
 	TotalDataPoints         int64   `json:"total_data_points"`
-	DataPointsPerSecond     float64 `json:"data_points_per_second"`
 	TotalBytesProcessed     int64   `json:"total_bytes_processed"`
+	ProcessingErrorsCount   int64   `json:"processing_errors_count"`
+	TotalMessagesPublished  int64   `json:"total_messages_published"`
+	// Other fields
+	DataPointsPerSecond     float64 `json:"data_points_per_second"`
 	BytesPerSecond          float64 `json:"bytes_per_second"`
 	AverageLatencyMS        float64 `json:"average_latency_ms"`
 	MaxLatencyMS            float64 `json:"max_latency_ms"`
 	MinLatencyMS            float64 `json:"min_latency_ms"`
 	LastDataPointTime       time.Time `json:"last_data_point_time"`
 	DataQueueLength         int     `json:"data_queue_length"`
-	ProcessingErrorsCount   int64   `json:"processing_errors_count"`
-	TotalMessagesPublished  int64   `json:"total_messages_published"`
 	PublishRate             float64 `json:"publish_rate"`
 }
 
 // ConnectionMetrics 连接指标
 type ConnectionMetrics struct {
-	ActiveConnections    int                    `json:"active_connections"`
+	// 64-bit fields first for ARM32 alignment
 	TotalConnections     int64                  `json:"total_connections"`
 	FailedConnections    int64                  `json:"failed_connections"`
+	ConnectionErrors     int64                  `json:"connection_errors"`
+	ReconnectionCount    int64                  `json:"reconnection_count"`
+	// Other fields
+	ActiveConnections    int                    `json:"active_connections"`
 	ConnectionsByType    map[string]int         `json:"connections_by_type"`
 	ConnectionsByStatus  map[string]int         `json:"connections_by_status"`
 	AverageResponseTimeMS float64               `json:"average_response_time_ms"`
-	ConnectionErrors     int64                  `json:"connection_errors"`
-	ReconnectionCount    int64                  `json:"reconnection_count"`
 }
 
 // RuleMetrics 规则引擎指标
 type RuleMetrics struct {
-	TotalRules           int       `json:"total_rules"`
-	EnabledRules         int       `json:"enabled_rules"`
+	// 64-bit fields first for ARM32 alignment
 	RulesMatched         int64     `json:"rules_matched"`
 	ActionsExecuted      int64     `json:"actions_executed"`
 	ActionsSucceeded     int64     `json:"actions_succeeded"`
 	ActionsFailed        int64     `json:"actions_failed"`
+	// Other fields
+	TotalRules           int       `json:"total_rules"`
+	EnabledRules         int       `json:"enabled_rules"`
 	AverageExecutionTimeMS float64 `json:"average_execution_time_ms"`
 	RuleEngineStatus     string    `json:"rule_engine_status"`
 	LastRuleExecution    time.Time `json:"last_rule_execution"`
@@ -184,14 +194,16 @@ type PerformanceMetrics struct {
 
 // ErrorMetrics 错误指标
 type ErrorMetrics struct {
+	// 64-bit fields first for ARM32 alignment
 	TotalErrors         int64            `json:"total_errors"`
+	RecoveryCount       int64            `json:"recovery_count"`
+	// Other fields
 	ErrorsPerSecond     float64          `json:"errors_per_second"`
 	ErrorsByType        map[string]int64 `json:"errors_by_type"`
 	ErrorsByLevel       map[string]int64 `json:"errors_by_level"`
 	LastError           string           `json:"last_error"`
 	LastErrorTime       time.Time        `json:"last_error_time"`
 	ErrorRate           float64          `json:"error_rate"`
-	RecoveryCount       int64            `json:"recovery_count"`
 }
 
 // NewLightweightMetrics 创建轻量级指标收集器

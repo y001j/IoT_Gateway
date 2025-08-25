@@ -10,38 +10,35 @@ import (
 // HighPerformanceStats 高性能无锁统计计算器
 // 使用原子操作替代锁，实现数万倍性能提升
 type HighPerformanceStats struct {
-	// 基础统计信息 - 使用原子操作
+	// 64-bit fields first for ARM32 alignment
 	count      int64   // atomic
 	sum        uint64  // atomic (使用bits存储float64)
 	sumSquares uint64  // atomic (使用bits存储float64)
 	minVal     uint64  // atomic (使用bits存储float64)
 	maxVal     uint64  // atomic (使用bits存储float64)
-	
 	// 时间信息
 	firstUpdateTime uint64 // atomic (时间戳)
 	lastUpdateTime  uint64 // atomic (时间戳)
 	firstValue      uint64 // atomic (首个值)
 	lastValue       uint64 // atomic (最后值)
-	
 	// 数据质量统计
 	nullCount  int64 // atomic
 	validCount int64 // atomic
-	
-	// 滑动窗口支持 - 环形缓冲区避免动态分配
-	windowSize   int32
-	ringBuffer   []uint64 // 存储float64的bits
+	// 滑动窗口支持
 	writeIndex   uint64   // atomic
-	windowFull   uint32   // atomic bool
-	
+	cacheVersion   uint64 // atomic - 缓存版本号，用于失效检测
 	// 阈值配置
 	upperLimit       uint64  // atomic (bits)
 	lowerLimit       uint64  // atomic (bits) 
 	outlierThreshold uint64  // atomic (bits)
-	
 	// 预计算缓存
 	cachedMean     uint64 // atomic (bits)
 	cachedStdDev   uint64 // atomic (bits)
-	cacheVersion   uint64 // atomic - 缓存版本号，用于失效检测
+	// 32-bit fields
+	windowSize   int32
+	windowFull   uint32   // atomic bool
+	// Non-atomic fields
+	ringBuffer   []uint64 // 存储float64的bits
 }
 
 // NewHighPerformanceStats 创建高性能统计计算器

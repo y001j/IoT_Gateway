@@ -16,11 +16,13 @@ import (
 
 // SinkStats 定义了连接器的统计信息
 type SinkStats struct {
+	// 64-bit fields first for ARM32 alignment
+	MessagesTotal  int64     `json:"messages_total"`
+	MessagesFailed int64     `json:"messages_failed"`
+	// Other fields
 	Name           string    `json:"name"`
 	Type           string    `json:"type"`
 	Running        bool      `json:"running"`
-	MessagesTotal  int64     `json:"messages_total"`
-	MessagesFailed int64     `json:"messages_failed"`
 	LastError      string    `json:"last_error,omitempty"`
 	LastMessage    time.Time `json:"last_message"`
 }
@@ -34,8 +36,10 @@ type SinkHealthStatus struct {
 
 // SinkMetrics 连接器指标
 type SinkMetrics struct {
+	// 64-bit fields first for ARM32 alignment
 	MessagesPublished   int64         `json:"messages_published"`   // 发布的消息总数
 	ErrorsCount         int64         `json:"errors_count"`         // 错误总数
+	// Other fields
 	LastPublishTime     time.Time     `json:"last_publish_time"`    // 最后发布时间
 	ConnectionUptime    time.Duration `json:"connection_uptime"`    // 连接正常运行时间
 	LastError           string        `json:"last_error,omitempty"` // 最后错误信息

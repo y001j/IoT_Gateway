@@ -124,23 +124,24 @@ func (sm *SafeStringMap) Copy() map[string]string {
 	return result
 }
 
-// safeStringMapCopy 创建map[string]string的安全副本
-// Go 1.24兼容性增强版本：优先数据完整性，其次防止崩溃
-var (
-	mapCopyWarningOnce sync.Once
-	mapCopyAttempts    int64
-	mapCopySuccesses   int64
-)
+// ARM32对齐优化：将原子变量放在结构体中确保64位对齐
+var mapCopyStats struct {
+	// 64-bit fields first for ARM32 alignment
+	attempts    int64
+	successes   int64
+	// Other fields
+	warningOnce sync.Once
+}
 
 // safeExtractMapForEventPublishing Go 1.24专用：安全地提取map数据用于事件发布
 // 现已升级为使用ShardedTags，提供100%数据完整性
 func safeExtractMapForEventPublishing(original map[string]string) map[string]string {
 	// 统计尝试次数
-	atomic.AddInt64(&mapCopyAttempts, 1)
+	atomic.AddInt64(&mapCopyStats.attempts, 1)
 	
 	// 如果原始map为空，返回空map
 	if len(original) == 0 {
-		atomic.AddInt64(&mapCopySuccesses, 1)
+		atomic.AddInt64(&mapCopyStats.successes, 1)
 		return make(map[string]string)
 	}
 	
@@ -149,10 +150,10 @@ func safeExtractMapForEventPublishing(original map[string]string) map[string]str
 	result := shardedTags.GetAll()
 	
 	// 统计成功次数
-	atomic.AddInt64(&mapCopySuccesses, 1)
+	atomic.AddInt64(&mapCopyStats.successes, 1)
 	
 	// 一次性警告日志
-	mapCopyWarningOnce.Do(func() {
+	mapCopyStats.warningOnce.Do(func() {
 		log.Info().
 			Int("original_size", len(original)).
 			Int("result_size", len(result)).
@@ -269,8 +270,8 @@ func tryBatchCopy(original map[string]string, result map[string]string) bool {
 
 // GetMapCopyStats 获取map复制统计信息
 func GetMapCopyStats() (attempts, successes int64, successRate float64) {
-	attempts = atomic.LoadInt64(&mapCopyAttempts)
-	successes = atomic.LoadInt64(&mapCopySuccesses)
+	attempts = atomic.LoadInt64(&mapCopyStats.attempts)
+	successes = atomic.LoadInt64(&mapCopyStats.successes)
 	if attempts > 0 {
 		successRate = float64(successes) / float64(attempts) * 100
 	}

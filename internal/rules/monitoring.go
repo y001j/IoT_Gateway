@@ -26,12 +26,14 @@ type MonitoringRuleError struct {
 
 // RuleMonitor 规则引擎监控器
 type RuleMonitor struct {
+	// 64-bit map fields first for ARM32 alignment
+	errorsByType      map[ErrorType]int64
+	errorsByLevel     map[ErrorLevel]int64
+	// Other fields
 	mu                sync.RWMutex
 	metrics           *EngineMetrics
 	errors            []*MonitoringRuleError
 	maxErrors         int
-	errorsByType      map[ErrorType]int64
-	errorsByLevel     map[ErrorLevel]int64
 	actionStats       map[string]*ActionStats
 	ruleStats         map[string]*RuleStats
 	performanceStats  *PerformanceStats
@@ -46,9 +48,11 @@ type RuleMonitor struct {
 
 // ActionStats 动作统计
 type ActionStats struct {
+	// 64-bit fields first for ARM32 alignment
 	TotalExecutions int64         `json:"total_executions"`
 	SuccessCount    int64         `json:"success_count"`
 	ErrorCount      int64         `json:"error_count"`
+	// Other fields
 	TotalDuration   time.Duration `json:"total_duration"`
 	AvgDuration     time.Duration `json:"avg_duration"`
 	MaxDuration     time.Duration `json:"max_duration"`
@@ -59,9 +63,11 @@ type ActionStats struct {
 
 // RuleStats 规则统计
 type RuleStats struct {
+	// 64-bit fields first for ARM32 alignment
 	TotalEvaluations int64         `json:"total_evaluations"`
 	MatchCount       int64         `json:"match_count"`
 	ErrorCount       int64         `json:"error_count"`
+	// Other fields
 	TotalDuration    time.Duration `json:"total_duration"`
 	AvgDuration      time.Duration `json:"avg_duration"`
 	LastEvaluated    time.Time     `json:"last_evaluated"`
@@ -71,11 +77,13 @@ type RuleStats struct {
 
 // PerformanceStats 性能统计
 type PerformanceStats struct {
+	// 64-bit fields first for ARM32 alignment
+	MemoryUsage         int64         `json:"memory_usage"`
+	// Other fields
 	ThroughputPerSecond float64       `json:"throughput_per_second"`
 	P50Duration         time.Duration `json:"p50_duration"`
 	P95Duration         time.Duration `json:"p95_duration"`
 	P99Duration         time.Duration `json:"p99_duration"`
-	MemoryUsage         int64         `json:"memory_usage"`
 	GoroutineCount      int           `json:"goroutine_count"`
 	QueueLength         int           `json:"queue_length"`
 	LastUpdated         time.Time     `json:"last_updated"`
@@ -97,10 +105,12 @@ type HealthChecker interface {
 
 // AlertThresholds 报警阈值
 type AlertThresholds struct {
+	// 64-bit fields first for ARM32 alignment
+	MemoryThreshold       int64         `json:"memory_threshold"`
+	// Other fields
 	ErrorRateThreshold    float64       `json:"error_rate_threshold"`
 	LatencyThreshold      time.Duration `json:"latency_threshold"`
 	ThroughputThreshold   float64       `json:"throughput_threshold"`
-	MemoryThreshold       int64         `json:"memory_threshold"`
 	QueueLengthThreshold  int           `json:"queue_length_threshold"`
 	ConsecutiveErrors     int           `json:"consecutive_errors"`
 	CheckInterval         time.Duration `json:"check_interval"`
