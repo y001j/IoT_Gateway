@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
 
@@ -60,8 +61,17 @@ func NewManager(configPath string) (ConfigManager, error) {
 		watchers: make(map[string][]func(interface{})),
 	}
 
+	// 初始化热加载配置
+	hotReloadConfig := &HotReloadConfig{
+		Enabled:          true,  // 默认启用
+		GracefulFallback: true,  // 默认优雅降级
+		RetryInterval:    "30s",
+		MaxRetries:       3,
+	}
+
 	mgr.hotReload = &hotReloadManager{
 		manager: mgr,
+		config:  hotReloadConfig,
 		enabled: false,
 	}
 
@@ -139,11 +149,22 @@ func (m *Manager) notifyWatchers(key string, value interface{}) {
 	}
 }
 
+// HotReloadConfig 热加载配置
+type HotReloadConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	GracefulFallback bool   `yaml:"graceful_fallback" json:"graceful_fallback"`
+	RetryInterval    string `yaml:"retry_interval" json:"retry_interval"`
+	MaxRetries       int    `yaml:"max_retries" json:"max_retries"`
+}
+
 // hotReloadManager implements HotReloadManager
 type hotReloadManager struct {
-	manager *Manager
-	enabled bool
-	mu      sync.RWMutex
+	manager   *Manager
+	config    *HotReloadConfig
+	enabled   bool
+	watcher   *fsnotify.Watcher
+	retryCount int
+	mu        sync.RWMutex
 }
 
 // Enable enables hot reloading
@@ -151,12 +172,46 @@ func (h *hotReloadManager) Enable() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// 检查配置是否允许热加载
+	if h.config != nil && !h.config.Enabled {
+		log.Info().Msg("配置文件热加载已禁用")
+		return nil
+	}
+
 	if h.enabled {
 		return nil
 	}
 
+	// 尝试启动热加载
+	err := h.startHotReload()
+	if err != nil {
+		log.Error().Err(err).Msg("启动配置文件热加载失败")
+		
+		// 是否优雅降级
+		if h.config != nil && h.config.GracefulFallback {
+			log.Warn().Msg("启用优雅降级，继续运行但不监控文件变更")
+			return nil // 不返回错误，允许系统继续运行
+		}
+		return fmt.Errorf("配置文件热加载启动失败: %w", err)
+	}
+
+	h.enabled = true
+	return nil
+}
+
+// startHotReload 启动热加载功能
+func (h *hotReloadManager) startHotReload() error {
+	// 尝试使用 viper 的内置热加载
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("viper WatchConfig panic")
+		}
+	}()
+
 	h.manager.viper.WatchConfig()
 	h.manager.viper.OnConfigChange(func(e fsnotify.Event) {
+		log.Info().Str("file", e.Name).Str("op", e.Op.String()).Msg("检测到配置文件变更")
+		
 		// Notify all watchers
 		h.manager.mu.RLock()
 		for key := range h.manager.watchers {
@@ -166,7 +221,6 @@ func (h *hotReloadManager) Enable() error {
 		h.manager.mu.RUnlock()
 	})
 
-	h.enabled = true
 	return nil
 }
 

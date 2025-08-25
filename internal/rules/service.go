@@ -20,10 +20,11 @@ import (
 
 // RuleEngineConfig 规则引擎配置
 type RuleEngineConfig struct {
-	Enabled  bool    `yaml:"enabled" json:"enabled"`
-	RulesDir string  `yaml:"rules_dir" json:"rules_dir"`
-	Rules    []*Rule `yaml:"rules" json:"rules"`
-	Subject  string  `yaml:"subject" json:"subject"`
+	Enabled   bool              `yaml:"enabled" json:"enabled"`
+	RulesDir  string            `yaml:"rules_dir" json:"rules_dir"`
+	Rules     []*Rule           `yaml:"rules" json:"rules"`
+	Subject   string            `yaml:"subject" json:"subject"`
+	HotReload *HotReloadConfig  `yaml:"hot_reload" json:"hot_reload"` // 热加载配置
 }
 
 // RuleEngineService 规则引擎服务
@@ -141,15 +142,44 @@ func NewRuleEngineServiceWithConfig(config map[string]interface{}) *RuleEngineSe
 	if poolConfig, ok := config["worker_pool"].(map[string]interface{}); ok {
 		if maxWorkers, ok := poolConfig["max_workers"].(int); ok && maxWorkers > 0 {
 			service.maxWorkers = maxWorkers
-			}
+		}
 		
 		if queueSize, ok := poolConfig["queue_size"].(int); ok && queueSize > 0 {
 			service.queueSize = queueSize
-			}
+		}
 		
 		if useOptimized, ok := poolConfig["use_optimized"].(bool); ok {
 			service.useOptimizedPool = useOptimized
+		}
+	}
+	
+	// 解析热加载配置
+	if hotReloadConfig, ok := config["hot_reload"].(map[string]interface{}); ok {
+		if enabled, ok := hotReloadConfig["enabled"].(bool); ok {
+			if service.config == nil {
+				service.config = &RuleEngineConfig{}
 			}
+			if service.config.HotReload == nil {
+				service.config.HotReload = &HotReloadConfig{}
+			}
+			service.config.HotReload.Enabled = enabled
+		}
+		
+		if gracefulFallback, ok := hotReloadConfig["graceful_fallback"].(bool); ok {
+			service.config.HotReload.GracefulFallback = gracefulFallback
+		}
+		
+		if retryInterval, ok := hotReloadConfig["retry_interval"].(string); ok {
+			service.config.HotReload.RetryInterval = retryInterval
+		}
+		
+		if maxRetries, ok := hotReloadConfig["max_retries"].(int); ok {
+			service.config.HotReload.MaxRetries = maxRetries
+		}
+		
+		if debounceDelay, ok := hotReloadConfig["debounce_delay"].(string); ok {
+			service.config.HotReload.DebounceDelay = debounceDelay
+		}
 	}
 	
 	return service
@@ -321,6 +351,20 @@ func (s *RuleEngineService) Init(cfg any) error {
 
 	// 创建规则管理器
 	s.manager = NewManager(s.config.RulesDir)
+	
+	// 传递热加载配置给规则管理器
+	if s.config.HotReload != nil {
+		s.manager.SetHotReloadConfig(s.config.HotReload)
+		log.Info().
+			Bool("hot_reload_enabled", s.config.HotReload.Enabled).
+			Bool("graceful_fallback", s.config.HotReload.GracefulFallback).
+			Str("retry_interval", s.config.HotReload.RetryInterval).
+			Int("max_retries", s.config.HotReload.MaxRetries).
+			Msg("规则文件热加载配置已设置")
+	} else {
+		log.Info().Msg("使用默认热加载配置")
+	}
+	
 	s.evaluator = NewEvaluator()
 	
 	// 如果启用了规则索引，重新构建索引
@@ -1581,9 +1625,23 @@ func (s *RuleEngineService) loadInlineRules() error {
 func (s *RuleEngineService) watchRuleChanges() {
 	defer s.wg.Done()
 
+	// 检查热加载是否允许
+	if s.config != nil && s.config.HotReload != nil && !s.config.HotReload.Enabled {
+		log.Info().Msg("规则文件热加载已禁用，跳过文件监控")
+		return
+	}
+
 	changesChan, err := s.manager.WatchChanges()
 	if err != nil {
 		log.Error().Err(err).Msg("监控规则变化失败")
+		
+		// 检查是否优雅降级
+		if s.config != nil && s.config.HotReload != nil && s.config.HotReload.GracefulFallback {
+			log.Warn().Msg("启用优雅降级，继续运行但不监控规则文件变更")
+			return
+		}
+		
+		// 非优雅模式下，记录错误后继续
 		return
 	}
 
@@ -2508,4 +2566,56 @@ func (s *RuleEngineService) publishRuleEvent(eventType string, rule *Rule, point
 			Int("bytes", len(eventJSON)).
 			Msg("规则事件发布成功")
 	}
+}
+
+// SetHotReloadEnabled 动态设置热加载状态
+func (s *RuleEngineService) SetHotReloadEnabled(enabled bool) error {
+	if s.config == nil {
+		s.config = &RuleEngineConfig{}
+	}
+	if s.config.HotReload == nil {
+		s.config.HotReload = &HotReloadConfig{
+			Enabled:          true,
+			GracefulFallback: true,
+			RetryInterval:    "30s",
+			MaxRetries:       3,
+			DebounceDelay:    "100ms",
+		}
+	}
+	
+	oldEnabled := s.config.HotReload.Enabled
+	s.config.HotReload.Enabled = enabled
+	
+	// 通知规则管理器
+	if s.manager != nil {
+		s.manager.SetHotReloadConfig(s.config.HotReload)
+	}
+	
+	log.Info().
+		Bool("old_enabled", oldEnabled).
+		Bool("new_enabled", enabled).
+		Msg("规则文件热加载状态已更新")
+	
+	return nil
+}
+
+// GetHotReloadStatus 获取热加载状态
+func (s *RuleEngineService) GetHotReloadStatus() map[string]interface{} {
+	status := map[string]interface{}{
+		"enabled":           false,
+		"graceful_fallback": true,
+		"retry_interval":    "30s",
+		"max_retries":       3,
+		"debounce_delay":    "100ms",
+	}
+	
+	if s.config != nil && s.config.HotReload != nil {
+		status["enabled"] = s.config.HotReload.Enabled
+		status["graceful_fallback"] = s.config.HotReload.GracefulFallback
+		status["retry_interval"] = s.config.HotReload.RetryInterval
+		status["max_retries"] = s.config.HotReload.MaxRetries
+		status["debounce_delay"] = s.config.HotReload.DebounceDelay
+	}
+	
+	return status
 }

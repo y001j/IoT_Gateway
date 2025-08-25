@@ -1,0 +1,64 @@
+# IoT Gateway 配置 - 禁用热加载版本
+# 此配置文件用于演示禁用热加载功能
+
+# 网关核心配置
+gateway:
+  name: "IoT Gateway - No Hot Reload"
+  version: "1.0.0"
+  log_level: "info"
+  http_port: 8080
+  https_port: 8443
+  nats_url: "embedded"
+  plugins_dir: "./plugins"
+  enable_metrics: true
+  enable_profiling: true
+  
+  # 热加载配置 - 禁用
+  hot_reload:
+    enabled: false                   # 禁用配置文件热加载
+    graceful_fallback: true          # 热加载失败时优雅降级
+    retry_interval: "30s"            # 监控器启动失败后重试间隔
+    max_retries: 3                   # 最大重试次数
+
+# 规则引擎配置
+rule_engine:
+  enabled: true
+  rules_dir: "./rules"
+  subject: "iot.data.>"
+  
+  # 规则文件热加载配置 - 禁用
+  hot_reload:
+    enabled: false                   # 禁用规则文件热加载
+    graceful_fallback: true          # 热加载失败时优雅降级
+    retry_interval: "30s"            # 文件监控器启动失败后重试间隔
+    max_retries: 3                   # 最大重试次数
+    debounce_delay: "100ms"          # 文件变更防抖延迟
+
+# 南向适配器配置
+southbound:
+  adapters:
+    - name: "mock_sensor"
+      type: "mock"
+      enabled: true
+      params:
+        device_count: 5
+        interval: "5s"
+        sensors:
+          - name: "temperature"
+            type: "float"
+            min: 15.0
+            max: 35.0
+          - name: "humidity"  
+            type: "float"
+            min: 30.0
+            max: 80.0
+
+# 北向连接器配置
+northbound:
+  sinks:
+    - name: "console_output"
+      type: "console"
+      enabled: true
+      params:
+        format: "json"
+        timestamp: true

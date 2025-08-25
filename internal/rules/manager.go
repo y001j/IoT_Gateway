@@ -16,6 +16,15 @@ import (
 	"github.com/y001j/iot-gateway/internal/model"
 )
 
+// HotReloadConfig 热加载配置
+type HotReloadConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`                     // 是否启用热加载
+	GracefulFallback bool   `yaml:"graceful_fallback" json:"graceful_fallback"` // 优雅降级
+	RetryInterval    string `yaml:"retry_interval" json:"retry_interval"`       // 重试间隔
+	MaxRetries       int    `yaml:"max_retries" json:"max_retries"`             // 最大重试次数
+	DebounceDelay    string `yaml:"debounce_delay" json:"debounce_delay"`       // 防抖延迟
+}
+
 // RuleManager defines the interface for managing rules.
 type RuleManager interface {
 	LoadRules() error
@@ -30,6 +39,7 @@ type RuleManager interface {
 	WatchChanges() (<-chan RuleChangeEvent, error)
 	Close() error
 	GetStats() map[string]interface{}
+	SetHotReloadConfig(config *HotReloadConfig) // 设置热加载配置
 }
 
 // Manager 规则管理器
@@ -39,6 +49,9 @@ type Manager struct {
 	ruleIndex        *Index
 	watcher          *fsnotify.Watcher
 	changesChan      chan RuleChangeEvent
+	hotReloadConfig  *HotReloadConfig  // 热加载配置
+	hotReloadEnabled bool              // 热加载状态
+	retryCount       int               // 重试计数
 	mu               sync.RWMutex
 }
 
@@ -49,6 +62,13 @@ func NewManager(rulesDir string) *Manager {
 		rules:       make(map[string]*Rule),
 		ruleIndex:   NewIndex(),
 		changesChan: make(chan RuleChangeEvent, 100),
+		hotReloadConfig: &HotReloadConfig{
+			Enabled:          true,
+			GracefulFallback: true,
+			RetryInterval:    "30s",
+			MaxRetries:       3,
+			DebounceDelay:    "100ms",
+		},
 	}
 }
 
@@ -537,31 +557,86 @@ func (m *Manager) GetIndex() *Index {
 	return m.ruleIndex
 }
 
+// SetHotReloadConfig 设置热加载配置
+func (m *Manager) SetHotReloadConfig(config *HotReloadConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if config != nil {
+		m.hotReloadConfig = config
+	}
+}
+
 // WatchChanges 监控规则变化
 func (m *Manager) WatchChanges() (<-chan RuleChangeEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查是否允许热加载
+	if m.hotReloadConfig != nil && !m.hotReloadConfig.Enabled {
+		log.Info().Msg("规则文件热加载已禁用")
+		return m.changesChan, nil // 返回空通道，但不启动监控
+	}
+
+	// 尝试创建文件监控器
+	err := m.startFileWatcher()
+	if err != nil {
+		log.Error().Err(err).Msg("启动规则文件监控器失败")
+
+		// 是否优雅降级
+		if m.hotReloadConfig != nil && m.hotReloadConfig.GracefulFallback {
+			log.Warn().Msg("启用优雅降级，继续运行但不监控规则文件变更")
+			return m.changesChan, nil // 不返回错误，允许系统继续运行
+		}
+		return nil, fmt.Errorf("规则文件监控器启动失败: %w", err)
+	}
+
+	m.hotReloadEnabled = true
+	return m.changesChan, nil
+}
+
+// startFileWatcher 启动文件监控器
+func (m *Manager) startFileWatcher() error {
 	var err error
 	m.watcher, err = fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("创建文件监控器失败: %w", err)
+		return fmt.Errorf("创建文件监控器失败: %w", err)
 	}
 
 	// 监控规则目录
 	if err := m.watcher.Add(m.rulesDir); err != nil {
-		return nil, fmt.Errorf("添加目录监控失败: %w", err)
+		m.watcher.Close()
+		m.watcher = nil
+		return fmt.Errorf("添加目录监控失败: %w", err)
 	}
 
 	// 启动文件监控协程
 	go m.watchFileChanges()
 
-	return m.changesChan, nil
+	log.Info().Str("rules_dir", m.rulesDir).Msg("规则文件监控器已启动")
+	return nil
 }
 
 // watchFileChanges 监控文件变化
 func (m *Manager) watchFileChanges() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("文件监控协程发生 panic")
+		}
+	}()
+
+	// 解析防抖延迟
+	var debounceDelay time.Duration = 100 * time.Millisecond
+	if m.hotReloadConfig != nil && m.hotReloadConfig.DebounceDelay != "" {
+		if d, err := time.ParseDuration(m.hotReloadConfig.DebounceDelay); err == nil {
+			debounceDelay = d
+		}
+	}
+
 	for {
 		select {
 		case event, ok := <-m.watcher.Events:
 			if !ok {
+				log.Info().Msg("文件监控器已关闭")
 				return
 			}
 
@@ -573,8 +648,8 @@ func (m *Manager) watchFileChanges() {
 
 			log.Debug().Str("file", event.Name).Str("op", event.Op.String()).Msg("检测到文件变化")
 
-			// 延迟处理，避免文件正在写入
-			time.Sleep(100 * time.Millisecond)
+			// 防抖延迟处理
+			time.Sleep(debounceDelay)
 
 			switch {
 			case event.Op&fsnotify.Write == fsnotify.Write:
@@ -590,6 +665,11 @@ func (m *Manager) watchFileChanges() {
 				return
 			}
 			log.Error().Err(err).Msg("文件监控错误")
+			
+			// 如果错误太多，可能是系统不支持，尝试优雅关闭
+			if m.hotReloadConfig != nil && m.hotReloadConfig.GracefulFallback {
+				log.Warn().Msg("文件监控错误较多，考虑禁用热加载")
+			}
 		}
 	}
 }
