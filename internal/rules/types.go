@@ -14,46 +14,46 @@ import (
 
 // DataTypeDefinition 数据类型定义
 type DataTypeDefinition struct {
-	Type                string                          `json:"type" yaml:"type"`                                   // 主数据类型
-	Fields              map[string]FieldDefinition      `json:"fields,omitempty" yaml:"fields,omitempty"`           // 字段定义
-	CoordinateSystem    string                          `json:"coordinate_system,omitempty" yaml:"coordinate_system,omitempty"` // GPS坐标系
-	ColorSpace          string                          `json:"color_space,omitempty" yaml:"color_space,omitempty"` // 颜色空间
-	ArrayType           string                          `json:"array_type,omitempty" yaml:"array_type,omitempty"`   // 数组类型
-	TimeUnit            string                          `json:"time_unit,omitempty" yaml:"time_unit,omitempty"`     // 时间单位
-	MatrixType          string                          `json:"matrix_type,omitempty" yaml:"matrix_type,omitempty"` // 矩阵类型
+	Type             string                     `json:"type" yaml:"type"`                                               // 主数据类型
+	Fields           map[string]FieldDefinition `json:"fields,omitempty" yaml:"fields,omitempty"`                       // 字段定义
+	CoordinateSystem string                     `json:"coordinate_system,omitempty" yaml:"coordinate_system,omitempty"` // GPS坐标系
+	ColorSpace       string                     `json:"color_space,omitempty" yaml:"color_space,omitempty"`             // 颜色空间
+	ArrayType        string                     `json:"array_type,omitempty" yaml:"array_type,omitempty"`               // 数组类型
+	TimeUnit         string                     `json:"time_unit,omitempty" yaml:"time_unit,omitempty"`                 // 时间单位
+	MatrixType       string                     `json:"matrix_type,omitempty" yaml:"matrix_type,omitempty"`             // 矩阵类型
 }
 
 // FieldDefinition 字段定义
 type FieldDefinition struct {
-	Type       string                        `json:"type" yaml:"type"`                           // 字段类型
+	Type       string                        `json:"type" yaml:"type"`                                 // 字段类型
 	Properties map[string]PropertyDefinition `json:"properties,omitempty" yaml:"properties,omitempty"` // 属性定义
 }
 
 // PropertyDefinition 属性定义
 type PropertyDefinition struct {
-	Type      string      `json:"type" yaml:"type"`                           // 属性数据类型
-	Range     []float64   `json:"range,omitempty" yaml:"range,omitempty"`     // 数值范围
-	Unit      string      `json:"unit,omitempty" yaml:"unit,omitempty"`       // 单位
-	Optional  bool        `json:"optional,omitempty" yaml:"optional,omitempty"` // 是否可选
-	Computed  bool        `json:"computed,omitempty" yaml:"computed,omitempty"` // 是否计算得出
-	MinLength int         `json:"min_length,omitempty" yaml:"min_length,omitempty"` // 数组最小长度
-	MaxLength int         `json:"max_length,omitempty" yaml:"max_length,omitempty"` // 数组最大长度
+	Type      string    `json:"type" yaml:"type"`                                 // 属性数据类型
+	Range     []float64 `json:"range,omitempty" yaml:"range,omitempty"`           // 数值范围
+	Unit      string    `json:"unit,omitempty" yaml:"unit,omitempty"`             // 单位
+	Optional  bool      `json:"optional,omitempty" yaml:"optional,omitempty"`     // 是否可选
+	Computed  bool      `json:"computed,omitempty" yaml:"computed,omitempty"`     // 是否计算得出
+	MinLength int       `json:"min_length,omitempty" yaml:"min_length,omitempty"` // 数组最小长度
+	MaxLength int       `json:"max_length,omitempty" yaml:"max_length,omitempty"` // 数组最大长度
 }
 
 // Rule 规则定义
 type Rule struct {
-	ID          string               `json:"id" yaml:"id"`
-	Name        string               `json:"name" yaml:"name"`
-	Description string               `json:"description" yaml:"description"`
-	Enabled     bool                 `json:"enabled" yaml:"enabled"`
-	Priority    int                  `json:"priority" yaml:"priority"`
-	Version     int                  `json:"version" yaml:"version"`
-	DataType    interface{}          `json:"data_type,omitempty" yaml:"data_type,omitempty"` // 数据类型：字符串或详细定义
-	Conditions  *Condition           `json:"conditions" yaml:"conditions"`
-	Actions     []Action             `json:"actions" yaml:"actions"`
-	Tags        map[string]string    `json:"tags,omitempty" yaml:"tags,omitempty"`
-	CreatedAt   time.Time            `json:"created_at" yaml:"created_at"`
-	UpdatedAt   time.Time            `json:"updated_at" yaml:"updated_at"`
+	ID          string            `json:"id" yaml:"id"`
+	Name        string            `json:"name" yaml:"name"`
+	Description string            `json:"description" yaml:"description"`
+	Enabled     bool              `json:"enabled" yaml:"enabled"`
+	Priority    int               `json:"priority" yaml:"priority"`
+	Version     int               `json:"version" yaml:"version"`
+	DataType    interface{}       `json:"data_type,omitempty" yaml:"data_type,omitempty"` // 数据类型：字符串或详细定义
+	Conditions  *Condition        `json:"conditions" yaml:"conditions"`
+	Actions     []Action          `json:"actions" yaml:"actions"`
+	Tags        map[string]string `json:"tags,omitempty" yaml:"tags,omitempty"`
+	CreatedAt   time.Time         `json:"created_at" yaml:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at" yaml:"updated_at"`
 }
 
 // GetDataTypeName 获取规则的数据类型名称
@@ -61,17 +61,17 @@ func (r *Rule) GetDataTypeName() string {
 	if r.DataType == nil {
 		return ""
 	}
-	
+
 	// 如果是字符串形式，直接返回
 	if dataTypeName, ok := r.DataType.(string); ok {
 		return dataTypeName
 	}
-	
+
 	// 如果是详细定义形式，返回Type字段
 	if dataTypeDef, ok := r.DataType.(*DataTypeDefinition); ok {
 		return dataTypeDef.Type
 	}
-	
+
 	// 尝试从map[string]interface{}中提取（JSON解码后的格式）
 	if dataTypeMap, ok := r.DataType.(map[string]interface{}); ok {
 		if typeValue, exists := dataTypeMap["type"]; exists {
@@ -80,7 +80,7 @@ func (r *Rule) GetDataTypeName() string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -338,7 +338,7 @@ var Operators = map[string]func(interface{}, interface{}) bool{
 	"regex": func(a, b interface{}) bool {
 		str, ok1 := a.(string)
 		pattern, ok2 := b.(string)
-		
+
 		// 验证参数类型
 		if !ok1 || !ok2 {
 			// 对于非字符串类型，尝试转换
@@ -349,18 +349,18 @@ var Operators = map[string]func(interface{}, interface{}) bool{
 				pattern = fmt.Sprintf("%v", b)
 			}
 		}
-		
+
 		// 验证正则表达式
 		if pattern == "" {
 			return false
 		}
-		
+
 		// 增强的正则表达式验证
 		if _, err := MatchString(pattern, ""); err != nil {
 			// 无效的正则表达式模式，返回false而不是panic
 			return false
 		}
-		
+
 		matched, err := MatchString(pattern, str)
 		return err == nil && matched
 	},
@@ -371,7 +371,7 @@ func compareValues(a, b interface{}) int {
 	// 首先处理 nil 值
 	aIsNil := (a == nil)
 	bIsNil := (b == nil)
-	
+
 	if aIsNil && bIsNil {
 		return 0 // nil == nil
 	}
@@ -381,7 +381,7 @@ func compareValues(a, b interface{}) int {
 	if !aIsNil && bIsNil {
 		return 1 // non-nil > nil
 	}
-	
+
 	// 处理数字类型 - 包括IEEE 754特殊值
 	if numA, okA, specialA := toFloat64Enhanced(a); okA {
 		if numB, okB, specialB := toFloat64Enhanced(b); okB {
@@ -389,9 +389,9 @@ func compareValues(a, b interface{}) int {
 			if specialA == "nan" || specialB == "nan" {
 				// NaN的特殊处理：对于eq操作返回1（不相等），对于gt/lt操作需要特殊标记
 				// 使用-2作为特殊标记，表示NaN参与的比较
-				return -2 
+				return -2
 			}
-			
+
 			// 处理无穷大
 			if specialA == "inf" {
 				if specialB == "inf" {
@@ -411,7 +411,7 @@ func compareValues(a, b interface{}) int {
 			if specialB == "-inf" {
 				return 1 // 任何有限数 > -Inf
 			}
-			
+
 			// 标准浮点数比较
 			if numA < numB {
 				return -1
@@ -557,12 +557,12 @@ func toFloat64(v interface{}) (float64, bool) {
 		if val == "" {
 			return 0, false
 		}
-		
+
 		// 检查字符串是否只包含有效字符
 		if strings.TrimSpace(val) == "" {
 			return 0, false
 		}
-		
+
 		// 尝试将字符串转换为数字
 		if f, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -578,4 +578,3 @@ func toFloat64(v interface{}) (float64, bool) {
 	}
 	return 0, false
 }
-

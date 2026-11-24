@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,17 +29,19 @@ type CompositeMockAdapter struct {
 	compositeData []CompositeDataPoint
 	tags          map[string]interface{}
 	stopCh        chan struct{}
+	lifeMu        sync.Mutex
+	started       bool
 	ch            chan<- model.Point
 }
 
 // CompositeMockConfig 复合数据模拟器配置
 type CompositeMockConfig struct {
-	Name              string                 `json:"name"`
-	Type              string                 `json:"type"`
-	Enabled           bool                   `json:"enabled"`
-	Description       string                 `json:"description,omitempty"`
-	Interval          string                 `json:"interval"`
-	Tags              map[string]interface{} `json:"tags,omitempty"`
+	Name               string                 `json:"name"`
+	Type               string                 `json:"type"`
+	Enabled            bool                   `json:"enabled"`
+	Description        string                 `json:"description,omitempty"`
+	Interval           string                 `json:"interval"`
+	Tags               map[string]interface{} `json:"tags,omitempty"`
 	CompositeDataTypes []CompositeDataPoint   `json:"composite_data_types"`
 }
 
@@ -52,7 +55,7 @@ type CompositeDataPoint struct {
 	ColorConfig    *config.MockColorConfig    `json:"color_config,omitempty"`
 	VectorConfig   *config.MockVectorConfig   `json:"vector_config,omitempty"`
 	ArrayConfig    *config.MockArrayConfig    `json:"array_config,omitempty"`
-	
+
 	// 内部状态（运行时）
 	locationState *LocationState `json:"-"`
 	vector3dState *Vector3DState `json:"-"`
@@ -63,21 +66,21 @@ type CompositeDataPoint struct {
 
 // LocationState GPS位置模拟内部状态
 type LocationState struct {
-	CurrentLat  float64   `json:"current_lat"`
-	CurrentLng  float64   `json:"current_lng"`
-	CurrentAlt  float64   `json:"current_alt"`
-	CurrentSpeed float64  `json:"current_speed"`
-	Direction   float64   `json:"direction"` // 移动方向 (弧度)
-	LastUpdate  time.Time `json:"last_update"`
+	CurrentLat   float64   `json:"current_lat"`
+	CurrentLng   float64   `json:"current_lng"`
+	CurrentAlt   float64   `json:"current_alt"`
+	CurrentSpeed float64   `json:"current_speed"`
+	Direction    float64   `json:"direction"` // 移动方向 (弧度)
+	LastUpdate   time.Time `json:"last_update"`
 }
 
 // Vector3DState 三轴向量模拟内部状态
 type Vector3DState struct {
-	LastX    float64 `json:"last_x"`
-	LastY    float64 `json:"last_y"`
-	LastZ    float64 `json:"last_z"`
-	Time     float64 `json:"time"` // 用于振荡计算
-	Phase    float64 `json:"phase"` // 相位偏移
+	LastX float64 `json:"last_x"`
+	LastY float64 `json:"last_y"`
+	LastZ float64 `json:"last_z"`
+	Time  float64 `json:"time"`  // 用于振荡计算
+	Phase float64 `json:"phase"` // 相位偏移
 }
 
 // ColorState 颜色模拟内部状态
@@ -98,9 +101,9 @@ type VectorState struct {
 
 // ArrayState 数组模拟内部状态
 type ArrayState struct {
-	LastValues []interface{} `json:"last_values"`
-	Generation int           `json:"generation"`
-	ElementType string       `json:"element_type"`
+	LastValues  []interface{} `json:"last_values"`
+	Generation  int           `json:"generation"`
+	ElementType string        `json:"element_type"`
 }
 
 // NewCompositeMockAdapter 创建新的复合数据模拟器
@@ -241,6 +244,16 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 
 // Start 启动复合数据模拟器
 func (a *CompositeMockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
+	a.lifeMu.Lock()
+	if a.started {
+		a.lifeMu.Unlock()
+		return nil
+	}
+	a.started = true
+	a.stopCh = make(chan struct{})
+	stopCh := a.stopCh
+	a.lifeMu.Unlock()
+
 	a.ch = ch
 	log.Info().Str("name", "composite_mock").Msg("启动复合数据模拟器")
 
@@ -252,7 +265,7 @@ func (a *CompositeMockAdapter) Start(ctx context.Context, ch chan<- model.Point)
 			select {
 			case <-ctx.Done():
 				return
-			case <-a.stopCh:
+			case <-stopCh:
 				return
 			case <-ticker.C:
 				a.generateAndPublishData()
@@ -266,6 +279,13 @@ func (a *CompositeMockAdapter) Start(ctx context.Context, ch chan<- model.Point)
 
 // Stop 停止复合数据模拟器
 func (a *CompositeMockAdapter) Stop() error {
+	// 重复调用 Stop（例如先通过 API 停止、再随网关退出）以前会 close 已关闭的通道而 panic
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	if !a.started {
+		return nil
+	}
+	a.started = false
 	close(a.stopCh)
 	log.Info().Str("name", "composite_mock").Msg("复合数据模拟器已停止")
 	return nil
@@ -351,7 +371,7 @@ func (a *CompositeMockAdapter) generateLocationData(dataPoint *CompositeDataPoin
 			state.CurrentSpeed = config.SpeedMin + rand.Float64()*(config.SpeedMax-config.SpeedMin)
 
 			// 计算位移
-			distance := state.CurrentSpeed * elapsed / 3600.0 // 转换为公里
+			distance := state.CurrentSpeed * elapsed / 3600.0         // 转换为公里
 			latChange := distance * math.Cos(state.Direction) / 111.0 // 大约111km/度
 			lngChange := distance * math.Sin(state.Direction) / (111.0 * math.Cos(state.CurrentLat*math.Pi/180))
 

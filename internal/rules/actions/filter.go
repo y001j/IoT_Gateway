@@ -14,11 +14,11 @@ import (
 
 // FilterHandler Filter动作处理器
 type FilterHandler struct {
-	duplicateCache  map[string]DuplicateEntry
-	statisticsCache map[string]*StatisticsWindow
-	changeRateCache map[string]*ChangeRateEntry
+	duplicateCache   map[string]DuplicateEntry
+	statisticsCache  map[string]*StatisticsWindow
+	changeRateCache  map[string]*ChangeRateEntry
 	consecutiveCache map[string]*ConsecutiveEntry
-	mu              sync.RWMutex
+	mu               sync.RWMutex
 }
 
 // DuplicateEntry 重复数据缓存条目
@@ -29,10 +29,10 @@ type DuplicateEntry struct {
 
 // StatisticsWindow 统计窗口数据
 type StatisticsWindow struct {
-	Values    []float64
+	Values     []float64
 	WindowSize int
-	Mean      float64
-	StdDev    float64
+	Mean       float64
+	StdDev     float64
 	LastUpdate time.Time
 }
 
@@ -196,14 +196,14 @@ func (h *FilterHandler) shouldFilter(point model.Point, config *FilterConfig) (b
 func (h *FilterHandler) duplicateFilter(point model.Point, config *FilterConfig) (bool, string, error) {
 	// 获取时间窗口参数
 	var timeWindow time.Duration = config.TTL // 默认使用配置的TTL
-	
+
 	// 如果参数中有window设置，优先使用
 	if windowStr, ok := config.Parameters["window"].(string); ok {
 		if duration, err := time.ParseDuration(windowStr); err == nil {
 			timeWindow = duration
 		}
 	}
-	
+
 	// 如果都没有设置，使用默认值
 	if timeWindow == 0 {
 		timeWindow = 60 * time.Second // 默认60秒
@@ -463,26 +463,32 @@ func (h *FilterHandler) valuesEqual(a, b interface{}) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-// simplePatternMatch 简单模式匹配
+// simplePatternMatch 通配符匹配：* 匹配任意长度（含空）字符，? 匹配单个字符。
+// 以前注释声称支持 ?，实际只支持整串前缀/后缀的 *，"a*b" 之类的模式永远不匹配。
 func (h *FilterHandler) simplePatternMatch(value, pattern string) bool {
-	// 支持通配符 * 和 ?
-	if pattern == "*" {
-		return true
+	v, p := []rune(value), []rune(pattern)
+	vi, pi := 0, 0
+	star, mark := -1, 0
+	for vi < len(v) {
+		switch {
+		case pi < len(p) && (p[pi] == '?' || p[pi] == v[vi]):
+			vi++
+			pi++
+		case pi < len(p) && p[pi] == '*':
+			star, mark = pi, vi
+			pi++
+		case star >= 0:
+			pi = star + 1
+			mark++
+			vi = mark
+		default:
+			return false
+		}
 	}
-
-	// 简单的前缀和后缀匹配
-	if len(pattern) > 0 && pattern[0] == '*' {
-		suffix := pattern[1:]
-		return len(value) >= len(suffix) && value[len(value)-len(suffix):] == suffix
+	for pi < len(p) && p[pi] == '*' {
+		pi++
 	}
-
-	if len(pattern) > 0 && pattern[len(pattern)-1] == '*' {
-		prefix := pattern[:len(pattern)-1]
-		return len(value) >= len(prefix) && value[:len(prefix)] == prefix
-	}
-
-	// 精确匹配
-	return value == pattern
+	return pi == len(p)
 }
 
 // toFloat64 转换为float64
@@ -533,7 +539,7 @@ func (h *FilterHandler) qualityFilter(point model.Point, config *FilterConfig) (
 		default:
 			continue // 跳过无法转换的类型
 		}
-		
+
 		if allowedInt == point.Quality {
 			return false, "", nil
 		}
@@ -577,14 +583,14 @@ func (h *FilterHandler) changeRateFilter(point model.Point, config *FilterConfig
 	// 检查是否有历史数据
 	if entry, exists := h.changeRateCache[cacheKey]; exists {
 		timeDiff := point.Timestamp.Sub(entry.LastTimestamp)
-		
+
 		// 只在时间窗口内检查变化率，且确保时间差大于0
 		if timeDiff <= timeWindow && timeDiff > 0 {
 			if lastValue, err := h.toFloat64(entry.LastValue); err == nil {
 				// 计算变化率：变化量/时间差
 				valueDiff := math.Abs(currentValue - lastValue)
 				changeRate := valueDiff / timeDiff.Seconds()
-				
+
 				if changeRate > maxChangeRate {
 					// 过滤掉变化率过快的数据，不更新缓存，保持原有基准值
 					return true, fmt.Sprintf("变化率过快: %.2f/s 超过限制 %.2f/s", changeRate, maxChangeRate), nil
@@ -684,10 +690,18 @@ func (h *FilterHandler) consecutiveFilter(point model.Point, config *FilterConfi
 		return false, "", fmt.Errorf("连续异常过滤需要配置inner_filter参数")
 	}
 
-	// 创建内部过滤器配置
+	// 创建内部过滤器配置（以前对 type/parameters 做未检查的类型断言，配置缺失时会 panic）
+	innerType, ok := checkConfig["type"].(string)
+	if !ok || innerType == "" {
+		return false, "", fmt.Errorf("inner_filter 缺少 type")
+	}
+	innerParams, _ := checkConfig["parameters"].(map[string]interface{})
+	if innerParams == nil {
+		innerParams = map[string]interface{}{}
+	}
 	innerFilterConfig := &FilterConfig{
-		Type:       checkConfig["type"].(string),
-		Parameters: checkConfig["parameters"].(map[string]interface{}),
+		Type:       innerType,
+		Parameters: innerParams,
 		Action:     "drop",
 		TTL:        config.TTL,
 	}
@@ -716,7 +730,7 @@ func (h *FilterHandler) consecutiveFilter(point model.Point, config *FilterConfi
 	}
 
 	now := time.Now()
-	
+
 	if isAbnormal {
 		entry.ConsecutiveCount++
 		entry.IsAbnormal = true
@@ -769,35 +783,35 @@ func (h *FilterHandler) cleanupCache() {
 	for range ticker.C {
 		h.mu.Lock()
 		now := time.Now()
-		
+
 		// 清理重复数据缓存
 		for key, entry := range h.duplicateCache {
 			if now.Sub(entry.Timestamp) > time.Hour {
 				delete(h.duplicateCache, key)
 			}
 		}
-		
+
 		// 清理统计缓存
 		for key, window := range h.statisticsCache {
 			if now.Sub(window.LastUpdate) > 2*time.Hour {
 				delete(h.statisticsCache, key)
 			}
 		}
-		
+
 		// 清理变化率缓存
 		for key, entry := range h.changeRateCache {
 			if now.Sub(entry.LastTimestamp) > time.Hour {
 				delete(h.changeRateCache, key)
 			}
 		}
-		
+
 		// 清理连续异常缓存
 		for key, entry := range h.consecutiveCache {
 			if now.Sub(entry.LastCheckTime) > time.Hour {
 				delete(h.consecutiveCache, key)
 			}
 		}
-		
+
 		h.mu.Unlock()
 	}
 }

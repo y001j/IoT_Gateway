@@ -1,0 +1,296 @@
+# 修复报告：根据评审结果完善程序与补充单元测试
+
+- 日期：2026-11-24
+- 依据：`docs/project_review_2026-11.md`
+- 验证结果：`go build ./...`、`go vet ./...`、`gofmt -s -l .`（无输出）全部通过；`go test -race ./...` 21 个测试包全部通过；`GOOS=linux GOARCH=arm GOARM=7` 与 `GOARCH=arm64` 交叉编译通过。
+
+---
+
+## 1. 评审问题处理情况
+
+### P0（正确性与安全）
+
+| 评审条目 | 处理 | 主要位置 | 对应测试 |
+|---|---|---|---|
+| 2.1 forward 默认主题导致死循环 | 默认主题改为 `iot.rules.forward.<device>.<key>`；所有规则输出带 `Iot-Origin: rule-engine` 消息头，规则引擎忽略此类消息（即使显式转发回 `iot.data.*` 也不会成环）；聚合结果改发 `iot.rules.aggregate.*` | `rules/service.go`（`PublishRuleOutput`、`handleDataPoint`）、`rules/actions/forward.go` | `TestForwardDoesNotLoop`、`TestForwardDefaultSubject`、`TestPublishRuleOutputHeader` |
+| 2.2 Modbus `scale` 默认为 0、整数换算被截断 | scale 为 0 时按 1 处理；配置了换算时输出浮点数 | `southbound/modbus/modbus.go` | `TestParseRegisterDataScaling` |
+| 2.3 filter 无效、动作不串联 | 运行时注册 actions 包中完整的 filter/transform/forward/aggregate 处理器（以前 filter 实际是只打日志的空实现）；动作管道：filter 命中终止后续动作，transform 输出作为后续动作输入 | `rules/actions/register.go`、`rules/service.go`（`processRule`、`applyActionResult`）、`core/runtime.go` | `TestFilterActionStopsPipeline`、`TestTransformOutputFeedsNextAction`、`TestRegisterBuiltinHandlers` |
+| 2.4 InfluxDB 使用写入时刻 | 使用数据点采集时间 | `northbound/influxdb/influxdb.go`（`buildInfluxPoint`） | `TestBuildInfluxPointUsesAcquisitionTime` |
+| 2.5 任务静默丢弃、slow consumer 无感知 | 工作池不再"提交成功后再丢弃"；队列满时有界等待，超时才丢弃并计数；不再回退到会乱序的同步处理；订阅设置更大的 pending 上限；注册 NATS 异步错误回调，slow consumer 计数并使健康检查降级 | `rules/optimized_worker_pool.go`、`rules/service.go`、`core/runtime.go` | `TestWorkerPoolDropsAndCountsWhenFull`、`TestDispatchPointCountsDrops`、`TestHealthStatus` |
+| 2.6 默认安全配置 | 见下表 | | |
+
+安全加固明细：
+
+| 问题 | 处理 | 测试 |
+|---|---|---|
+| 默认账号 admin/admin123 | 初始密码取自 `IOT_GATEWAY_ADMIN_PASSWORD`，未设置时随机生成并写入 `<数据目录>/initial_admin_password`（0600）；前端登录页不再预填密码 | `TestMemoryStoreAdminPasswordFromEnv`、`TestMemoryStoreGeneratesRandomAdminPassword`、`TestLoginAndCORS` |
+| JWT 密钥写死在配置中 | 配置为空/为旧占位值/过短时自动生成随机密钥并持久化到 `.jwt_secret`；签发与校验统一使用 `AuthService.JWTSecret()` | `TestEnsureJWTSecret`、`TestWeakJWTSecretIsReplaced` |
+| JWT 算法未限制 | 只接受 HS256，且必须带 `exp` | `TestValidateJWTRejectsExpiredAndOtherAlgorithms`（含 alg=none、HS512） |
+| CORS `*` + 凭证 | 改为白名单（`web_ui.cors.allowed_origins`），`*` 时不允许凭证；8080 端口同样处理 | `TestGinCORS`、`TestGatewayHTTPHandler` |
+| WebSocket 不校验 Origin | Web 端和 websocket Sink 默认只允许同源和非浏览器客户端 | `TestCheckOrigin`、`TestDefaultOriginPolicy` |
+| Token 打印到日志、可放在 URL | 删除所有令牌/claims/密码哈希打印；查询参数令牌仅限 WebSocket 升级请求 | `TestQueryTokenOnlyForWebSocket` |
+| 普通用户可执行写操作 | 写操作需要 operator 或 admin；通知渠道、系统配置仅 admin | `TestWriteRoutesRequireOperator`、`TestNotificationChannelsAdminOnly`、`TestRequireRole` |
+| 登录错误信息可枚举用户 | 统一为"用户名或密码错误" | `TestLoginErrorsDoNotRevealUserExistence` |
+
+### 性能
+
+| 评审条目 | 处理 | 效果 / 测试 |
+|---|---|---|
+| 3.2-1 单协程串行 + 同步 Sink | 每个 Sink 独立的有界队列和写入协程（`plugin/dispatcher.go`），慢 Sink 只影响自己并计数丢弃；Redis 改用 Pipeline；JetStream 改用 `PublishAsync`；InfluxDB 非默认 bucket 改为缓存的非阻塞 WriteAPI | `TestSlowSinkDoesNotBlockOthers`、`TestJetStreamSinkPublishesBatch` |
+| 3.2-2 批次 10 写死、每批 Flush | 批次大小/刷新间隔/通道大小/队列长度可配置（`gateway.pipeline.*`，默认 100 / 50ms），去掉每批 `Flush()` | `TestPipelineFlushesByBatchSizeAndInterval` |
+| 3.2-3 无人订阅的 `data.<sink>` 发布 | 移除 | `TestPipelinePublishesToNATS` |
+| 3.2-4 规则事件放大 | `iot.rules.evaluated/action_executed/executed` 默认关闭（`rule_engine.publish_rule_events`） | `TestRuleEventsAreOptIn` |
+| 3.2-5 热路径 Info/Warn 日志 | 规则引擎、插件管理器、transform 热路径日志降为 Debug 或删除 | — |
+| 3.2-6 热路径无谓分配 | 去掉每点 `fmt.Sprintf` 估算；聚合环境变量启动时读取一次 | — |
+| 表达式引擎每次新建、每次解析 | 引擎对象池 + AST 缓存，每次求值前清空变量 | 16.9µs/159 次分配 → **2.7µs/90 次分配**；`TestExpressionEngineConcurrentCorrectness` |
+| 每个 Point 的 16 分片标签容器 | 改为单锁 + 惰性 map（API 不变）；原实现每次读写还要争用一把全局统计锁 | 创建带 4 个标签的点 2.7µs/40 次分配 → **0.28µs/3 次分配** |
+| 3.4 数据乱序 | 工作池按 `hash(device_id,key)` 分片，同一序列按到达顺序处理；任务到达即处理，不再攒批等待 | `TestWorkerPoolPreservesPerSeriesOrder` |
+| 规则索引失效（评审 4.11 的根因） | 原实现对设备/key/类型取并集且缺少条件的规则进入通配桶，几乎所有规则都是候选；改为只用必然成立的 AND 等值约束并取交集，不匹配时返回空 | `TestIndexIntersectsConstraints`、`TestIndexIgnoresNonNecessaryConstraints` |
+| 3.2-7 Modbus 逐寄存器请求 | 同类型、地址间隔不超过 `max_read_gap`（默认 10）的寄存器合并为一次读取（不超过协议上限 125） | `TestBuildReadGroupsMergesContiguous`、`TestPollOnceReadsMergedGroup`（4 个点 → 2 次请求） |
+
+### 功能缺口与正确性
+
+| 评审条目 | 处理 | 测试 |
+|---|---|---|
+| 4.1 内置 Modbus 不支持 RTU | 支持 RTU（`serial_port`、`baud_rate`、`data_bits`、`parity`、`stop_bits`） | `TestInitConfig` |
+| 4.2 无字节序配置、数据类型有限 | `byte_order`：ABCD/CDAB/BADC/DCBA（适配器级和寄存器级）；新增 int64/uint64/float64 | `TestByteOrders` |
+| 4.3 重连无退避、阻塞启动 | Start 不再阻塞（以前设备不可达时最多阻塞 25 秒并导致适配器启动失败）；后台指数退避重连；连接状态原子化；Stop 后可再次 Start | `TestStartDoesNotBlockAndReconnectsWithBackoff` |
+| 4.5 `/health` 固定 healthy | 汇总 NATS、运行时、插件、Sink 丢弃、规则引擎过载状态，unhealthy 返回 503 | `TestHealthStatus`、`TestGatewayHTTPHandler` |
+| 4.6 两套规则处理路径不一致 | 合并为同一个 `processRule` | `TestDisabledRuleAndConditionMismatch` |
+| 4.7 动作统计重复计数 | 只在 `executeAction` 记录一次 | `TestFailedActionDoesNotStopLaterActionsAndMetricsCountedOnce` |
+| 4.8 聚合分组键 `%d` | 修复 | `TestGenerateGroupKey` |
+| 4.9 Sink 之间标签互相污染 | 每个 Sink 拿到深拷贝的批次（`Point.Clone()`） | `TestDispatchBatchIsolatesSinks` |
+| 4.10 指标快照复制锁 + 数据竞争 | 只复制导出字段，缓存使用独立锁 | `TestGetMetricsSnapshotConcurrent`、`TestSnapshotIsIndependent` |
+| 设备 ID 含 `.` 等字符时主题错乱 | 新增可逆主题编码 `model.EncodeSubjectToken` / `DataSubject` / `RuleOutputSubject`，所有拼接主题处统一使用 | `TestEncodeDecodeSubjectToken`、`TestNatsBusPublishSubscribePoints` |
+| Sink 初始化失败导致网关退出 | 适配器和 Sink 初始化失败都只记录错误并跳过 | `TestRepoConfigAdaptersInit` |
+
+### 工程质量
+
+| 评审条目 | 处理 |
+|---|---|
+| 0 个单元测试 | 新增 23 个测试文件、126 个测试函数、4 个基准测试；`internal/testutil` 提供内嵌 NATS 测试服务器 |
+| `go vet` 3 处报错 | 全部修复，`go vet ./...` 无输出 |
+| `scripts/verify_alignment.go` 编译失败 | 修复 |
+| 83 个文件未 gofmt | 全部格式化，`gofmt -s -l .` 无输出 |
+| 前端 CI 的 `npm test` 无脚本 | **未处理**，见第 3 节 |
+
+---
+
+## 2. 修复过程中新发现并修复的问题
+
+这些问题评审时没有发现，是写测试或改代码时暴露出来的：
+
+1. **多个 Sink 把 int64/uint64 写成 0 或整批失败**：Redis/MQTT/WebSocket Sink 的 `TypeInt` 只处理 `int`/`float64`，Modbus 产生的 `int64`/`uint64` 被写成 0；InfluxDB Sink 直接返回错误导致整批失败。新增统一的 `northbound.NormalizeValue`。（`TestNormalizeValue`、`TestBuildInfluxPointIntegerTypes`、`TestConvertValue`）
+2. **表达式引擎伪造历史数据**：每次求值都用当前值 ±10% 生成假的 `last_values`，统计类表达式会在假数据上算出结果。已删除。（`TestExpressionEngineNoStaleVariables`）
+3. **transform 修改共享标签、覆盖采集时间**：转换结果与原数据点共享标签容器，一个规则添加的标签会出现在其他规则对同一数据点的处理中；转换后时间戳被改为当前时间。（`TestTransformLookupOutputKeyTagsAndTimestamp`）
+4. **HTTP 适配器资源泄漏**：轮询循环中的 `defer cancel()` / `defer resp.Body.Close()` 要等协程退出才执行，每次轮询泄漏一个上下文和一个未关闭的响应体，连接无法复用。（`TestHTTPAdapterPollsAndClosesResponses`）
+5. **mock 适配器停止后可能继续产生数据**：Stop 替换 `stopCh` 时与采集协程存在数据竞争（`-race` 检出）。
+6. **composite_mock 重复 Stop 会 panic**（close 已关闭的通道）；mqtt_sub Stop 后无法再次 Start。
+7. **确认/解决告警接口必然 panic**：把 JWT 中 float64 类型的 `user_id` 断言为 string。（`TestWriteRoutesRequireOperator` 检出）
+8. **`config_no_hotreload.yaml` 中的 mock 适配器配置格式已过时**，以前会导致使用该配置时网关启动失败。（`TestRepoConfigAdaptersInit` 检出）
+9. **配置校验器的两个缺陷**：`oneof` 对未填写的可选字段也报错；切片中的结构体（如 Modbus 寄存器）从不校验。
+10. **`CORSWithConfig` 的 Max-Age 头是乱码**（`string(rune(86400))`）。
+11. **`cmd/tools/modbus_test` 编译失败**（引用已删除的 `Point.Tags`）。
+12. **`docker-compose.yml` 挂载的 `configs/nats-server.conf` 不存在**，已补充（开启 JetStream）。
+13. 新增的原子计数器使用 `atomic.Int64/Uint64` 类型，保证在 32 位 ARM 上对齐。
+
+---
+
+## 3. 未完成事项
+
+| 事项 | 原因 / 建议 |
+|---|---|
+| 本地暂存的少数设计项 | 三个阶段均已实现，积压告警、指标和补发限速见第 8 节。未实现：死信流及其管理接口、每个 Sink 多个过滤主题、运维审计日志。详见 `docs/design_local_storage.md` 附录。 |
+| ARMv7（32 位）实机压测 | 已在 Linux/ARM64 虚拟机上运行全部测试和端到端压测（第 7.1 节）。Apple 芯片不支持 32 位 ARM 指令，ARMv7 只做了交叉编译和对齐检查，实机数据需在设备上运行 `cmd/tools/benchmark`。 |
+| 部分包的行覆盖率 | 所有包的主要功能都有测试，覆盖率见第 7.4 节。仍在 50% 左右的是 `rules/actions`（`transform.go` 4500 行复合数据转换分支）、`plugin`（sidecar 进程管理）、`metrics`。 |
+
+---
+
+## 4. 行为变化与升级注意
+
+1. **规则输出主题变化**：订阅规则输出时请使用 `iot.rules.>`（不再是单级的 `iot.rules.*`），forward 默认主题为 `iot.rules.forward.<device>.<key>`。
+2. **主题编码**：设备 ID / key 中含 `.`、`*`、`>`、空白、`~` 的，`iot.data.*` 主题中会被转义（例如 `plc.1` → `plc~2E1`）。普通 ID 不受影响。
+3. **评估事件默认关闭**：依赖 `iot.rules.evaluated` 的外部系统需设置 `rule_engine.publish_rule_events: true`。
+4. **首次启动的管理员密码**：新建数据库时不再是 admin123，请设置 `IOT_GATEWAY_ADMIN_PASSWORD` 或查看 `data/initial_admin_password`。已有数据库中的账号不受影响。
+5. **JWT 密钥**：配置为空或为旧占位值时使用自动生成的密钥，已登录的用户需要重新登录一次。
+6. **权限**：viewer/user 角色不能再启停插件、修改规则和告警；通知渠道仅 admin 可见。
+7. **跨域**：默认不再允许跨域访问 API 和 WebSocket；前后端分离部署时请配置 `web_ui.cors.allowed_origins`（websocket Sink 使用其 `allow_origins`）。
+8. **Modbus**：未配置 `scale` 的寄存器读数从"恒等于 offset"变为正确值；配置了小数系数的整数寄存器输出浮点数。
+9. **filter 动作开始真正生效**，以前配置了 filter 但实际未过滤的规则，行为会发生变化。
+
+---
+
+## 5. 第二轮：补齐测试与新发现问题的修复
+
+### 5.1 测试补齐
+
+新增测试覆盖了第一轮未覆盖的全部模块，所有测试都不依赖外部服务：
+
+| 模块 | 测试方式 |
+|---|---|
+| MQTT Sink、mqtt_sub 适配器 | 内嵌 NATS 开启 MQTT 协议作为测试 broker（`testutil.StartNATSWithMQTT`） |
+| Redis Sink | 测试内实现的最小 RESP 服务器，验证 Pipeline 批量、键格式、过期时间、采集时间戳 |
+| InfluxDB Sink | 模拟 `/api/v2/write` 的 HTTP 服务器，验证多 bucket 写入、采集时间戳、坏点跳过 |
+| WebSocket Sink | 真实 WebSocket 客户端，验证广播、点位配置、跨域拒绝 |
+| nats_subscriber、console Sink | 内嵌 NATS + 捕获型目标 Sink |
+| ISP sidecar 协议 | 模拟 sidecar 的 TCP 服务器：请求/响应、数据顺序、>64KB 消息、心跳、断线检测 |
+| monitoring | 系统指标采集、阈值、启停、配置更新 |
+| 规则引擎 | 表达式内置函数、内置告警（节流/模板/webhook/NATS）、规则管理器（JSON/YAML、增删改、持久化、热加载）、全部过滤类型、其余转换类型、两种聚合实现与统计 |
+| Web | 告警/规则/插件服务、SQLite 存储完整认证流程、HTTP 接口端到端（认证、规则 CRUD、告警生命周期、系统/插件接口） |
+| 整体 | `TestRuntimeEndToEnd`：用真实配置文件启动网关，验证 mock 适配器 → 管道 → NATS → 规则引擎（filter+alert）→ 告警，以及 /health 和优雅停止 |
+| 仓库数据 | `TestRepoConfigAdaptersInit`、`TestRepoRuleFilesAreValid`：仓库中的配置文件和示例规则都能通过校验 |
+| 前端 | `npm test`（`scripts/run-unit-tests.mjs` + `node:test`，无需额外依赖），覆盖 `src/utils/format.ts` |
+
+统计：Go 测试包 26 个全部通过（`go test -race ./...`），前端 4 个测试通过；`go vet` 无报错，`gofmt -s -l .` 无输出，ARMv7/ARM64 交叉编译通过。
+
+### 5.2 新发现并修复的问题
+
+**安全**
+1. 每次登录把**明文密码**打印到日志；MQTT Sink 初始化打印包含 broker 密码的完整配置。
+2. 登录失败锁定（`max_login_attempts`/`lockout_duration`）从未生效 → 已实现（按用户名计数，不区分用户是否存在）。
+3. **令牌无法吊销**：JWT 中间件不检查会话，登出、修改密码后旧令牌在过期前仍然有效 → 中间件对每个请求校验会话；登出删除会话；修改密码删除该用户所有会话。
+4. 登出接口必然返回 500（把整个 `Authorization` 头当作令牌查找会话）。
+5. SQLite 存储读出的会话 `Active` 恒为 false（表中没有该列），导致 `ValidateToken` 和刷新令牌在生产默认存储下必然失败；`UpdateSession` 也无法持久化失效状态。
+6. 同一用户同一秒内签发的 JWT 完全相同，按令牌查找会话会混淆 → 增加 `jti`、`iat`。
+7. 告警通道（邮件/短信）日志会输出包含密钥的完整配置 → 敏感字段打码（`rules.RedactConfig`）。
+
+**可靠性**
+8. ISP 客户端：sidecar 10 秒无数据或断开后接收循环永久停止并 100% CPU 空转，连接状态仍显示已连接；>64KB 消息同样导致停止；断开时有等待中的请求会 panic；数据消息乱序。
+9. monitoring：`UpdateConfig` 与采集协程数据竞争、网络计数器并发竞争、`UpdateConfig` 不填默认值、`UpdateConfig` 后 `Stop` panic、初始采集失败后无法再次启动。
+10. MQTT/Redis 在网关启动时不可达会导致启动无限阻塞或连接器被永久跳过；MQTT 健康检查在重连期间误报健康。
+11. WebSocket Sink 广播无写超时，一个卡住的客户端会阻塞所有客户端；停止后新连接的协程永久阻塞。
+12. `TimeSeriesData`/`MatrixData` 空数据计算衍生值时 panic（外部输入可触发）。
+
+**正确性**
+13. 规则管理器：校验失败的规则仍被加载；单规则 YAML 文件被静默忽略；启用/禁用状态重启后可能回退；删除定义在多规则文件或 YAML 文件中的规则后重启会"复活"；校验器比求值器更严格（要求显式操作符、AND/OR 至少 2 个子条件），启用校验后会误拒合法规则 → 已与求值器对齐，并拒绝未知操作符。
+14. 表达式预处理会改写字符串字面量中的方括号和 `tags.x`（例如 `regex('^dev-[0-9]+$', id)` 被破坏）。
+15. 高性能统计把值为 0 的读数排除在百分位/阈值/异常值计算之外；下限为 0 或负数的阈值被忽略。
+16. 聚合结果在配置多个函数时随机取值（遍历 map）；优化聚合的结果因类型断言失败而丢失 → 按 `functions` 配置顺序确定性取值，两种结果格式统一处理。
+17. pattern 过滤的 `?` 和中间 `*` 不生效；consecutive 过滤缺少配置时 panic。
+18. nats_subscriber 无法解析规则输出（扁平数据点格式）；`contains` 实际做相等比较；`eq` 对 `type` 字段永远不成立；多个目标 Sink 共享同一批数据。
+19. console Sink 忽略 `batch_size` 和标签配置。
+20. `ConfigParser.ParseFromManager` 不应用默认值。
+21. 前端 `formatBytes` 对小于 1 或超过 TB 的值输出 `undefined`。
+
+### 5.3 精简
+- 删除 `service.go` 中重复的聚合实现（约 400 行）及 `sharded_aggregate_states.go`；聚合统一由动作处理器提供，`IOT_GATEWAY_ENABLE_OPTIMIZED_AGGREGATE=true` 时使用 `OptimizedAggregateHandler`，否则使用 `AggregateHandler`。
+- 删除未被引用的 `utils/thread_safe_tags.go`、`utils/tags_migration.go`。
+
+### 5.4 新增行为变化
+- 修改密码、登出后，对应令牌立即失效；网关升级后所有用户需要重新登录一次（新令牌带 `jti`）。
+- 连续登录失败达到 `max_login_attempts` 次后，该用户名锁定 `lockout_duration`。
+- 规则文件中不合法的规则（以及使用未知操作符的条件）不再被加载，会在日志中给出原因。
+
+---
+
+## 6. 第三轮：剩余模块测试、断网续传、压测工具
+
+### 6.1 断网续传（评审 4.4 节）
+按 `docs/design_local_storage.md` 第一阶段实现：
+- `storage.enabled: true` 时，所有采集数据写入内嵌 JetStream 持久化流 `IOT_RAW`（文件存储、S2 压缩、按 `max_age`/`max_bytes` 淘汰最旧数据）；内嵌 NATS 的磁盘上限和刷盘间隔由 `storage.max_disk`、`storage.sync_interval` 控制。
+- 连接器配置 `buffer.enabled: true` 后，由 `SinkRunner` 通过 JetStream 持久消费者驱动：写入成功（`BatchWriter` 同步确认）才确认消息；目标不可用时数据留在本地、按退避重试，恢复后**按原顺序**补发；网关重启后从断点继续；永久错误丢弃并计数；因超出保留上限而丢失的数据量可精确统计。
+- 状态：`GET :8080/storage`；`/health` 新增 `storage` 组件。
+- 测试：`internal/storage`（断线恢复顺序、重启续传、健康门控、淘汰计数、永久错误、跳过规则输出、`start_from=all`）、`TestRuntimeStoreAndForward`（整机：目标断线 → 本地积压 → 恢复后按序补发）、各 Sink 的 `WriteBatch` 错误分类测试。
+- 压测中发现并修复：逐条异步确认导致每次拉取都等到超时，补发速度只有约 3000 点/秒 → 改为每批一次同步确认，补发速度约 24.6 万点/秒。
+
+### 6.2 补齐测试与新发现的问题
+- 新增测试：transform 全部复合数据转换类型、ISP 适配器代理（模拟 sidecar）、Web 系统/配置/通知/日志服务、SQLite 认证流程、令牌吊销。
+- **令牌吊销**：中间件对每个请求校验会话；登出删除会话，修改密码删除该用户全部会话；JWT 增加 `jti`（同一秒内签发的令牌以前完全相同）；修复 SQLite 会话 `Active` 恒为 false 导致令牌校验/刷新必然失败的问题。
+- 配置服务 `GetConfig` 在未加载配置时**必然死锁**（持有读锁调用需要写锁的 `LoadConfig`）；配置文件（含 JWT 密钥）权限改为 0600。
+- `GET /system/config` 返回明文 JWT 密钥 → 返回遮盖值；提交遮盖值时保留原密钥。
+- `RestartService` 什么也不做却返回成功 → 如实返回"不支持在线重启"（HTTP 501）。
+- 通知邮件正文未转义告警内容（HTML 注入）。
+- ISP 适配器代理：重连时无锁替换客户端（数据竞争）；重连等待不响应停止；`int64/uint64/double` 等类型的数据点被丢弃；sidecar 未提供时间戳时数据点时间为 1970 年。
+- WebSocket Sink：广播无写超时，一个卡住的客户端阻塞所有客户端。
+- 数据模型：空的时间序列/矩阵数据计算衍生值时 panic。
+- `ConfigParser.ParseFromManager` 不应用默认值；规则管理器删除 YAML 规则后重启会复活。
+- 删除未被引用的 `utils/thread_safe_tags.go`、`utils/tags_migration.go`。
+
+### 6.3 压测工具与本机结果
+`cmd/tools/benchmark`：使用生产运行时启动网关（高速生成数据的适配器 → 管道 → NATS → 规则引擎 → 计数连接器），输出采集/连接器/规则任务吞吐、丢弃、积压和内存。
+
+```bash
+GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchmark   # 或 GOARCH=arm64
+./bench -duration 30s -devices 100 -rules 10 -expr-rules 2          # 直连模式
+./bench -duration 30s -rules 10 -storage                            # 开启本地暂存
+```
+
+本机（Apple M4 Pro，12 核）：直连模式 10 条简单规则 + 2 条表达式规则，端到端约 **36.8 万点/秒**，规则任务约 66 万次/秒，平均延迟约 28µs，无丢弃。ARM 网关的数据需在设备上运行上述命令获得。
+
+### 6.4 验证
+`go test -race ./...` 26 个测试包全部通过（含 `internal/storage`），`go vet` 无报错，`gofmt -s -l .` 无输出，ARMv7/ARM64 交叉编译通过；前端 `npm test` 通过。
+
+---
+
+## 7. 第四轮：ARM64 实测、近期数据查询与汇总层、补齐低覆盖率模块
+
+### 7.1 Linux/ARM64 实测
+在本机的 Linux/ARM64 虚拟机（lima，4 核，aarch64 内核 6.17）上：
+- 26 个测试包全部通过（交叉编译测试二进制后在虚拟机中运行）。
+- 端到端压测（`cmd/tools/benchmark`）：直连模式 10 条简单规则 + 2 条表达式规则，约 **33.7 万点/秒**，无丢弃，堆内存 206MB；开启本地暂存后，缓冲连接器在 5 万点/秒时实时跟上（积压为 0），10 万点/秒时只能处理约一半。
+- 修复压测工具：`-rate` 以前用微秒级 Ticker，实际速率远低于设定值（设 2 万只有约 4100）；改为每 10ms 成批生成。新增 `-buffer-batch` 参数。
+
+### 7.2 本地暂存第二、三阶段
+- **近期数据查询**（`internal/storage/query.go`）：`QueryRaw`（按序列读取、按采集时间过滤排序、`avg/min/max/last/lttb` 降采样、并发/扫描量/超时限制）、`ListSeries`、`Latest`。24 小时单序列查询在 ARM64 上约 0.18 秒（验收目标 2 秒）。
+- **汇总层**（`internal/storage/rollup.go`）：`storage.rollup.enabled` 后按窗口汇总 count/sum/min/max/last 写入 `IOT_ROLLUP` 流；按事件时间关闭窗口，重启不丢未写出的窗口；`Store.Query` 按时间范围自动选择原始层或汇总层。
+- **运维**：暂停、恢复、跳过积压、从指定时间重放（`Manager.ControlSinkBuffer`、`ResetSinkRunner`）。
+- **Web 接口**：`/api/v1/data/{series,latest,history,export}`、`/api/v1/storage/status`、`/api/v1/storage/sinks/:name/:action`（仅管理员）。
+- **前端**：新增"历史数据"页（侧边栏），含本地存储状态卡片和运维按钮；纯函数在 `src/utils/history.ts`，已加入前端单元测试。
+- 实现过程中发现：推送式消费者的 `ConsumerInfo().NumPending` 在创建后立即变为 0，不能用来判断查询何时结束；只按入库时间提前结束会漏掉延迟上报的数据。两处都已处理并有测试。
+
+### 7.3 补齐测试过程中发现的问题
+| 模块 | 问题 | 修复 |
+|---|---|---|
+| mqtt_sub | 消息不是 JSON 对象时（纯文本、`23.5` 这类单个数值），解析错误没有清除，**消息全部被丢弃** | 按配置类型转换整条消息；复合类型要求 JSON 对象；字符串类型保留原文 |
+| Web 系统接口 | `GET /api/v1/system/alert-status` 必然空指针 panic（处理器没有服务容器） | `NewSystemHandlerWithServices` |
+| 适配器监控 | "重启适配器"只记日志就返回成功，实际没有重启 | 调用插件管理器重启，不存在时返回 404 |
+| WebSocket | 客户端最后活动时间被读、写、广播三个协程无锁并发读写（数据竞争） | 改为原子变量 |
+| 告警服务 | `GetAlert/CreateAlert/UpdateAlert` 返回内部指针，调用方在锁外读取时与解除/更新存在数据竞争 | 返回副本 |
+| 系统告警 | 告警解除后不从缓存删除，每个检查周期重复解除；堆大小为 0 时内存使用率为 +Inf 导致误报 | 解除后删除；分母为 0 时视为 0 |
+| 规则服务（Web） | 校验要求条件必须写 `type`，通过本服务创建的规则测试时必然失败；测试规则用另写的简化求值（只支持少数操作符和 float64） | 复用 `rules.ValidateRule`（新导出）和规则引擎的 `Evaluator` |
+| 规则服务（Web） | 规则统计、执行历史返回 `rand` 生成的**假数据** | 如实返回 `ErrRuleStatsUnavailable` |
+| 插件服务 | 没有日志文件时返回编造的"插件启动成功"等示例日志；名为 mock 的插件统计返回写死的调试数字；每次查询以 Info 级别输出调试日志 | 返回空列表；删除调试数据；日志降为 Debug |
+| 表达式引擎 | `vectorNormalize` 注册了两个同名函数，三维用法 `vectorNormalize(x,y,z)` / `vectorNormalize(<Vector3D>)` 被通用向量版本覆盖，必然报错 | 通用版本遇到三维参数时转交 |
+| 正则缓存 | 淘汰时选择得分**最低**的条目，淘汰的恰恰是最近、最常用的正则；缩小上限不立即生效 | 改为淘汰最高分；`SetMaxSize` 立即淘汰 |
+| 规则错误分类 | `IsRetryableError/GetErrorType/GetErrorLevel` 用类型断言，被 `%w` 包装后无法识别 | `errors.As` |
+| geo | `ValidateGeoData` 只在两个字段都缺失时才查别名，只缺经度时不报错；五份重复的 `toFloat64` | 逐字段查找；合并为一个函数 |
+
+### 7.4 覆盖率（`go test -cover ./...`，本轮变化）
+| 包 | 之前 | 现在 |
+|---|---|---|
+| rules/geo | 27.7% | 99.2% |
+| southbound/mqtt_sub | 39.3% | 94.7% |
+| storage | 83.3% | 88.4% |
+| web/api | 28.3% | 77.5% |
+| web/services | 33.5% | 72.7% |
+| core | 48.0% | 68.6% |
+| rules | 46.6% | 61.4% |
+
+其余包不变（model 89.7%、influxdb 91.8%、modbus 91.2%、utils 98.8% 等）。
+
+### 7.5 验证
+`go test -race ./...` 26 个包全部通过；Linux/ARM64 上 26 个包全部通过；`go vet` 无报错；`gofmt -s -l .` 无输出；ARMv7/ARM64 交叉编译通过，`scripts/verify_alignment.go` 通过；前端 `npm test` 9 项通过，`npm run build` 成功，新增文件 ESLint 和 `tsc` 无报错（前端其余文件原有约 95 个类型错误，不在本次范围）。
+
+---
+
+## 8. 第五轮：积压告警与指标、补发限速、数据流统计、内存告警
+
+### 8.1 本地暂存积压告警与 Prometheus 指标
+- 新增 `storage.AlertMonitor`（默认开启，`storage.alerts`）：积压逼近保留上限（时长或容量，warning 50% / critical 80%）、有数据在写入前被淘汰、数据目录所在磁盘快满时，以规则引擎告警的格式发布到 `iot.alerts.triggered`，进入 Web 告警和通知渠道；同一告警 30 分钟内只发一次，级别升高立即发送。
+- `/health` 的 `storage` 组件与告警条件一致。**修正**：上一轮按流占用率超过 90% 降级，而流是环形缓冲区，正常写满就会误报。
+- `/metrics?format=text` 增加 `iot_gateway_storage_*` 指标；`/storage`、`/api/v1/storage/status` 返回当前告警，历史数据页显示告警。
+
+### 8.2 补发限速
+`buffer.replay_rate`（点/秒）：每批写入成功后按速率推迟下一批，空闲期间不累积额度，避免断网恢复后的补发挤占窄带链路或超过云端写入配额。
+
+### 8.3 适配器监控的数据流统计
+以前只要开启 Web 界面就常驻订阅 `iot.data.>`，每条消息都做 JSON 解析并获取全局锁；速率计算也有错误（记录最多 1000 条，"每秒点数"有上限；"每秒字节数"用累计字节除以时间范围）。改为：
+- 按需订阅：首次查询数据流时才订阅，5 分钟无人查询自动退订；
+- 每条消息只做原子计数（无锁、无解析），每个序列每秒最多解析一条用于最新值和延迟；
+- 速率由每 10 秒的计数快照计算；订阅设置了待处理上限，高负载时丢弃统计消息而不是拖慢连接。
+
+### 8.4 系统内存告警
+以前按"已分配堆 / 向系统申请的堆"计算内存使用率，Go 程序正常运行时这个比值经常超过 85%，会误报。改为系统内存使用率（系统采集器，gopsutil），告警中附带网关进程堆内存；采集不到系统内存时不判断。`LightweightMetrics` 增加 `system_memory_percent` 等字段和 `iot_gateway_system_memory_percent` 指标。
+
+### 8.5 验证
+`go test -race ./...` 26 个包全部通过（storage 89.7%、core 72.4%、web/services 70.4%）；Linux/ARM64 上 26 个包全部通过；`go vet` 无报错；`gofmt -s -l .` 无输出；ARMv7/ARM64 交叉编译和 32 位对齐检查通过；前端 9 项测试通过，构建成功。

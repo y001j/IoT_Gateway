@@ -15,69 +15,78 @@ import (
 
 // SystemMetrics 系统指标数据
 type SystemMetrics struct {
-	Timestamp           time.Time `json:"timestamp"`
-	CPUUsage            float64   `json:"cpu_usage"`             // CPU使用率 (%)
-	CPUCores            int       `json:"cpu_cores"`             // CPU核心数
-	MemoryUsage         float64   `json:"memory_usage"`          // 内存使用率 (%)
-	MemoryUsageBytes    uint64    `json:"memory_usage_bytes"`    // 内存使用量 (bytes)
-	MemoryTotalBytes    uint64    `json:"memory_total_bytes"`    // 总内存 (bytes)
-	DiskUsage           float64   `json:"disk_usage"`            // 磁盘使用率 (%)
-	DiskUsageBytes      uint64    `json:"disk_usage_bytes"`      // 磁盘使用量 (bytes)
-	DiskTotalBytes      uint64    `json:"disk_total_bytes"`      // 总磁盘容量 (bytes)
+	Timestamp        time.Time `json:"timestamp"`
+	CPUUsage         float64   `json:"cpu_usage"`          // CPU使用率 (%)
+	CPUCores         int       `json:"cpu_cores"`          // CPU核心数
+	MemoryUsage      float64   `json:"memory_usage"`       // 内存使用率 (%)
+	MemoryUsageBytes uint64    `json:"memory_usage_bytes"` // 内存使用量 (bytes)
+	MemoryTotalBytes uint64    `json:"memory_total_bytes"` // 总内存 (bytes)
+	DiskUsage        float64   `json:"disk_usage"`         // 磁盘使用率 (%)
+	DiskUsageBytes   uint64    `json:"disk_usage_bytes"`   // 磁盘使用量 (bytes)
+	DiskTotalBytes   uint64    `json:"disk_total_bytes"`   // 总磁盘容量 (bytes)
 	// 网络累计流量
-	NetworkInBytes      uint64    `json:"network_in_bytes"`      // 网络接收字节数（累计）
-	NetworkOutBytes     uint64    `json:"network_out_bytes"`     // 网络发送字节数（累计）
-	NetworkInPackets    uint64    `json:"network_in_packets"`    // 网络接收包数（累计）
-	NetworkOutPackets   uint64    `json:"network_out_packets"`   // 网络发送包数（累计）
+	NetworkInBytes    uint64 `json:"network_in_bytes"`    // 网络接收字节数（累计）
+	NetworkOutBytes   uint64 `json:"network_out_bytes"`   // 网络发送字节数（累计）
+	NetworkInPackets  uint64 `json:"network_in_packets"`  // 网络接收包数（累计）
+	NetworkOutPackets uint64 `json:"network_out_packets"` // 网络发送包数（累计）
 	// 网络实时速率
-	NetworkInBytesPerSec  float64 `json:"network_in_bytes_per_sec"`  // 网络接收速率 (bytes/s)
-	NetworkOutBytesPerSec float64 `json:"network_out_bytes_per_sec"` // 网络发送速率 (bytes/s)
+	NetworkInBytesPerSec    float64 `json:"network_in_bytes_per_sec"`    // 网络接收速率 (bytes/s)
+	NetworkOutBytesPerSec   float64 `json:"network_out_bytes_per_sec"`   // 网络发送速率 (bytes/s)
 	NetworkInPacketsPerSec  float64 `json:"network_in_packets_per_sec"`  // 网络接收包速率 (packets/s)
 	NetworkOutPacketsPerSec float64 `json:"network_out_packets_per_sec"` // 网络发送包速率 (packets/s)
-	GoroutineCount      int       `json:"goroutine_count"`       // Goroutine数量
-	HeapAllocBytes      uint64    `json:"heap_alloc_bytes"`      // 堆内存分配
-	HeapSizeBytes       uint64    `json:"heap_size_bytes"`       // 堆内存大小
-	GCCount             uint32    `json:"gc_count"`              // GC次数
-	SystemLoadAvg1      float64   `json:"system_load_avg1"`      // 系统1分钟负载平均值
+	GoroutineCount          int     `json:"goroutine_count"`             // Goroutine数量
+	HeapAllocBytes          uint64  `json:"heap_alloc_bytes"`            // 堆内存分配
+	HeapSizeBytes           uint64  `json:"heap_size_bytes"`             // 堆内存大小
+	GCCount                 uint32  `json:"gc_count"`                    // GC次数
+	SystemLoadAvg1          float64 `json:"system_load_avg1"`            // 系统1分钟负载平均值
 }
 
 // SystemThresholds 系统阈值配置
 type SystemThresholds struct {
-	CPUWarning    float64 `json:"cpu_warning" yaml:"cpu_warning"`       // CPU警告阈值
-	CPUCritical   float64 `json:"cpu_critical" yaml:"cpu_critical"`     // CPU严重阈值
-	MemoryWarning float64 `json:"memory_warning" yaml:"memory_warning"` // 内存警告阈值
+	CPUWarning     float64 `json:"cpu_warning" yaml:"cpu_warning"`         // CPU警告阈值
+	CPUCritical    float64 `json:"cpu_critical" yaml:"cpu_critical"`       // CPU严重阈值
+	MemoryWarning  float64 `json:"memory_warning" yaml:"memory_warning"`   // 内存警告阈值
 	MemoryCritical float64 `json:"memory_critical" yaml:"memory_critical"` // 内存严重阈值
-	DiskWarning   float64 `json:"disk_warning" yaml:"disk_warning"`     // 磁盘警告阈值
-	DiskCritical  float64 `json:"disk_critical" yaml:"disk_critical"`   // 磁盘严重阈值
+	DiskWarning    float64 `json:"disk_warning" yaml:"disk_warning"`       // 磁盘警告阈值
+	DiskCritical   float64 `json:"disk_critical" yaml:"disk_critical"`     // 磁盘严重阈值
 }
 
 // SystemCollectorConfig 系统收集器配置
 type SystemCollectorConfig struct {
-	Enabled          bool              `json:"enabled" yaml:"enabled"`                     // 是否启用
-	CollectInterval  time.Duration     `json:"collect_interval" yaml:"collect_interval"`   // 收集间隔
-	CacheDuration    time.Duration     `json:"cache_duration" yaml:"cache_duration"`       // 缓存持续时间
-	DiskPath         string            `json:"disk_path" yaml:"disk_path"`                 // 监控的磁盘路径
-	NetworkInterface string            `json:"network_interface" yaml:"network_interface"` // 网络接口名称
-	Thresholds       SystemThresholds  `json:"thresholds" yaml:"thresholds"`               // 系统阈值
+	Enabled          bool             `json:"enabled" yaml:"enabled"`                     // 是否启用
+	CollectInterval  time.Duration    `json:"collect_interval" yaml:"collect_interval"`   // 收集间隔
+	CacheDuration    time.Duration    `json:"cache_duration" yaml:"cache_duration"`       // 缓存持续时间
+	DiskPath         string           `json:"disk_path" yaml:"disk_path"`                 // 监控的磁盘路径
+	NetworkInterface string           `json:"network_interface" yaml:"network_interface"` // 网络接口名称
+	Thresholds       SystemThresholds `json:"thresholds" yaml:"thresholds"`               // 系统阈值
 }
 
 // SystemCollector 系统指标收集器
 type SystemCollector struct {
-	config         SystemCollectorConfig
-	lastMetrics    atomic.Value // *SystemMetrics
-	lastUpdate     atomic.Value // time.Time
-	collecting     atomic.Bool
-	mutex          sync.RWMutex
-	stopCh         chan struct{}
-	
-	// 网络统计缓存 (用于计算差值)
-	lastNetStats   *net.IOCountersStat
-	lastNetTime    time.Time
+	config      SystemCollectorConfig
+	lastMetrics atomic.Value // *SystemMetrics
+	lastUpdate  atomic.Value // time.Time
+	collecting  atomic.Bool
+	mutex       sync.RWMutex // 保护缓存刷新与生命周期（Start/Stop/UpdateConfig）
+	cfgMu       sync.RWMutex // 保护 config（以前 UpdateConfig 与采集协程存在数据竞争）
+	stopCh      chan struct{}
+	doneCh      chan struct{}
+
+	// 网络统计缓存 (用于计算差值)，由 netMu 保护（并发采集时以前存在数据竞争）
+	netMu        sync.Mutex
+	lastNetStats *net.IOCountersStat
+	lastNetTime  time.Time
 }
 
-// NewSystemCollector 创建系统指标收集器
-func NewSystemCollector(config SystemCollectorConfig) *SystemCollector {
-	// 设置默认配置
+// cfg 返回当前配置的副本
+func (c *SystemCollector) cfg() SystemCollectorConfig {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.config
+}
+
+// applyCollectorDefaults 为未设置的配置项填充默认值
+func applyCollectorDefaults(config SystemCollectorConfig) SystemCollectorConfig {
 	if config.CollectInterval == 0 {
 		config.CollectInterval = 5 * time.Second
 	}
@@ -87,82 +96,88 @@ func NewSystemCollector(config SystemCollectorConfig) *SystemCollector {
 	if config.DiskPath == "" {
 		config.DiskPath = "/"
 	}
-	
-	// 设置默认阈值
-	if config.Thresholds.CPUWarning == 0 {
-		config.Thresholds.CPUWarning = 80.0
+	t := &config.Thresholds
+	if t.CPUWarning == 0 {
+		t.CPUWarning = 80.0
 	}
-	if config.Thresholds.CPUCritical == 0 {
-		config.Thresholds.CPUCritical = 95.0
+	if t.CPUCritical == 0 {
+		t.CPUCritical = 95.0
 	}
-	if config.Thresholds.MemoryWarning == 0 {
-		config.Thresholds.MemoryWarning = 85.0
+	if t.MemoryWarning == 0 {
+		t.MemoryWarning = 85.0
 	}
-	if config.Thresholds.MemoryCritical == 0 {
-		config.Thresholds.MemoryCritical = 95.0
+	if t.MemoryCritical == 0 {
+		t.MemoryCritical = 95.0
 	}
-	if config.Thresholds.DiskWarning == 0 {
-		config.Thresholds.DiskWarning = 90.0
+	if t.DiskWarning == 0 {
+		t.DiskWarning = 90.0
 	}
-	if config.Thresholds.DiskCritical == 0 {
-		config.Thresholds.DiskCritical = 95.0
+	if t.DiskCritical == 0 {
+		t.DiskCritical = 95.0
 	}
+	return config
+}
 
-	collector := &SystemCollector{
-		config: config,
-		stopCh: make(chan struct{}),
-	}
-
-	// 初始化缓存
+// NewSystemCollector 创建系统指标收集器
+func NewSystemCollector(config SystemCollectorConfig) *SystemCollector {
+	collector := &SystemCollector{config: applyCollectorDefaults(config)}
 	collector.lastUpdate.Store(time.Time{})
-	
 	return collector
 }
 
 // Start 启动收集器
 func (c *SystemCollector) Start() error {
-	if !c.config.Enabled {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.startLocked()
+}
+
+func (c *SystemCollector) startLocked() error {
+	cfg := c.cfg()
+	if !cfg.Enabled {
 		return nil
 	}
-
 	if c.collecting.Load() {
 		return fmt.Errorf("system collector is already running")
 	}
 
-	c.collecting.Store(true)
-	
-	// 立即收集一次
+	// 立即收集一次；失败时不标记为运行中（以前失败后仍处于"运行中"，无法再次启动）
 	if err := c.collectOnce(); err != nil {
 		return fmt.Errorf("initial collection failed: %w", err)
 	}
 
-	// 启动定时收集
-	go c.collectLoop()
-	
+	c.stopCh = make(chan struct{})
+	c.doneCh = make(chan struct{})
+	c.collecting.Store(true)
+	go c.collectLoop(cfg.CollectInterval, c.stopCh, c.doneCh)
 	return nil
 }
 
-// Stop 停止收集器
+// Stop 停止收集器（可重复调用）
 func (c *SystemCollector) Stop() error {
-	if !c.collecting.Load() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.stopLocked()
+}
+
+func (c *SystemCollector) stopLocked() error {
+	if !c.collecting.CompareAndSwap(true, false) {
 		return nil
 	}
-
-	c.collecting.Store(false)
 	close(c.stopCh)
-	
+	<-c.doneCh
 	return nil
 }
 
 // GetMetrics 获取系统指标（带缓存）
 func (c *SystemCollector) GetMetrics() (*SystemMetrics, error) {
-	if !c.config.Enabled {
+	if !c.cfg().Enabled {
 		return c.getDefaultMetrics(), nil
 	}
 
 	// 检查缓存是否有效
 	lastUpdateTime, ok := c.lastUpdate.Load().(time.Time)
-	if ok && time.Since(lastUpdateTime) < c.config.CacheDuration {
+	if ok && time.Since(lastUpdateTime) < c.cfg().CacheDuration {
 		if metrics, ok := c.lastMetrics.Load().(*SystemMetrics); ok && metrics != nil {
 			return metrics, nil
 		}
@@ -174,7 +189,7 @@ func (c *SystemCollector) GetMetrics() (*SystemMetrics, error) {
 
 // GetMetricsForced 强制获取最新系统指标（绕过缓存）
 func (c *SystemCollector) GetMetricsForced() (*SystemMetrics, error) {
-	if !c.config.Enabled {
+	if !c.cfg().Enabled {
 		return c.getDefaultMetrics(), nil
 	}
 
@@ -190,28 +205,29 @@ func (c *SystemCollector) IsHealthy() (bool, []string) {
 
 	var issues []string
 	healthy := true
+	th := c.cfg().Thresholds
 
 	// 检查CPU使用率
-	if metrics.CPUUsage >= c.config.Thresholds.CPUCritical {
+	if metrics.CPUUsage >= th.CPUCritical {
 		issues = append(issues, fmt.Sprintf("CPU usage critical: %.1f%%", metrics.CPUUsage))
 		healthy = false
-	} else if metrics.CPUUsage >= c.config.Thresholds.CPUWarning {
+	} else if metrics.CPUUsage >= th.CPUWarning {
 		issues = append(issues, fmt.Sprintf("CPU usage warning: %.1f%%", metrics.CPUUsage))
 	}
 
 	// 检查内存使用率
-	if metrics.MemoryUsage >= c.config.Thresholds.MemoryCritical {
+	if metrics.MemoryUsage >= th.MemoryCritical {
 		issues = append(issues, fmt.Sprintf("Memory usage critical: %.1f%%", metrics.MemoryUsage))
 		healthy = false
-	} else if metrics.MemoryUsage >= c.config.Thresholds.MemoryWarning {
+	} else if metrics.MemoryUsage >= th.MemoryWarning {
 		issues = append(issues, fmt.Sprintf("Memory usage warning: %.1f%%", metrics.MemoryUsage))
 	}
 
 	// 检查磁盘使用率
-	if metrics.DiskUsage >= c.config.Thresholds.DiskCritical {
+	if metrics.DiskUsage >= th.DiskCritical {
 		issues = append(issues, fmt.Sprintf("Disk usage critical: %.1f%%", metrics.DiskUsage))
 		healthy = false
-	} else if metrics.DiskUsage >= c.config.Thresholds.DiskWarning {
+	} else if metrics.DiskUsage >= th.DiskWarning {
 		issues = append(issues, fmt.Sprintf("Disk usage warning: %.1f%%", metrics.DiskUsage))
 	}
 
@@ -219,18 +235,15 @@ func (c *SystemCollector) IsHealthy() (bool, []string) {
 }
 
 // collectLoop 收集循环
-func (c *SystemCollector) collectLoop() {
-	ticker := time.NewTicker(c.config.CollectInterval)
+func (c *SystemCollector) collectLoop(interval time.Duration, stopCh, doneCh chan struct{}) {
+	defer close(doneCh)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ticker.C:
-			if err := c.collectOnce(); err != nil {
-				// 记录错误但继续运行
-				continue
-			}
-		case <-c.stopCh:
+			_ = c.collectOnce() // 记录错误但继续运行
+		case <-stopCh:
 			return
 		}
 	}
@@ -243,13 +256,18 @@ func (c *SystemCollector) collectAndCache() (*SystemMetrics, error) {
 
 	// 双重检查锁定
 	lastUpdateTime, ok := c.lastUpdate.Load().(time.Time)
-	if ok && time.Since(lastUpdateTime) < c.config.CacheDuration {
+	if ok && time.Since(lastUpdateTime) < c.cfg().CacheDuration {
 		if metrics, ok := c.lastMetrics.Load().(*SystemMetrics); ok && metrics != nil {
 			return metrics, nil
 		}
 	}
-
-	return c.collectOnceWithoutCache()
+	metrics, err := c.collectOnceWithoutCache()
+	if err != nil {
+		return nil, err
+	}
+	c.lastMetrics.Store(metrics)
+	c.lastUpdate.Store(time.Now())
+	return metrics, nil
 }
 
 // collectOnce 执行一次收集并更新缓存
@@ -261,7 +279,7 @@ func (c *SystemCollector) collectOnce() error {
 
 	c.lastMetrics.Store(metrics)
 	c.lastUpdate.Store(time.Now())
-	
+
 	return nil
 }
 
@@ -362,7 +380,7 @@ func (c *SystemCollector) collectMemoryMetrics(metrics *SystemMetrics) error {
 
 // collectDiskMetrics 收集磁盘指标
 func (c *SystemCollector) collectDiskMetrics(metrics *SystemMetrics) error {
-	diskStats, err := disk.Usage(c.config.DiskPath)
+	diskStats, err := disk.Usage(c.cfg().DiskPath)
 	if err != nil {
 		return err
 	}
@@ -383,13 +401,14 @@ func (c *SystemCollector) collectNetworkMetrics(metrics *SystemMetrics) error {
 
 	if len(netStats) > 0 {
 		totalStats := netStats[0]
-		
+
 		// 如果指定了网络接口，尝试获取该接口的统计
-		if c.config.NetworkInterface != "" {
+		iface := c.cfg().NetworkInterface
+		if iface != "" {
 			interfaceStats, err := net.IOCounters(true)
 			if err == nil {
 				for _, stat := range interfaceStats {
-					if stat.Name == c.config.NetworkInterface {
+					if stat.Name == iface {
 						totalStats = stat
 						break
 					}
@@ -398,24 +417,26 @@ func (c *SystemCollector) collectNetworkMetrics(metrics *SystemMetrics) error {
 		}
 
 		currentTime := time.Now()
-		
+		c.netMu.Lock()
+		defer c.netMu.Unlock()
+
 		// 设置累计值
 		metrics.NetworkInBytes = totalStats.BytesRecv
 		metrics.NetworkOutBytes = totalStats.BytesSent
 		metrics.NetworkInPackets = totalStats.PacketsRecv
 		metrics.NetworkOutPackets = totalStats.PacketsSent
-		
+
 		// 计算实时速率
 		if c.lastNetStats != nil && !c.lastNetTime.IsZero() {
 			timeDiff := currentTime.Sub(c.lastNetTime).Seconds()
-			
+
 			if timeDiff > 0 {
 				// 计算字节速率
 				inBytesDiff := float64(totalStats.BytesRecv) - float64(c.lastNetStats.BytesRecv)
 				outBytesDiff := float64(totalStats.BytesSent) - float64(c.lastNetStats.BytesSent)
 				inPacketsDiff := float64(totalStats.PacketsRecv) - float64(c.lastNetStats.PacketsRecv)
 				outPacketsDiff := float64(totalStats.PacketsSent) - float64(c.lastNetStats.PacketsSent)
-				
+
 				metrics.NetworkInBytesPerSec = inBytesDiff / timeDiff
 				metrics.NetworkOutBytesPerSec = outBytesDiff / timeDiff
 				metrics.NetworkInPacketsPerSec = inPacketsDiff / timeDiff
@@ -428,7 +449,7 @@ func (c *SystemCollector) collectNetworkMetrics(metrics *SystemMetrics) error {
 			metrics.NetworkInPacketsPerSec = 0
 			metrics.NetworkOutPacketsPerSec = 0
 		}
-		
+
 		// 更新缓存的网络统计和时间
 		c.lastNetStats = &totalStats
 		c.lastNetTime = currentTime
@@ -472,25 +493,27 @@ func (c *SystemCollector) getDefaultMetrics() *SystemMetrics {
 	}
 }
 
-// GetConfig 获取收集器配置
+// GetConfig 获取当前配置
 func (c *SystemCollector) GetConfig() SystemCollectorConfig {
-	return c.config
+	return c.cfg()
 }
 
-// UpdateConfig 更新收集器配置
+// UpdateConfig 更新收集器配置（运行中会以新配置重启）
 func (c *SystemCollector) UpdateConfig(config SystemCollectorConfig) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.config = config
-	
-	// 如果收集器正在运行且配置更改，需要重启
-	if c.collecting.Load() {
-		if err := c.Stop(); err != nil {
+	wasRunning := c.collecting.Load()
+	if wasRunning {
+		if err := c.stopLocked(); err != nil {
 			return err
 		}
-		return c.Start()
 	}
-
+	c.cfgMu.Lock()
+	c.config = applyCollectorDefaults(config)
+	c.cfgMu.Unlock()
+	if wasRunning {
+		return c.startLocked()
+	}
 	return nil
 }

@@ -34,9 +34,9 @@ func main() {
 
 	// 准备配置
 	config := map[string]interface{}{
-		"mode": "tcp",
-		"address": "127.0.0.1:502",
-		"timeout_ms": 5000,
+		"mode":        "tcp",
+		"address":     "127.0.0.1:502",
+		"timeout_ms":  5000,
 		"interval_ms": 2000,
 		"registers": []map[string]interface{}{
 			{
@@ -132,20 +132,20 @@ func main() {
 			case point := <-dataChan:
 				// 格式化时间
 				timeStr := point.Timestamp.Format("2006-01-02 15:04:05.000")
-				
+
 				// 格式化标签
 				tagsStr := ""
-				for k, v := range point.Tags {
+				for k, v := range point.GetTagsCopy() {
 					tagsStr += fmt.Sprintf("%s=%s ", k, v)
 				}
-				
+
 				// 打印数据点
-				fmt.Printf("[%s] %s.%s = %v (%s) %s\n", 
-					timeStr, 
-					point.DeviceID, 
-					point.Key, 
-					point.Value, 
-					point.Type, 
+				fmt.Printf("[%s] %s.%s = %v (%s) %s\n",
+					timeStr,
+					point.DeviceID,
+					point.Key,
+					point.Value,
+					point.Type,
 					tagsStr)
 			case <-ctx.Done():
 				return

@@ -114,14 +114,14 @@ type StatusData struct {
 
 // MetricsPayload 指标消息载荷
 type MetricsPayload struct {
-	DataPointsCollected int64         `json:"data_points_collected"` // 采集的数据点总数
-	ErrorsCount         int64         `json:"errors_count"`          // 错误总数
-	ConnectionUptime    int64         `json:"connection_uptime"`     // 连接正常运行时间（秒）
-	LastError           string        `json:"last_error,omitempty"`  // 最后错误信息
-	AverageResponseTime float64       `json:"average_response_time"` // 平均响应时间（毫秒）
-	StartTime           int64         `json:"start_time"`            // 启动时间（纳秒时间戳）
-	LastDataTime        int64         `json:"last_data_time"`        // 最后数据时间（纳秒时间戳）
-	Extra               map[string]interface{} `json:"extra,omitempty"` // 扩展指标
+	DataPointsCollected int64                  `json:"data_points_collected"` // 采集的数据点总数
+	ErrorsCount         int64                  `json:"errors_count"`          // 错误总数
+	ConnectionUptime    int64                  `json:"connection_uptime"`     // 连接正常运行时间（秒）
+	LastError           string                 `json:"last_error,omitempty"`  // 最后错误信息
+	AverageResponseTime float64                `json:"average_response_time"` // 平均响应时间（毫秒）
+	StartTime           int64                  `json:"start_time"`            // 启动时间（纳秒时间戳）
+	LastDataTime        int64                  `json:"last_data_time"`        // 最后数据时间（纳秒时间戳）
+	Extra               map[string]interface{} `json:"extra,omitempty"`       // 扩展指标
 }
 
 // NewConfigMessage 创建配置消息

@@ -3,13 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/rs/zerolog/log"
-	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/northbound"
 	"github.com/y001j/iot-gateway/internal/plugin"
 	"github.com/y001j/iot-gateway/internal/southbound"
@@ -17,15 +14,24 @@ import (
 )
 
 // AdapterMonitoringService 适配器监控服务
+// RestartAdapter 通过插件管理器重启适配器
+func (s *AdapterMonitoringService) RestartAdapter(name string) error {
+	if s.pluginManager == nil {
+		return fmt.Errorf("插件管理器不可用")
+	}
+	return s.pluginManager.RestartPlugin(name)
+}
+
 type AdapterMonitoringService struct {
 	pluginManager plugin.PluginManager
 	natsConn      *nats.Conn
 
 	// 监控数据存储
-	adapterMetrics  map[string]*AdapterRuntimeMetrics
-	sinkMetrics     map[string]*SinkRuntimeMetrics
-	dataFlowMetrics map[string]*DataFlowRuntimeMetrics
-	metricsLock     sync.RWMutex
+	adapterMetrics map[string]*AdapterRuntimeMetrics
+	sinkMetrics    map[string]*SinkRuntimeMetrics
+	metricsLock    sync.RWMutex
+	// flows 按需统计的数据流（见 dataFlowTracker）
+	flows *dataFlowTracker
 
 	// 监控配置
 	metricsInterval   time.Duration
@@ -77,27 +83,6 @@ type SinkRuntimeMetrics struct {
 	LastUpdateTime    time.Time
 }
 
-// DataFlowRuntimeMetrics 数据流运行时指标
-type DataFlowRuntimeMetrics struct {
-	AdapterName      string
-	DeviceID         string
-	Key              string
-	DataPoints       []DataPointRecord
-	BytesTransferred int64
-	ErrorsCount      int64
-	LastValue        interface{}
-	LastTimestamp    time.Time
-	LastUpdateTime   time.Time
-}
-
-// DataPointRecord 数据点记录
-type DataPointRecord struct {
-	Timestamp time.Time
-	Value     interface{}
-	Size      int
-	Latency   time.Duration
-}
-
 // NewAdapterMonitoringService 创建适配器监控服务
 func NewAdapterMonitoringService(pluginManager plugin.PluginManager, natsConn *nats.Conn) *AdapterMonitoringService {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -107,7 +92,7 @@ func NewAdapterMonitoringService(pluginManager plugin.PluginManager, natsConn *n
 		natsConn:          natsConn,
 		adapterMetrics:    make(map[string]*AdapterRuntimeMetrics),
 		sinkMetrics:       make(map[string]*SinkRuntimeMetrics),
-		dataFlowMetrics:   make(map[string]*DataFlowRuntimeMetrics),
+		flows:             newDataFlowTracker(natsConn),
 		adapterStartTimes: make(map[string]time.Time),
 		sinkStartTimes:    make(map[string]time.Time),
 		metricsInterval:   10 * time.Second,
@@ -118,11 +103,6 @@ func NewAdapterMonitoringService(pluginManager plugin.PluginManager, natsConn *n
 
 	// 启动监控协程
 	go service.startMonitoring()
-
-	// 订阅数据流事件
-	if natsConn != nil {
-		go service.subscribeToDataFlow()
-	}
 
 	return service
 }
@@ -136,8 +116,10 @@ func (s *AdapterMonitoringService) startMonitoring() {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-ticker.C:
+		case now := <-ticker.C:
 			s.collectMetrics()
+			s.flows.snapshot(now)
+			s.flows.stopIfIdle(now)
 			s.cleanupOldMetrics()
 		}
 	}
@@ -308,96 +290,15 @@ func (s *AdapterMonitoringService) updateSinkDetailedMetrics(sinkInterface inter
 	}
 }
 
-// subscribeToDataFlow 订阅数据流事件
-func (s *AdapterMonitoringService) subscribeToDataFlow() {
-	// 订阅所有数据流主题
-	sub, err := s.natsConn.Subscribe("iot.data.>", func(msg *nats.Msg) {
-		s.handleDataFlowMessage(msg)
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("订阅数据流事件失败")
-		return
-	}
-
-	// 等待上下文结束
-	<-s.ctx.Done()
-
-	// 取消订阅
-	if err := sub.Unsubscribe(); err != nil {
-		log.Error().Err(err).Msg("取消数据流订阅失败")
-	}
-}
-
-// handleDataFlowMessage 处理数据流消息
-func (s *AdapterMonitoringService) handleDataFlowMessage(msg *nats.Msg) {
-	var point model.Point
-	if err := point.UnmarshalJSON(msg.Data); err != nil {
-		log.Error().Err(err).Msg("解析数据流消息失败")
-		return
-	}
-
-	s.metricsLock.Lock()
-	defer s.metricsLock.Unlock()
-
-	// 更新数据流指标
-	key := fmt.Sprintf("%s:%s:%s", point.DeviceID, point.DeviceID, point.Key)
-
-	flowMetrics, exists := s.dataFlowMetrics[key]
-	if !exists {
-		flowMetrics = &DataFlowRuntimeMetrics{
-			AdapterName:    point.DeviceID, // 假设DeviceID包含适配器信息
-			DeviceID:       point.DeviceID,
-			Key:            point.Key,
-			DataPoints:     make([]DataPointRecord, 0),
-			LastUpdateTime: time.Now(),
-		}
-		s.dataFlowMetrics[key] = flowMetrics
-	}
-
-	// 添加数据点记录
-	record := DataPointRecord{
-		Timestamp: point.Timestamp,
-		Value:     point.Value,
-		Size:      len(msg.Data),
-		Latency:   time.Since(point.Timestamp),
-	}
-
-	flowMetrics.DataPoints = append(flowMetrics.DataPoints, record)
-	flowMetrics.BytesTransferred += int64(record.Size)
-	flowMetrics.LastValue = point.Value
-	flowMetrics.LastTimestamp = point.Timestamp
-	flowMetrics.LastUpdateTime = time.Now()
-
-	// 限制数据点记录数量，保留最近的1000个
-	if len(flowMetrics.DataPoints) > 1000 {
-		flowMetrics.DataPoints = flowMetrics.DataPoints[len(flowMetrics.DataPoints)-1000:]
-	}
-}
-
 // cleanupOldMetrics 清理旧指标
 func (s *AdapterMonitoringService) cleanupOldMetrics() {
 	s.metricsLock.Lock()
 	defer s.metricsLock.Unlock()
 
 	now := time.Now()
-	cutoff := now.Add(-s.retentionDuration)
 
-	// 清理数据流指标中的旧数据点
-	for key, metrics := range s.dataFlowMetrics {
-		// 过滤掉旧的数据点
-		filteredPoints := make([]DataPointRecord, 0)
-		for _, point := range metrics.DataPoints {
-			if point.Timestamp.After(cutoff) {
-				filteredPoints = append(filteredPoints, point)
-			}
-		}
-		metrics.DataPoints = filteredPoints
-
-		// 如果没有数据点了，删除整个指标
-		if len(metrics.DataPoints) == 0 && metrics.LastUpdateTime.Before(cutoff) {
-			delete(s.dataFlowMetrics, key)
-		}
-	}
+	// 清理长时间没有数据的序列
+	s.flows.cleanup(now, s.retentionDuration)
 
 	// 清理适配器指标中的旧响应时间数据
 	for _, metrics := range s.adapterMetrics {
@@ -470,67 +371,15 @@ func (s *AdapterMonitoringService) GetAdapterStatus() ([]models.AdapterStatus, [
 	return adapters, sinks, overview, nil
 }
 
-// GetDataFlowMetrics 获取数据流指标
+// GetDataFlowMetrics 获取数据流指标。首次调用时开始统计（按需订阅），
+// 时间范围早于统计开始时从统计开始计算速率。
 func (s *AdapterMonitoringService) GetDataFlowMetrics(timeRange string) ([]models.DataFlowMetrics, error) {
-	s.metricsLock.RLock()
-	defer s.metricsLock.RUnlock()
-
-	var metrics []models.DataFlowMetrics
-
-	// 解析时间范围
 	duration, err := time.ParseDuration(timeRange)
-	if err != nil {
+	if err != nil || duration <= 0 {
 		duration = time.Hour // 默认1小时
 	}
-
-	cutoff := time.Now().Add(-duration)
-
-	for _, flowMetrics := range s.dataFlowMetrics {
-		// 过滤时间范围内的数据点
-		var recentPoints []DataPointRecord
-		for _, point := range flowMetrics.DataPoints {
-			if point.Timestamp.After(cutoff) {
-				recentPoints = append(recentPoints, point)
-			}
-		}
-
-		if len(recentPoints) == 0 {
-			continue
-		}
-
-		// 计算指标
-		dataPointsPerSec := float64(len(recentPoints)) / duration.Seconds()
-		bytesPerSec := float64(flowMetrics.BytesTransferred) / duration.Seconds()
-
-		var totalLatency time.Duration
-		for _, point := range recentPoints {
-			totalLatency += point.Latency
-		}
-		avgLatency := totalLatency / time.Duration(len(recentPoints))
-
-		errorRate := float64(flowMetrics.ErrorsCount) / float64(len(recentPoints))
-
-		metric := models.DataFlowMetrics{
-			AdapterName:      flowMetrics.AdapterName,
-			DeviceID:         flowMetrics.DeviceID,
-			Key:              flowMetrics.Key,
-			DataPointsPerSec: dataPointsPerSec,
-			BytesPerSec:      bytesPerSec,
-			LatencyMS:        float64(avgLatency.Nanoseconds()) / 1e6,
-			ErrorRate:        errorRate,
-			LastValue:        flowMetrics.LastValue,
-			LastTimestamp:    flowMetrics.LastTimestamp,
-		}
-
-		metrics = append(metrics, metric)
-	}
-
-	// 按数据点/秒排序
-	sort.Slice(metrics, func(i, j int) bool {
-		return metrics[i].DataPointsPerSec > metrics[j].DataPointsPerSec
-	})
-
-	return metrics, nil
+	s.flows.ensureSubscribed()
+	return s.flows.metrics(duration, time.Now()), nil
 }
 
 // calculateAverageResponseTime 计算平均响应时间
@@ -648,4 +497,5 @@ func (s *AdapterMonitoringService) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.flows.stop()
 }

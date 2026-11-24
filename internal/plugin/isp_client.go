@@ -15,7 +15,7 @@ import (
 type ISPClient struct {
 	address     string
 	conn        net.Conn
-	scanner     *bufio.Scanner
+	reader      *bufio.Reader
 	writer      *bufio.Writer
 	mu          sync.Mutex
 	connected   bool
@@ -54,7 +54,7 @@ func (c *ISPClient) Connect(ctx context.Context) error {
 	}
 
 	c.conn = conn
-	c.scanner = bufio.NewScanner(conn)
+	c.reader = bufio.NewReaderSize(conn, 64*1024)
 	c.writer = bufio.NewWriter(conn)
 	c.connected = true
 
@@ -62,8 +62,8 @@ func (c *ISPClient) Connect(ctx context.Context) error {
 		Str("address", c.address).
 		Msg("ISP客户端连接成功")
 
-	// 启动消息接收协程
-	go c.receiveLoop()
+	// 启动消息接收协程（传入本次连接的 reader/conn，避免与重连产生竞争）
+	go c.receiveLoop(c.ctx, conn, c.reader)
 
 	return nil
 }
@@ -90,10 +90,11 @@ func (c *ISPClient) Disconnect() error {
 		c.conn = nil
 	}
 
-	// 清理响应通道
+	// 清理等待中的请求（不关闭通道：通道由 SendRequest 自己管理，
+	// 以前这里和 SendRequest 的 defer 都会 close，断开时有请求在等待就会 panic；
+	// 等待中的请求会通过 ctx.Done() 返回）
 	c.responseMu.Lock()
-	for id, ch := range c.responses {
-		close(ch)
+	for id := range c.responses {
 		delete(c.responses, id)
 	}
 	c.responseMu.Unlock()
@@ -158,12 +159,11 @@ func (c *ISPClient) SendRequest(msg *ISPMessage, timeout time.Duration) (*ISPMes
 	c.responses[msg.ID] = respCh
 	c.responseMu.Unlock()
 
-	// 确保清理响应通道
+	// 确保清理响应通道（不 close：handleMessage 可能正持有该通道）
 	defer func() {
 		c.responseMu.Lock()
 		delete(c.responses, msg.ID)
 		c.responseMu.Unlock()
-		close(respCh)
 	}()
 
 	// 发送消息
@@ -177,9 +177,21 @@ func (c *ISPClient) SendRequest(msg *ISPMessage, timeout time.Duration) (*ISPMes
 		return resp, nil
 	case <-time.After(timeout):
 		return nil, fmt.Errorf("等待响应超时")
-	case <-c.ctx.Done():
+	case <-c.doneChan():
 		return nil, fmt.Errorf("客户端已关闭")
 	}
+}
+
+// doneChan 返回当前连接的取消信号
+func (c *ISPClient) doneChan() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ctx == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return c.ctx.Done()
 }
 
 // SetDataHandler 设置数据消息处理器
@@ -199,65 +211,60 @@ func (c *ISPClient) Subscribe(handler func(*ISPMessage)) error {
 	return nil
 }
 
-// receiveLoop 消息接收循环
-func (c *ISPClient) receiveLoop() {
-	defer func() {
-		log.Info().Msg("ISP客户端接收循环退出")
-	}()
+// receiveLoop 消息接收循环（每行一个 JSON 消息）。
+//
+// 以前使用 bufio.Scanner + 10 秒读超时：Scanner 的错误是粘滞的，第一次超时（数据间隔超过
+// 10 秒）或连接断开（EOF）后 Scan() 会立即返回 false，循环 continue 形成 100% CPU 的空转，
+// 并且再也收不到任何消息；超过 64KB 的消息同样会让接收永久停止。
+// 现在使用阻塞读取，连接关闭或出错时标记为断开并退出，由上层负责重连。
+func (c *ISPClient) receiveLoop(ctx context.Context, conn net.Conn, reader *bufio.Reader) {
+	defer log.Debug().Str("address", c.address).Msg("ISP客户端接收循环退出")
 
 	for {
-		select {
-		case <-c.ctx.Done():
-			return
-		default:
-			// 检查连接状态
-			if !c.IsConnected() {
-				return
-			}
-
-			// 设置读取超时 - 增加到10秒以适应数据采集间隔
-			if err := c.conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-				log.Error().Err(err).Msg("设置读取超时失败")
-				continue
-			}
-
-			// 读取一行消息
-			if !c.scanner.Scan() {
-				if err := c.scanner.Err(); err != nil {
-					// 检查是否是超时错误
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						// 超时是正常的，继续循环（不记录日志避免过多输出）
-						continue
-					}
-					log.Error().Err(err).Msg("读取消息失败")
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			if msg, perr := FromJSON(trimLine(line)); perr != nil {
+				log.Error().Err(perr).Int("bytes", len(line)).Msg("解析ISP消息失败")
+			} else {
+				if msg.Type != MessageTypeData && msg.Type != MessageTypeHeartbeat {
+					log.Debug().Str("type", msg.Type).Str("id", msg.ID).Msg("收到ISP消息")
 				}
-				continue
+				c.handleMessage(msg)
 			}
-
-			line := c.scanner.Bytes()
-			if len(line) == 0 {
-				continue
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				// 主动断开
+			default:
+				log.Warn().Err(err).Str("address", c.address).Msg("ISP连接已断开")
+				c.markDisconnected(conn)
 			}
-
-			// 解析消息
-			msg, err := FromJSON(line)
-			if err != nil {
-				log.Error().Err(err).Str("data", string(line)).Msg("解析ISP消息失败")
-				continue
-			}
-
-			// 只记录非数据和心跳消息，减少日志噪声
-			if msg.Type != MessageTypeData && msg.Type != MessageTypeHeartbeat {
-				log.Debug().
-					Str("type", msg.Type).
-					Str("id", msg.ID).
-					Msg("收到ISP消息")
-			}
-
-			// 处理消息
-			c.handleMessage(msg)
+			return
 		}
 	}
+}
+
+// markDisconnected 连接异常断开时更新状态（仅当仍是同一个连接时）
+func (c *ISPClient) markDisconnected(conn net.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != conn {
+		return
+	}
+	c.connected = false
+	if c.cancel != nil {
+		c.cancel()
+	}
+	_ = c.conn.Close()
+	c.conn = nil
+}
+
+func trimLine(b []byte) []byte {
+	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 // handleMessage 处理接收到的消息
@@ -283,8 +290,10 @@ func (c *ISPClient) handleMessage(msg *ISPMessage) {
 		handler := c.dataHandler
 		c.handlerMu.Unlock()
 
+		// 同步调用，保证数据消息的顺序（以前每条消息起一个协程，顺序无法保证）。
+		// 处理器必须是非阻塞的（ISPAdapterProxy 使用非阻塞发送）。
 		if handler != nil {
-			go handler(msg)
+			handler(msg)
 		}
 
 	case MessageTypeHeartbeat:

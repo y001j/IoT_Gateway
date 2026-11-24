@@ -30,6 +30,7 @@ func NewMQTTSink() *MQTTSink {
 
 // MQTTSink 是一个MQTT连接器，用于发布数据到MQTT服务器
 type MQTTSink struct {
+	startTimeout time.Duration // 启动时等待连接的时间（默认 10s，测试可调整）
 	*northbound.BaseSink
 	client   mqtt.Client
 	topicTpl string
@@ -74,9 +75,7 @@ type StandardConfig struct {
 
 // Init 初始化连接器
 func (s *MQTTSink) Init(cfg json.RawMessage) error {
-	fmt.Printf("!!!! MQTT DEBUG: Init被调用, cfg长度=%d !!!!\n", len(cfg))
-	fmt.Printf("!!!! MQTT DEBUG: 接收到的配置内容=%s !!!!\n", string(cfg))
-	
+
 	// 使用标准化配置解析来设置基础属性
 	if _, err := s.ParseStandardConfig(cfg); err != nil {
 		return fmt.Errorf("解析MQTT sink标准配置失败: %w", err)
@@ -87,11 +86,9 @@ func (s *MQTTSink) Init(cfg json.RawMessage) error {
 		Params MQTTConfig `json:"params"`
 	}
 	if err := json.Unmarshal(cfg, &tempConfig); err != nil {
-		fmt.Printf("!!!! MQTT DEBUG: JSON解析失败, 错误=%v !!!!\n", err)
 		return fmt.Errorf("解析MQTT配置失败: %w", err)
 	}
 	mqttConfig := tempConfig.Params
-	fmt.Printf("!!!! MQTT DEBUG: 解析得到的MQTT配置=%+v !!!!\n", mqttConfig)
 
 	// 设置默认值
 	s.topicTpl = mqttConfig.TopicTpl
@@ -112,7 +109,7 @@ func (s *MQTTSink) Init(cfg json.RawMessage) error {
 	opts.SetMaxReconnectInterval(30 * time.Second)
 	opts.SetCleanSession(true)
 	opts.SetOrderMatters(false)
-	
+
 	// 保存名称到本地变量，避免闭包问题
 	name := s.Name()
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
@@ -148,8 +145,13 @@ func (s *MQTTSink) Start(ctx context.Context) error {
 	s.SetRunning(true)
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	// 连接MQTT服务器
-	if token := s.client.Connect(); token.Wait() && token.Error() != nil {
+	// 连接MQTT服务器。开启了 ConnectRetry 时 token 会一直等到连接成功，
+	// broker 不可达会让网关启动无限阻塞；这里最多等待 connectTimeout，
+	// 超时后由客户端在后台继续重连（期间的数据在 pointCh 中缓冲）。
+	token := s.client.Connect()
+	if !token.WaitTimeout(s.connectTimeout()) {
+		log.Warn().Str("name", s.Name()).Msg("MQTT服务器暂不可达，将在后台继续重连")
+	} else if token.Error() != nil {
 		s.HandleError(token.Error(), "连接MQTT服务器")
 		return fmt.Errorf("连接MQTT服务器失败: %w", token.Error())
 	}
@@ -227,62 +229,11 @@ func (s *MQTTSink) Stop() error {
 // publishLoop 是后台发布循环
 func (s *MQTTSink) publishLoop() {
 	log.Info().Str("name", s.Name()).Msg("启动MQTT发布循环")
-	
+
 	for {
 		select {
 		case point := <-s.pointCh:
-			// 构建主题
-			topic := fmt.Sprintf(s.topicTpl, point.DeviceID, point.Key)
-			
-			// 根据数据点类型处理值
-			var finalValue interface{}
-			switch point.Type {
-			case model.TypeInt:
-				switch v := point.Value.(type) {
-				case float64:
-					finalValue = int(v)
-				case int:
-					finalValue = v
-				default:
-					finalValue = 0
-				}
-			case model.TypeFloat:
-				switch v := point.Value.(type) {
-				case float64:
-					finalValue = v
-				case int:
-					finalValue = float64(v)
-				default:
-					finalValue = 0.0
-				}
-			case model.TypeBool:
-				if v, ok := point.Value.(bool); ok {
-					finalValue = v
-				} else {
-					finalValue = false
-				}
-			case model.TypeString:
-				if v, ok := point.Value.(string); ok {
-					finalValue = v
-				} else {
-					finalValue = fmt.Sprintf("%v", point.Value)
-				}
-			default:
-				finalValue = point.Value
-			}
-			
-			// 创建完整的数据结构，包含所有字段
-			fullData := map[string]interface{}{
-				"device_id": point.DeviceID,
-				"key":       point.Key,
-				"value":     finalValue,
-				"type":      point.Type,
-				"timestamp": point.Timestamp,
-				"tags":      point.GetTagsCopy(), // 保留tags信息
-			}
-			
-			// 序列化完整数据结构
-			payload, err := json.Marshal(fullData)
+			topic, payload, err := s.buildMessage(point)
 			if err != nil {
 				s.HandleError(err, "序列化数据点值")
 				continue
@@ -299,7 +250,6 @@ func (s *MQTTSink) publishLoop() {
 					Str("key", point.Key).
 					Str("topic", topic).
 					Interface("tags", point.GetTagsCopy()).
-					Interface("full_data", fullData).
 					Msg("成功发布数据点到MQTT")
 			}
 
@@ -317,8 +267,61 @@ func (s *MQTTSink) Healthy() error {
 	if !s.IsRunning() {
 		return fmt.Errorf("MQTT连接器未运行")
 	}
-	if s.client == nil || !s.client.IsConnected() {
+	// IsConnected() 在自动重连/连接重试期间也返回 true，必须用 IsConnectionOpen() 判断真实连接状态
+	if s.client == nil || !s.client.IsConnectionOpen() {
 		return fmt.Errorf("MQTT客户端未连接")
+	}
+	return nil
+}
+
+// connectTimeout 启动时等待 MQTT 连接的最长时间
+func (s *MQTTSink) connectTimeout() time.Duration {
+	if s.startTimeout > 0 {
+		return s.startTimeout
+	}
+	return 10 * time.Second
+}
+
+// buildMessage 构建 MQTT 主题和消息体
+func (s *MQTTSink) buildMessage(point model.Point) (string, []byte, error) {
+	topic := fmt.Sprintf(s.topicTpl, point.DeviceID, point.Key)
+	payload, err := json.Marshal(map[string]interface{}{
+		"device_id": point.DeviceID,
+		"key":       point.Key,
+		"value":     northbound.NormalizeValueOrZero(point),
+		"type":      point.Type,
+		"timestamp": point.Timestamp,
+		"tags":      point.GetTagsCopy(),
+	})
+	return topic, payload, err
+}
+
+// WriteBatch 同步发布（实现 northbound.BatchWriter）：QoS>=1 时等待 broker 确认后才返回。
+// QoS 0 没有确认机制，只能保证消息已交给客户端发送。
+func (s *MQTTSink) WriteBatch(ctx context.Context, batch []model.Point) error {
+	if s.client == nil || !s.client.IsConnectionOpen() {
+		return fmt.Errorf("MQTT客户端未连接")
+	}
+	s.AddTags(batch)
+	tokens := make([]mqtt.Token, 0, len(batch))
+	for _, point := range batch {
+		topic, payload, err := s.buildMessage(point)
+		if err != nil {
+			return fmt.Errorf("%w: 序列化数据点失败: %v", northbound.ErrPermanent, err)
+		}
+		tokens = append(tokens, s.client.Publish(topic, s.qos, s.retained, payload))
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(10 * time.Second)
+	}
+	for _, tk := range tokens {
+		if !tk.WaitTimeout(time.Until(deadline)) {
+			return fmt.Errorf("等待MQTT确认超时")
+		}
+		if err := tk.Error(); err != nil {
+			return fmt.Errorf("MQTT发布失败: %w", err)
+		}
 	}
 	return nil
 }

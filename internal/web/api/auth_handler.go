@@ -1,9 +1,9 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/y001j/iot-gateway/internal/web/models"
 	"github.com/y001j/iot-gateway/internal/web/services"
@@ -42,9 +42,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 调试：打印接收到的登录请求
-	fmt.Printf("收到的登录请求: Username=[%s], Password=[%s]\n", req.Username, req.Password)
-
 	response, err := h.authService.Login(&req)
 	if err != nil {
 		h.ErrorResponse(c, http.StatusUnauthorized, err.Error())
@@ -69,6 +66,10 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
+	// 以前把整个 "Bearer xxx" 头当作令牌查会话，永远找不到，登出总是返回 500
+	if len(token) > 7 && strings.EqualFold(token[:7], "Bearer ") {
+		token = token[7:]
+	}
 	err := h.authService.Logout(token)
 	if err != nil {
 		h.ErrorResponse(c, http.StatusInternalServerError, err.Error())

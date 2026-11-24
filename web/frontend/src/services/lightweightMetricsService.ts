@@ -1,3 +1,4 @@
+import { formatUptime, formatBytes, formatNumber, formatLatency } from '../utils/format';
 // Service for lightweight metrics communication with backend
 
 export interface LightweightMetrics {
@@ -282,63 +283,24 @@ class LightweightMetricsService {
     };
   }
 
-  /**
-   * 格式化运行时间
-   */
+  /** 格式化运行时间（实现见 utils/format.ts，可单元测试） */
   formatUptime(seconds: number): string {
-    if (seconds < 60) {
-      return `${Math.floor(seconds)}秒`;
-    } else if (seconds < 3600) {
-      const minutes = Math.floor(seconds / 60);
-      return `${minutes}分钟`;
-    } else if (seconds < 86400) {
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      return `${hours}小时${minutes}分钟`;
-    } else {
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      return `${days}天${hours}小时`;
-    }
+    return formatUptime(seconds);
   }
 
-  /**
-   * 格式化字节数
-   */
+  /** 格式化字节数 */
   formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return formatBytes(bytes);
   }
 
-  /**
-   * 格式化数字
-   */
+  /** 格式化数字 */
   formatNumber(num: number, decimals: number = 1): string {
-    if (num >= 1000000) {
-      return `${(num / 1000000).toFixed(decimals)}M`;
-    } else if (num >= 1000) {
-      return `${(num / 1000).toFixed(decimals)}K`;
-    } else {
-      return num.toFixed(decimals);
-    }
+    return formatNumber(num, decimals);
   }
 
-  /**
-   * 格式化延迟时间
-   */
+  /** 格式化延迟时间 */
   formatLatency(ms: number): string {
-    if (ms < 1) {
-      return `${(ms * 1000).toFixed(0)}μs`;
-    } else if (ms < 1000) {
-      return `${ms.toFixed(1)}ms`;
-    } else {
-      return `${(ms / 1000).toFixed(2)}s`;
-    }
+    return formatLatency(ms);
   }
 
   /**

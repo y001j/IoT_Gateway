@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -23,23 +24,23 @@ const (
 type ErrorLevel string
 
 const (
-	ErrorLevelInfo    ErrorLevel = "info"
-	ErrorLevelWarning ErrorLevel = "warning"
-	ErrorLevelError   ErrorLevel = "error"
+	ErrorLevelInfo     ErrorLevel = "info"
+	ErrorLevelWarning  ErrorLevel = "warning"
+	ErrorLevelError    ErrorLevel = "error"
 	ErrorLevelCritical ErrorLevel = "critical"
 )
 
 // RuleError 规则引擎专用错误
 type RuleError struct {
-	Type        ErrorType              `json:"type"`
-	Level       ErrorLevel             `json:"level"`
-	Code        string                 `json:"code"`
-	Message     string                 `json:"message"`
-	Details     string                 `json:"details,omitempty"`
-	Context     map[string]interface{} `json:"context,omitempty"`
-	Timestamp   time.Time              `json:"timestamp"`
-	Retryable   bool                   `json:"retryable"`
-	Cause       error                  `json:"-"`
+	Type      ErrorType              `json:"type"`
+	Level     ErrorLevel             `json:"level"`
+	Code      string                 `json:"code"`
+	Message   string                 `json:"message"`
+	Details   string                 `json:"details,omitempty"`
+	Context   map[string]interface{} `json:"context,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+	Retryable bool                   `json:"retryable"`
+	Cause     error                  `json:"-"`
 }
 
 // Error 实现error接口
@@ -189,8 +190,10 @@ const (
 )
 
 // IsRetryableError 检查错误是否可重试
+// 以下函数使用 errors.As：以前用类型断言，被 fmt.Errorf("%w") 包装后无法识别
 func IsRetryableError(err error) bool {
-	if ruleErr, ok := err.(*RuleError); ok {
+	var ruleErr *RuleError
+	if errors.As(err, &ruleErr) {
 		return ruleErr.Retryable
 	}
 	return false
@@ -198,7 +201,8 @@ func IsRetryableError(err error) bool {
 
 // GetErrorType 获取错误类型
 func GetErrorType(err error) ErrorType {
-	if ruleErr, ok := err.(*RuleError); ok {
+	var ruleErr *RuleError
+	if errors.As(err, &ruleErr) {
 		return ruleErr.Type
 	}
 	return ErrorTypeSystem
@@ -206,7 +210,8 @@ func GetErrorType(err error) ErrorType {
 
 // GetErrorLevel 获取错误级别
 func GetErrorLevel(err error) ErrorLevel {
-	if ruleErr, ok := err.(*RuleError); ok {
+	var ruleErr *RuleError
+	if errors.As(err, &ruleErr) {
 		return ruleErr.Level
 	}
 	return ErrorLevelError

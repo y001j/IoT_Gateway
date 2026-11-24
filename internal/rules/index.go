@@ -7,263 +7,208 @@ import (
 	"github.com/y001j/iot-gateway/internal/model"
 )
 
-// Index 规则索引
+// Index 规则索引：根据数据点的 device_id / key / type 快速筛选候选规则。
+//
+// 索引只使用"必然成立"的约束：从根条件出发、只经过 AND 节点能到达的
+// `field eq "常量"` 条件。OR、NOT 分支以及表达式条件里的约束不能保证一定成立，
+// 不参与索引（视为该维度不受约束）。
+//
+// 一个规则是数据点的候选规则，当且仅当在 device_id、key、type 三个维度上，
+// 规则要么不受约束，要么数据点的取值落在规则约束的取值集合内（取交集）。
+//
+// 以前的实现对三个维度取并集，并把任何缺少设备条件的规则放进设备通配符桶，
+// 几乎所有规则都会成为每个数据点的候选规则，索引形同虚设；而且会把 OR/NOT
+// 分支里的取值当作约束，可能错误地排除本应命中的规则。
 type Index struct {
-	deviceIndex   map[string][]*Rule // 按设备ID索引
-	keyIndex      map[string][]*Rule // 按数据key索引
-	priorityIndex []*Rule            // 按优先级排序
-	typeIndex     map[string][]*Rule // 按数据类型索引
-	allRules      []*Rule            // 所有启用的规则
-	mu            sync.RWMutex
+	mu sync.RWMutex
+
+	// 规则按优先级排序（高优先级在前，同优先级按 ID 稳定排序）
+	priorityIndex []*Rule
+	allRules      []*Rule
+	constraints   map[string]ruleConstraints // rule ID -> 约束
+
+	// 设备维度的倒排索引：deviceIndex[device] 为约束了该设备的规则，
+	// deviceAny 为设备维度不受约束的规则
+	deviceIndex map[string][]*Rule
+	deviceAny   []*Rule
+
+	// 统计用
+	keyIndex  map[string][]*Rule
+	typeIndex map[string][]*Rule
+}
+
+// ruleConstraints 规则在各维度上的约束；nil 表示该维度不受约束
+type ruleConstraints struct {
+	devices map[string]struct{}
+	keys    map[string]struct{}
+	types   map[string]struct{}
 }
 
 // NewIndex 创建新的索引
 func NewIndex() *Index {
 	return &Index{
+		constraints: make(map[string]ruleConstraints),
 		deviceIndex: make(map[string][]*Rule),
 		keyIndex:    make(map[string][]*Rule),
 		typeIndex:   make(map[string][]*Rule),
-		allRules:    make([]*Rule, 0),
 	}
 }
 
-// AddRule 添加规则到索引
+// AddRule 添加或更新规则（禁用的规则会从索引中移除）
 func (idx *Index) AddRule(rule *Rule) {
+	if rule == nil {
+		return
+	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
-	// 移除旧的规则（如果存在）
-	idx.removeRuleFromIndex(rule.ID)
-
-	// 只索引启用的规则
+	idx.removeRuleLocked(rule.ID)
 	if !rule.Enabled {
+		idx.rebuildLocked()
 		return
 	}
-
-	// 添加到所有规则列表
 	idx.allRules = append(idx.allRules, rule)
-
-	// 分析规则条件，建立索引
-	idx.analyzeAndIndex(rule)
-
-	// 重新排序优先级索引
-	idx.rebuildPriorityIndex()
+	idx.constraints[rule.ID] = analyzeConstraints(rule.Conditions)
+	idx.rebuildLocked()
 }
 
 // RemoveRule 从索引中移除规则
 func (idx *Index) RemoveRule(rule *Rule) {
+	if rule == nil {
+		return
+	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-
-	idx.removeRuleFromIndex(rule.ID)
-	idx.rebuildPriorityIndex()
+	idx.removeRuleLocked(rule.ID)
+	idx.rebuildLocked()
 }
 
-// removeRuleFromIndex 从索引中移除规则（内部方法，不加锁）
-func (idx *Index) removeRuleFromIndex(ruleID string) {
-	// 从所有规则列表中移除
-	for i, rule := range idx.allRules {
-		if rule.ID == ruleID {
-			idx.allRules = append(idx.allRules[:i], idx.allRules[i+1:]...)
+func (idx *Index) removeRuleLocked(ruleID string) {
+	for i, r := range idx.allRules {
+		if r.ID == ruleID {
+			idx.allRules = append(idx.allRules[:i:i], idx.allRules[i+1:]...)
 			break
 		}
 	}
-
-	// 从设备索引中移除
-	for deviceID, rules := range idx.deviceIndex {
-		for i, rule := range rules {
-			if rule.ID == ruleID {
-				idx.deviceIndex[deviceID] = append(rules[:i], rules[i+1:]...)
-				if len(idx.deviceIndex[deviceID]) == 0 {
-					delete(idx.deviceIndex, deviceID)
-				}
-				break
-			}
-		}
-	}
-
-	// 从key索引中移除
-	for key, rules := range idx.keyIndex {
-		for i, rule := range rules {
-			if rule.ID == ruleID {
-				idx.keyIndex[key] = append(rules[:i], rules[i+1:]...)
-				if len(idx.keyIndex[key]) == 0 {
-					delete(idx.keyIndex, key)
-				}
-				break
-			}
-		}
-	}
-
-	// 从类型索引中移除
-	for dataType, rules := range idx.typeIndex {
-		for i, rule := range rules {
-			if rule.ID == ruleID {
-				idx.typeIndex[dataType] = append(rules[:i], rules[i+1:]...)
-				if len(idx.typeIndex[dataType]) == 0 {
-					delete(idx.typeIndex, dataType)
-				}
-				break
-			}
-		}
-	}
+	delete(idx.constraints, ruleID)
 }
 
-// analyzeAndIndex 分析规则条件并建立索引
-func (idx *Index) analyzeAndIndex(rule *Rule) {
-	// 分析条件中的字段
-	fields := idx.extractFields(rule.Conditions)
-
-	// 建立设备ID索引
-	if deviceIDs, exists := fields["device_id"]; exists {
-		for _, deviceID := range deviceIDs {
-			if deviceID == "*" || deviceID == "" {
-				continue // 通配符或空值不建立索引
-			}
-			idx.deviceIndex[deviceID] = append(idx.deviceIndex[deviceID], rule)
-		}
-	} else {
-		// 没有指定设备ID的规则，添加到通配符索引
-		idx.deviceIndex["*"] = append(idx.deviceIndex["*"], rule)
-	}
-
-	// 建立key索引
-	if keys, exists := fields["key"]; exists {
-		for _, key := range keys {
-			if key == "*" || key == "" {
-				continue // 通配符或空值不建立索引
-			}
-			idx.keyIndex[key] = append(idx.keyIndex[key], rule)
-		}
-	} else {
-		// 没有指定key的规则，添加到通配符索引
-		idx.keyIndex["*"] = append(idx.keyIndex["*"], rule)
-	}
-
-	// 建立类型索引
-	if types, exists := fields["type"]; exists {
-		for _, dataType := range types {
-			if dataType == "*" || dataType == "" {
-				continue // 通配符或空值不建立索引
-			}
-			idx.typeIndex[dataType] = append(idx.typeIndex[dataType], rule)
-		}
-	} else {
-		// 没有指定类型的规则，添加到通配符索引
-		idx.typeIndex["*"] = append(idx.typeIndex["*"], rule)
-	}
-}
-
-// extractFields 提取条件中的字段值
-func (idx *Index) extractFields(condition *Condition) map[string][]string {
-	fields := make(map[string][]string)
-	idx.extractFieldsRecursive(condition, fields)
-	return fields
-}
-
-// extractFieldsRecursive 递归提取字段值
-func (idx *Index) extractFieldsRecursive(condition *Condition, fields map[string][]string) {
-	if condition == nil {
-		return
-	}
-
-	// 处理简单条件
-	if condition.Field != "" && condition.Operator == "eq" {
-		if value, ok := condition.Value.(string); ok {
-			fields[condition.Field] = append(fields[condition.Field], value)
-		}
-	}
-
-	// 递归处理嵌套条件
-	for _, subCondition := range condition.And {
-		idx.extractFieldsRecursive(subCondition, fields)
-	}
-	for _, subCondition := range condition.Or {
-		idx.extractFieldsRecursive(subCondition, fields)
-	}
-	if condition.Not != nil {
-		idx.extractFieldsRecursive(condition.Not, fields)
-	}
-}
-
-// rebuildPriorityIndex 重建优先级索引
-func (idx *Index) rebuildPriorityIndex() {
+// rebuildLocked 根据 allRules 重建派生索引
+func (idx *Index) rebuildLocked() {
 	idx.priorityIndex = make([]*Rule, len(idx.allRules))
 	copy(idx.priorityIndex, idx.allRules)
+	sortByPriority(idx.priorityIndex)
 
-	// 按优先级排序（高优先级在前）
-	sort.Slice(idx.priorityIndex, func(i, j int) bool {
-		return idx.priorityIndex[i].Priority > idx.priorityIndex[j].Priority
+	idx.deviceIndex = make(map[string][]*Rule)
+	idx.keyIndex = make(map[string][]*Rule)
+	idx.typeIndex = make(map[string][]*Rule)
+	idx.deviceAny = nil
+
+	for _, r := range idx.priorityIndex {
+		c := idx.constraints[r.ID]
+		if c.devices == nil {
+			idx.deviceAny = append(idx.deviceAny, r)
+		} else {
+			for d := range c.devices {
+				idx.deviceIndex[d] = append(idx.deviceIndex[d], r)
+			}
+		}
+		for k := range c.keys {
+			idx.keyIndex[k] = append(idx.keyIndex[k], r)
+		}
+		for t := range c.types {
+			idx.typeIndex[t] = append(idx.typeIndex[t], r)
+		}
+	}
+}
+
+func sortByPriority(rules []*Rule) {
+	sort.SliceStable(rules, func(i, j int) bool {
+		if rules[i].Priority != rules[j].Priority {
+			return rules[i].Priority > rules[j].Priority
+		}
+		return rules[i].ID < rules[j].ID
 	})
 }
 
-// Match 匹配数据点的规则
+// analyzeConstraints 提取条件中必然成立的 device_id / key / type 等值约束
+func analyzeConstraints(cond *Condition) ruleConstraints {
+	var c ruleConstraints
+	collectConstraints(cond, &c)
+	return c
+}
+
+func addConstraint(set *map[string]struct{}, v string) {
+	// 同一维度出现多个 AND 等值约束时（例如 key=a AND key=b），规则不可能命中；
+	// 这里保守地取并集，由求值器做最终判断。
+	if *set == nil {
+		*set = make(map[string]struct{})
+	}
+	(*set)[v] = struct{}{}
+}
+
+func collectConstraints(cond *Condition, c *ruleConstraints) {
+	if cond == nil {
+		return
+	}
+	// 与 Evaluator.Evaluate 的分派顺序保持一致：And 优先，其次 Or / Not，再按 Type
+	if cond.And != nil {
+		for _, sub := range cond.And {
+			collectConstraints(sub, c)
+		}
+		return
+	}
+	if cond.Or != nil || cond.Not != nil {
+		return
+	}
+	if cond.Type != "" && cond.Type != "simple" {
+		return
+	}
+	op := cond.Operator
+	if op != "" && op != "eq" {
+		return
+	}
+	v, ok := cond.Value.(string)
+	if !ok || v == "" || v == "*" {
+		return
+	}
+	switch cond.Field {
+	case "device_id":
+		addConstraint(&c.devices, v)
+	case "key":
+		addConstraint(&c.keys, v)
+	case "type":
+		addConstraint(&c.types, v)
+	}
+}
+
+func allows(set map[string]struct{}, v string) bool {
+	if set == nil {
+		return true
+	}
+	_, ok := set[v]
+	return ok
+}
+
+// Match 返回数据点的候选规则（按优先级排序）
 func (idx *Index) Match(point model.Point) []*Rule {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	candidateRules := make(map[string]*Rule)
-
-	// 1. 按设备ID匹配
-	if rules, exists := idx.deviceIndex[point.DeviceID]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
-		}
-	}
-
-	// 2. 匹配通配符设备规则
-	if rules, exists := idx.deviceIndex["*"]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
-		}
-	}
-
-	// 3. 按key匹配
-	if rules, exists := idx.keyIndex[point.Key]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
-		}
-	}
-
-	// 4. 匹配通配符key规则
-	if rules, exists := idx.keyIndex["*"]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
-		}
-	}
-
-	// 5. 按类型匹配
+	specific := idx.deviceIndex[point.DeviceID]
+	result := make([]*Rule, 0, len(specific)+len(idx.deviceAny))
 	dataType := string(point.Type)
-	if rules, exists := idx.typeIndex[dataType]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
+	for _, list := range [][]*Rule{specific, idx.deviceAny} {
+		for _, r := range list {
+			c := idx.constraints[r.ID]
+			if allows(c.keys, point.Key) && allows(c.types, dataType) {
+				result = append(result, r)
+			}
 		}
 	}
-
-	// 6. 匹配通配符类型规则
-	if rules, exists := idx.typeIndex["*"]; exists {
-		for _, rule := range rules {
-			candidateRules[rule.ID] = rule
-		}
+	if len(specific) > 0 && len(idx.deviceAny) > 0 {
+		sortByPriority(result)
 	}
-
-	// 如果没有找到候选规则，返回所有规则（兜底策略）
-	if len(candidateRules) == 0 {
-		result := make([]*Rule, len(idx.priorityIndex))
-		copy(result, idx.priorityIndex)
-		return result
-	}
-
-	// 转换为切片并按优先级排序
-	result := make([]*Rule, 0, len(candidateRules))
-	for _, rule := range candidateRules {
-		result = append(result, rule)
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority > result[j].Priority
-	})
-
 	return result
 }
 
@@ -271,59 +216,31 @@ func (idx *Index) Match(point model.Point) []*Rule {
 func (idx *Index) GetAllRules() []*Rule {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-
 	result := make([]*Rule, len(idx.priorityIndex))
 	copy(result, idx.priorityIndex)
 	return result
 }
 
-// GetRulesByDevice 获取指定设备的规则
+// GetRulesByDevice 获取可能作用于指定设备的规则
 func (idx *Index) GetRulesByDevice(deviceID string) []*Rule {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-
-	var result []*Rule
-
-	// 获取特定设备的规则
-	if rules, exists := idx.deviceIndex[deviceID]; exists {
-		result = append(result, rules...)
-	}
-
-	// 获取通配符规则
-	if rules, exists := idx.deviceIndex["*"]; exists {
-		result = append(result, rules...)
-	}
-
-	// 按优先级排序
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority > result[j].Priority
-	})
-
+	result := append([]*Rule{}, idx.deviceIndex[deviceID]...)
+	result = append(result, idx.deviceAny...)
+	sortByPriority(result)
 	return result
 }
 
-// GetRulesByKey 获取指定key的规则
+// GetRulesByKey 获取可能作用于指定 key 的规则
 func (idx *Index) GetRulesByKey(key string) []*Rule {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-
 	var result []*Rule
-
-	// 获取特定key的规则
-	if rules, exists := idx.keyIndex[key]; exists {
-		result = append(result, rules...)
+	for _, r := range idx.priorityIndex {
+		if allows(idx.constraints[r.ID].keys, key) {
+			result = append(result, r)
+		}
 	}
-
-	// 获取通配符规则
-	if rules, exists := idx.keyIndex["*"]; exists {
-		result = append(result, rules...)
-	}
-
-	// 按优先级排序
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority > result[j].Priority
-	})
-
 	return result
 }
 
@@ -332,37 +249,24 @@ func (idx *Index) GetStats() map[string]interface{} {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
-	deviceCount := len(idx.deviceIndex)
-	keyCount := len(idx.keyIndex)
-	typeCount := len(idx.typeIndex)
-	totalRules := len(idx.allRules)
-
-	// 计算平均每个索引的规则数
-	avgRulesPerDevice := 0.0
-	if deviceCount > 0 {
-		totalDeviceRules := 0
-		for _, rules := range idx.deviceIndex {
-			totalDeviceRules += len(rules)
+	avg := func(m map[string][]*Rule) float64 {
+		if len(m) == 0 {
+			return 0
 		}
-		avgRulesPerDevice = float64(totalDeviceRules) / float64(deviceCount)
-	}
-
-	avgRulesPerKey := 0.0
-	if keyCount > 0 {
-		totalKeyRules := 0
-		for _, rules := range idx.keyIndex {
-			totalKeyRules += len(rules)
+		total := 0
+		for _, rules := range m {
+			total += len(rules)
 		}
-		avgRulesPerKey = float64(totalKeyRules) / float64(keyCount)
+		return float64(total) / float64(len(m))
 	}
-
 	return map[string]interface{}{
-		"total_rules":          totalRules,
-		"device_index_count":   deviceCount,
-		"key_index_count":      keyCount,
-		"type_index_count":     typeCount,
-		"avg_rules_per_device": avgRulesPerDevice,
-		"avg_rules_per_key":    avgRulesPerKey,
+		"total_rules":           len(idx.allRules),
+		"device_index_count":    len(idx.deviceIndex),
+		"device_wildcard_rules": len(idx.deviceAny),
+		"key_index_count":       len(idx.keyIndex),
+		"type_index_count":      len(idx.typeIndex),
+		"avg_rules_per_device":  avg(idx.deviceIndex),
+		"avg_rules_per_key":     avg(idx.keyIndex),
 	}
 }
 
@@ -370,10 +274,7 @@ func (idx *Index) GetStats() map[string]interface{} {
 func (idx *Index) Clear() {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-
-	idx.deviceIndex = make(map[string][]*Rule)
-	idx.keyIndex = make(map[string][]*Rule)
-	idx.typeIndex = make(map[string][]*Rule)
-	idx.priorityIndex = make([]*Rule, 0)
-	idx.allRules = make([]*Rule, 0)
+	idx.allRules = nil
+	idx.constraints = make(map[string]ruleConstraints)
+	idx.rebuildLocked()
 }

@@ -188,7 +188,7 @@ type Handler struct {
 func NewHandler(s *services.Services) *Handler {
 	// 创建各个模块的处理器
 	authHandler := NewAuthHandler(s.Auth)
-	systemHandler := NewSystemHandler(s.System)
+	systemHandler := NewSystemHandlerWithServices(s)
 	pluginHandler := NewPluginHandler(s.Plugin)
 	ruleHandler := NewRuleHandler(s.Rule)
 

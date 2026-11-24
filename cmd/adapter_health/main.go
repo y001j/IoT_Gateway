@@ -36,17 +36,17 @@ type AdapterMetrics struct {
 func main() {
 	// 检查网关API端点是否可访问
 	baseURL := "http://localhost:8081"
-	
+
 	fmt.Println("IoT Gateway 适配器健康检查工具")
 	fmt.Println("================================")
-	
+
 	// 检查适配器状态
 	checkAdapters(baseURL)
-	
+
 	// 持续监控
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -64,12 +64,12 @@ func checkAdapters(baseURL string) {
 		fmt.Println("❌ 无法获取适配器状态")
 		return
 	}
-	
+
 	fmt.Printf("发现 %d 个适配器:\n", len(adapters))
-	
+
 	for _, adapter := range adapters {
 		fmt.Printf("\n📋 适配器: %s (%s)\n", adapter.Name, adapter.Type)
-		
+
 		// 检查运行状态
 		if adapter.Running {
 			fmt.Printf("   状态: ✅ 运行中\n")
@@ -77,7 +77,7 @@ func checkAdapters(baseURL string) {
 			fmt.Printf("   状态: ❌ 停止\n")
 			continue
 		}
-		
+
 		// 获取健康状态
 		health := getAdapterHealth(baseURL, adapter.Name)
 		if health != nil {
@@ -92,7 +92,7 @@ func checkAdapters(baseURL string) {
 				fmt.Printf("   健康: ❓ %s\n", health.Message)
 			}
 		}
-		
+
 		// 获取指标
 		metrics := getAdapterMetrics(baseURL, adapter.Name)
 		if metrics != nil {
@@ -118,13 +118,13 @@ func getAdapters(baseURL string) []AdapterStatus {
 		return nil
 	}
 	defer resp.Body.Close()
-	
+
 	var adapters []AdapterStatus
 	if err := json.NewDecoder(resp.Body).Decode(&adapters); err != nil {
 		log.Printf("解析适配器列表失败: %v", err)
 		return nil
 	}
-	
+
 	return adapters
 }
 
@@ -135,13 +135,13 @@ func getAdapterHealth(baseURL, name string) *HealthStatus {
 		return nil
 	}
 	defer resp.Body.Close()
-	
+
 	var health HealthStatus
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		log.Printf("解析适配器 %s 健康状态失败: %v", name, err)
 		return nil
 	}
-	
+
 	return &health
 }
 
@@ -152,12 +152,12 @@ func getAdapterMetrics(baseURL, name string) *AdapterMetrics {
 		return nil
 	}
 	defer resp.Body.Close()
-	
+
 	var metrics AdapterMetrics
 	if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
 		log.Printf("解析适配器 %s 指标失败: %v", name, err)
 		return nil
 	}
-	
+
 	return &metrics
 }

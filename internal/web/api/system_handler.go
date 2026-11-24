@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -26,6 +27,13 @@ func NewSystemHandler(systemService services.SystemService) *SystemHandler {
 		systemService: systemService,
 		metrics:       nil, // 将在运行时通过其他方式获取
 	}
+}
+
+// NewSystemHandlerWithServices 创建可访问服务容器的系统处理器（系统告警状态等接口需要）
+func NewSystemHandlerWithServices(svc *services.Services) *SystemHandler {
+	h := NewSystemHandler(svc.System)
+	h.BaseHandler = NewBaseHandler(svc)
+	return h
 }
 
 // GetStatus 获取系统状态
@@ -84,7 +92,7 @@ func (h *SystemHandler) GetLightweightMetrics(c *gin.Context) {
 	if format == "" {
 		format = "json"
 	}
-	
+
 	// 由于import cycle问题，这里暂时返回一个基本的响应
 	// 实际的轻量级指标可以通过Gateway主服务的/metrics端点获取
 	h.ErrorResponse(c, http.StatusNotImplemented, "轻量级指标请通过Gateway主服务的/metrics端点获取 (端口8080)")
@@ -107,25 +115,25 @@ func (h *SystemHandler) GetSystemHealth(c *gin.Context) {
 		h.ErrorResponse(c, http.StatusInternalServerError, "System service not available")
 		return
 	}
-	
+
 	// 通过类型断言获取监控相关方法
 	type MonitoringService interface {
 		GetMonitoringService() interface{}
 	}
-	
+
 	response := map[string]interface{}{
-		"timestamp": time.Now(),
-		"status": "healthy",
+		"timestamp":            time.Now(),
+		"status":               "healthy",
 		"monitoring_available": false,
 	}
-	
+
 	if monitoringProvider, ok := systemService.(MonitoringService); ok {
 		if monitoringService := monitoringProvider.GetMonitoringService(); monitoringService != nil {
 			response["monitoring_available"] = true
 			response["status"] = "healthy"
 		}
 	}
-	
+
 	h.SuccessResponse(c, response)
 }
 
@@ -163,14 +171,14 @@ func (h *SystemHandler) GetHealth(c *gin.Context) {
 func (h *SystemHandler) GetConfig(c *gin.Context) {
 	// 调试信息
 	fmt.Printf("GetConfig处理器 - 开始处理请求\n")
-	
+
 	// 只有管理员可以查看配置
 	if !h.HasRole(c, "admin") {
 		fmt.Printf("GetConfig处理器 - 用户无admin权限\n")
 		h.ErrorResponse(c, http.StatusForbidden, "Only administrators can view system configuration")
 		return
 	}
-	
+
 	fmt.Printf("GetConfig处理器 - 用户有admin权限，继续处理\n")
 
 	config, err := h.systemService.GetConfig()
@@ -285,7 +293,11 @@ func (h *SystemHandler) Restart(c *gin.Context) {
 
 	err := h.systemService.RestartService("system")
 	if err != nil {
-		h.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		code := http.StatusInternalServerError
+		if errors.Is(err, services.ErrRestartNotSupported) {
+			code = http.StatusNotImplemented
+		}
+		h.ErrorResponse(c, code, err.Error())
 		return
 	}
 
@@ -306,11 +318,12 @@ func (h *SystemHandler) Restart(c *gin.Context) {
 // @Failure 500 {object} APIResponse
 // @Router /system/alert-status [get]
 func (h *SystemHandler) GetSystemAlertStatus(c *gin.Context) {
-	if h.services.SystemAlert == nil {
+	// 以前 BaseHandler 没有服务容器，这里必然空指针 panic
+	if h.services == nil || h.services.SystemAlert == nil {
 		h.ErrorResponse(c, http.StatusNotFound, "系统告警服务未启用")
 		return
 	}
-	
+
 	status := h.services.SystemAlert.GetStatus()
 	h.SuccessResponse(c, status)
 }

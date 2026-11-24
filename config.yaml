@@ -10,6 +10,13 @@ gateway:
   https_port: 8443
   nats_url: "embedded"
   plugins_dir: "./plugins"
+
+  # 采集数据管道参数
+  pipeline:
+    batch_size: 100          # 每批数据点数量
+    flush_interval: "50ms"   # 批次未满时的最长等待时间
+    channel_size: 10000      # 适配器到管道的缓冲通道大小
+    sink_queue_size: 256     # 每个连接器的批次队列长度（满了会丢弃该连接器的批次并计数）
   enable_metrics: true
   enable_profiling: true
   
@@ -19,6 +26,38 @@ gateway:
     graceful_fallback: true          # 热加载失败时优雅降级
     retry_interval: "30s"            # 监控器启动失败后重试间隔
     max_retries: 3                   # 最大重试次数
+
+# 本地暂存（断网续传），设计见 docs/design_local_storage.md
+# 开启后所有采集数据写入内嵌 JetStream 持久化流；在连接器配置中设置 buffer.enabled: true 的连接器
+# 在目标不可用时数据保留在本地磁盘，恢复后按原顺序补发，网关重启后从断点继续。
+# 状态查看：GET http://<网关>:8080/storage；Web 界面"历史数据"页可查询近期数据（/api/v1/data/*）
+storage:
+  enabled: false
+  store_dir: "./data/jetstream"
+  max_disk: "4GB"            # JetStream 总磁盘上限
+  sync_interval: "10s"       # 刷盘间隔：掉电时最多丢失这段时间内的数据
+  raw:
+    max_age: "24h"           # 最长保留时间
+    max_bytes: "2GB"         # 超出后丢弃最旧数据（未补发的数据会计入 lost 并在 /health 中告警）
+    compression: "s2"
+  rollup:                    # 汇总层：按窗口保存 count/min/max/avg/last，用于查看长期趋势
+    enabled: false
+    interval: "1m"
+    max_age: "720h"          # 30 天
+    max_bytes: "1GB"         # 与 raw.max_bytes 之和不能超过 max_disk
+  alerts:                    # 积压/磁盘告警，发布到 iot.alerts.triggered（Web 告警和通知渠道会收到）
+    enabled: true
+    interval: "30s"
+    lag_warning_ratio: 0.5   # 积压达到保留上限（max_age 或 max_bytes）的 50% 时 warning
+    lag_critical_ratio: 0.8  # 80% 时 critical；达到 100% 开始丢数据
+    disk_warning_ratio: 0.8  # 数据目录所在磁盘使用率
+    disk_critical_ratio: 0.95
+    throttle: "30m"          # 同一告警的重复发送间隔
+  query:                     # 近期数据查询的资源限制（保护采集性能）
+    max_concurrent: 2        # 同时执行的查询数
+    max_scan: 200000         # 单次查询最多扫描的消息数，超出时返回部分结果并标记 truncated
+    default_limit: 1000      # 默认返回点数，超出时在网关端降采样
+    timeout: "10s"
 
 # 规则引擎配置
 rule_engine:
@@ -477,6 +516,13 @@ northbound:
           points: {}
     
     # MQTT输出 - 用于外部系统集成
+    # 需要断网续传时添加（并开启上面的 storage.enabled）：
+    #   buffer:
+    #     enabled: true
+    #     batch_size: 500
+    #     max_wait: "1s"
+    #     start_from: "new"     # new | all
+    #     replay_rate: 2000     # 写入目标的最大速率（点/秒），0 不限；窄带链路建议设置，避免补发挤占实时数据
     - name: "mqtt_output"
       type: "mqtt"
       enabled: false  # 默认禁用，需要MQTT broker
@@ -521,8 +567,14 @@ northbound:
 web_ui:
   enabled: true
   port: 8081
+  # 跨域白名单：同源访问（同域部署或 Vite 代理）不需要配置。
+  # 需要从其他域名访问 API 时在这里列出，例如 ["http://192.168.1.10:3000"]
+  cors:
+    allowed_origins: []
   auth:
-    jwt_secret: "your-secret-key-change-in-production"
+    # JWT 签名密钥：请设置为至少 16 位的随机字符串（或使用环境变量注入）。
+    # 留空或使用旧的占位值时，网关会自动生成随机密钥并保存在 data/.jwt_secret。
+    jwt_secret: ""
     token_duration: "24h"
     refresh_duration: "168h"
     max_login_attempts: 5

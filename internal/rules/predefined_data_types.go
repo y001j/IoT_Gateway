@@ -65,17 +65,17 @@ var PredefinedDataTypes = map[string]*DataTypeDefinition{
 			"sensor_readings": {
 				Type: "numeric_array",
 				Properties: map[string]PropertyDefinition{
-					"values":         {Type: "array[float]", MinLength: 0, MaxLength: 1000},
-					"length":         {Type: "int", Computed: true},
-					"size":           {Type: "int", Computed: true},
-					"sum":            {Type: "float", Computed: true},
-					"average":        {Type: "float", Computed: true},
-					"mean":           {Type: "float", Computed: true},
-					"min":            {Type: "float", Computed: true},
-					"max":            {Type: "float", Computed: true},
-					"range":          {Type: "float", Computed: true},
-					"data_type":      {Type: "string", Computed: true},
-					"unit":           {Type: "string", Optional: true},
+					"values":    {Type: "array[float]", MinLength: 0, MaxLength: 1000},
+					"length":    {Type: "int", Computed: true},
+					"size":      {Type: "int", Computed: true},
+					"sum":       {Type: "float", Computed: true},
+					"average":   {Type: "float", Computed: true},
+					"mean":      {Type: "float", Computed: true},
+					"min":       {Type: "float", Computed: true},
+					"max":       {Type: "float", Computed: true},
+					"range":     {Type: "float", Computed: true},
+					"data_type": {Type: "string", Computed: true},
+					"unit":      {Type: "string", Optional: true},
 				},
 			},
 			"data_array": {
@@ -125,7 +125,7 @@ var PredefinedDataTypes = map[string]*DataTypeDefinition{
 	},
 	// 别名支持，保持向后兼容和前端友好
 	"gps": {
-		Type: "location",  // 映射到model中的location类型
+		Type: "location", // 映射到model中的location类型
 		Fields: map[string]FieldDefinition{
 			"location": {
 				Type: "gps_coordinate",
@@ -139,7 +139,7 @@ var PredefinedDataTypes = map[string]*DataTypeDefinition{
 		CoordinateSystem: "WGS84",
 	},
 	"3d_vector": {
-		Type: "vector3d",  // 映射到model中的vector3d类型
+		Type: "vector3d", // 映射到model中的vector3d类型
 		Fields: map[string]FieldDefinition{
 			"acceleration": {
 				Type: "vector3d",
@@ -181,7 +181,7 @@ func DetectDataTypeFromFields(rule *Rule) string {
 
 	// 收集条件和动作中的字段访问模式
 	fields := collectFieldPatterns(rule)
-	
+
 	// 根据字段模式匹配数据类型
 	for dataType, definition := range PredefinedDataTypes {
 		if matchesFieldPattern(fields, definition) {
@@ -195,23 +195,23 @@ func DetectDataTypeFromFields(rule *Rule) string {
 // collectFieldPatterns 收集规则中的字段访问模式
 func collectFieldPatterns(rule *Rule) []string {
 	fields := make(map[string]bool)
-	
+
 	// 从条件中收集字段
 	if rule.Conditions != nil {
 		collectFieldsFromCondition(rule.Conditions, fields)
 	}
-	
+
 	// 从动作中收集字段
 	for _, action := range rule.Actions {
 		collectFieldsFromAction(&action, fields)
 	}
-	
+
 	// 转换为切片
 	result := make([]string, 0, len(fields))
 	for field := range fields {
 		result = append(result, field)
 	}
-	
+
 	return result
 }
 
@@ -224,7 +224,7 @@ func collectFieldsFromCondition(condition *Condition, fields map[string]bool) {
 	if condition.Field != "" {
 		fields[condition.Field] = true
 	}
-	
+
 	if condition.Expression != "" {
 		// 简单的表达式字段提取
 		extractFieldsFromExpression(condition.Expression, fields)
@@ -252,7 +252,7 @@ func collectFieldsFromAction(action *Action, fields map[string]bool) {
 	if message, ok := action.Config["message"].(string); ok {
 		extractFieldsFromTemplate(message, fields)
 	}
-	
+
 	// 从表达式中提取字段
 	if params, ok := action.Config["parameters"].(map[string]interface{}); ok {
 		if expr, ok := params["expression"].(string); ok {
@@ -288,18 +288,18 @@ func extractFieldsFromTemplate(template string, fields map[string]bool) {
 			break
 		}
 		startIdx += start
-		
+
 		endIdx := strings.Index(template[startIdx:], "}}")
 		if endIdx == -1 {
 			break
 		}
 		endIdx += startIdx
-		
+
 		field := strings.TrimSpace(template[startIdx+2 : endIdx])
 		if field != "" {
 			fields[field] = true
 		}
-		
+
 		start = endIdx + 2
 	}
 }
@@ -388,37 +388,37 @@ func GetDataTypeDefinition(rule *Rule) *DataTypeDefinition {
 // parseDataTypeFromMap 从map解析数据类型定义
 func parseDataTypeFromMap(dataMap map[string]interface{}) *DataTypeDefinition {
 	def := &DataTypeDefinition{}
-	
+
 	if typeValue, ok := dataMap["type"].(string); ok {
 		def.Type = typeValue
 	}
-	
+
 	if coordSystem, ok := dataMap["coordinate_system"].(string); ok {
 		def.CoordinateSystem = coordSystem
 	}
-	
+
 	if colorSpace, ok := dataMap["color_space"].(string); ok {
 		def.ColorSpace = colorSpace
 	}
-	
+
 	if arrayType, ok := dataMap["array_type"].(string); ok {
 		def.ArrayType = arrayType
 	}
-	
+
 	if timeUnit, ok := dataMap["time_unit"].(string); ok {
 		def.TimeUnit = timeUnit
 	}
-	
+
 	if matrixType, ok := dataMap["matrix_type"].(string); ok {
 		def.MatrixType = matrixType
 	}
-	
+
 	// 解析字段定义 - 这里可以根据需要扩展
 	if fieldsMap, ok := dataMap["fields"].(map[string]interface{}); ok {
 		def.Fields = make(map[string]FieldDefinition)
 		// TODO: 实现完整的字段解析
 		_ = fieldsMap // 暂时忽略，使用预设定义
 	}
-	
+
 	return def
 }

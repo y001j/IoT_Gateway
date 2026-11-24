@@ -3,10 +3,12 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -17,30 +19,15 @@ import (
 	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/northbound"
 	"github.com/y001j/iot-gateway/internal/southbound"
+	"github.com/y001j/iot-gateway/internal/storage"
 )
 
-// 对象池优化 - 减少内存分配
-var (
-	// 数据点批次池
-	pointBatchPool = sync.Pool{
-		New: func() interface{} {
-			return make([]model.Point, 0, 100)
-		},
-	}
-	
-	// JSON数据缓冲池
-	jsonBufferPool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 0, 1024)
-		},
-	}
-	
-	// 设备数据点映射池
-	deviceMapPool = sync.Pool{
-		New: func() interface{} {
-			return make(map[string][]model.Point)
-		},
-	}
+// 数据管道默认参数（可通过 gateway.pipeline.* 配置覆盖）
+const (
+	defaultPipelineBatchSize     = 100
+	defaultPipelineFlushInterval = 50 * time.Millisecond
+	defaultPipelineChannelSize   = 10000
+	defaultSinkQueueSize         = 256
 )
 
 type Meta struct {
@@ -51,8 +38,8 @@ type Meta struct {
 	Entry       string                 `json:"entry"`
 	Extra       map[string]interface{} `json:"-"` // 额外的元数据，不从JSON解析
 	Description string                 `json:"description,omitempty"`
-	Status      string                 `json:"status,omitempty"` // 运行时状态: running, stopped
-	ISPPort     int                   `json:"isp_port,omitempty"` // ISP端口配置
+	Status      string                 `json:"status,omitempty"`   // 运行时状态: running, stopped
+	ISPPort     int                    `json:"isp_port,omitempty"` // ISP端口配置
 }
 
 // PluginManager 定义了插件管理器的标准接口
@@ -83,26 +70,67 @@ type Manager struct {
 	// 已初始化的适配器和连接器
 	adapters map[string]southbound.Adapter
 	sinks    map[string]northbound.Sink
-	
+
+	// 每个连接器独立的分发器（队列 + 写入协程）
+	dispatchers map[string]*sinkDispatcher
+	dispMu      sync.RWMutex
+
+	// 本地暂存（断网续传）：开启缓冲的连接器由 SinkRunner 从持久化流驱动，不走分发器
+	store         *storage.Store
+	bufferConfigs map[string]storage.BufferConfig
+	runners       map[string]*storage.SinkRunner
+	bufferOpMu    sync.Mutex
+
+	// 数据管道参数
+	batchSize     int
+	flushInterval time.Duration
+	sinkQueueSize int
+
+	// 管道统计
+	pointsReceived  atomic.Uint64
+	natsPublishErrs atomic.Uint64
+
 	// 插件元数据缓存优化
-	pluginCache       []*Meta
-	pluginCacheValid  bool
-	pluginCacheMutex  sync.RWMutex
-	lastCacheUpdate   time.Time
-	cacheExpiration   time.Duration
+	pluginCache      []*Meta
+	pluginCacheValid bool
+	pluginCacheMutex sync.RWMutex
+	lastCacheUpdate  time.Time
+	cacheExpiration  time.Duration
 }
 
 func NewManager(dir string, bus *nats.Conn, v *viper.Viper) *Manager {
-	return &Manager{
+	m := &Manager{
 		dir:             dir,
 		bus:             bus,
 		v:               v,
 		loader:          NewLoader(dir),
 		adapters:        make(map[string]southbound.Adapter),
 		sinks:           make(map[string]northbound.Sink),
-		dataChan:        make(chan model.Point, 1000),
+		dispatchers:     make(map[string]*sinkDispatcher),
+		bufferConfigs:   make(map[string]storage.BufferConfig),
+		runners:         make(map[string]*storage.SinkRunner),
+		batchSize:       defaultPipelineBatchSize,
+		flushInterval:   defaultPipelineFlushInterval,
+		sinkQueueSize:   defaultSinkQueueSize,
 		cacheExpiration: 30 * time.Second, // 缓存30秒过期
 	}
+	channelSize := defaultPipelineChannelSize
+	if v != nil {
+		if n := v.GetInt("gateway.pipeline.batch_size"); n > 0 {
+			m.batchSize = n
+		}
+		if d := v.GetDuration("gateway.pipeline.flush_interval"); d > 0 {
+			m.flushInterval = d
+		}
+		if n := v.GetInt("gateway.pipeline.sink_queue_size"); n > 0 {
+			m.sinkQueueSize = n
+		}
+		if n := v.GetInt("gateway.pipeline.channel_size"); n > 0 {
+			channelSize = n
+		}
+	}
+	m.dataChan = make(chan model.Point, channelSize)
+	return m
 }
 
 func (m *Manager) Name() string { return "plugin-manager" }
@@ -181,20 +209,20 @@ func (m *Manager) initSinks() error {
 		// 创建连接器实例
 		sink, ok := northbound.Create(sinkType)
 		if !ok {
-			log.Error().Str("type", sinkType).Msg("未找到连接器类型")
-			return fmt.Errorf("未找到类型为 %s 的连接器", sinkType)
+			// 单个连接器配置错误不应导致整个网关无法启动
+			log.Error().Str("name", name).Str("type", sinkType).Msg("未找到连接器类型，跳过该连接器")
+			continue
 		}
 
 		// 初始化连接器
 		log.Info().Str("name", name).Str("type", sinkType).Msg("初始化连接器")
-		log.Error().Str("name", name).Msg("!!!! DEBUG: 这是来自manager.go的调试消息 !!!!")
-		
+
 		// 调试输出原始sink映射
 		log.Debug().Str("name", name).Interface("sink_map", sinkMap).Msg("原始连接器映射")
-		
+
 		var configData []byte
 		var err error
-		
+
 		// 检查是否使用新格式（扁平化配置）还是旧格式（嵌套config）
 		if configField, hasConfig := sinkMap["config"]; hasConfig {
 			// 旧格式：使用嵌套的config字段
@@ -203,7 +231,7 @@ func (m *Manager) initSinks() error {
 		} else {
 			// 新格式：使用扁平化配置，移除控制字段但保留必需字段
 			log.Debug().Str("name", name).Msg("使用新连接器配置格式（扁平化结构）")
-			
+
 			// 创建配置副本，移除控制字段但保留必需字段
 			configMap := make(map[string]interface{})
 			for k, v := range sinkMap {
@@ -212,26 +240,25 @@ func (m *Manager) initSinks() error {
 					configMap[k] = v
 				}
 			}
-			
+
 			// 确保必需字段存在
 			configMap["name"] = name
 			configMap["type"] = sinkType
-			
+
 			// 调试输出配置映射
 			log.Debug().Str("name", name).Interface("config_map", configMap).Msg("构建的连接器配置映射")
-			
+
 			configData, err = json.Marshal(configMap)
 		}
-		
+
 		if err != nil {
-			log.Error().Err(err).Str("name", name).Msg("序列化连接器配置失败")
-			return fmt.Errorf("序列化连接器配置失败: %w", err)
+			log.Error().Err(err).Str("name", name).Msg("序列化连接器配置失败，跳过该连接器")
+			continue
 		}
 
-		log.Debug().Str("name", name).RawJSON("config", configData).Int("config_length", len(configData)).Msg("连接器配置")
-
 		if err := sink.Init(configData); err != nil {
-			return fmt.Errorf("初始化连接器 %s 失败: %w", name, err)
+			log.Error().Err(err).Str("name", name).Str("type", sinkType).Msg("初始化连接器失败，跳过该连接器")
+			continue
 		}
 
 		// 如果是MQTT连接器，设置NATS总线和名称
@@ -257,6 +284,11 @@ func (m *Manager) initSinks() error {
 			}
 		}
 
+		// 记录缓冲（断网续传）配置
+		if bc := storage.ParseBufferConfig(sinkMap["buffer"]); bc.Enabled {
+			m.bufferConfigs[name] = bc
+		}
+
 		// 保存已初始化的连接器
 		m.sinks[name] = sink
 		log.Info().Str("name", name).Msg("连接器初始化成功")
@@ -267,16 +299,14 @@ func (m *Manager) initSinks() error {
 
 // setupDataFlow 设置数据流
 func (m *Manager) setupDataFlow(ctx context.Context) {
-	// 使用管理器的数据通道
-	// dataChan := make(chan model.Point, 1000) // old code
-
-	// 启动所有连接器
+	// 启动所有连接器，并为每个连接器创建独立的分发器
 	for name, sink := range m.sinks {
 		log.Info().Str("name", name).Msg("启动连接器")
 		if err := sink.Start(ctx); err != nil {
 			log.Error().Err(err).Str("name", name).Msg("启动连接器失败")
 			continue
 		}
+		m.attachSink(name, sink)
 		log.Info().Str("name", name).Msg("连接器启动成功")
 	}
 
@@ -290,81 +320,241 @@ func (m *Manager) setupDataFlow(ctx context.Context) {
 		log.Info().Str("name", name).Msg("适配器启动成功")
 	}
 
-	// 启动数据处理协程 - 使用对象池优化
-	go func() {
-		// 从对象池获取批次缓冲区
-		batch := pointBatchPool.Get().([]model.Point)
-		batch = batch[:0] // 重置长度但保留容量
-		
-		adapterCounts := make(map[string]int) // 统计每个适配器的数据点数量
-		ticker := time.NewTicker(100 * time.Millisecond)
-		statsTicker := time.NewTicker(10 * time.Second) // 每10秒输出一次统计信息
-		defer ticker.Stop()
-		defer statsTicker.Stop()
-		
-		// 用于跟踪指标的变量
-		var totalDataPoints int64
-		var totalBytesProcessed int64
-		
-		// 确保在退出时归还对象到池
-		defer func() {
-			batch = batch[:0]
-			pointBatchPool.Put(batch)
-		}()
+	go m.runPipeline(ctx)
+	log.Info().
+		Int("batch_size", m.batchSize).
+		Dur("flush_interval", m.flushInterval).
+		Int("sink_queue_size", m.sinkQueueSize).
+		Msg("数据流设置完成")
+}
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
+// runPipeline 数据管道主循环：从适配器通道收集数据点，按批次分发。
+// 这个协程只负责组批、入队和发布到 NATS，不做任何阻塞的 Sink 写入。
+func (m *Manager) runPipeline(ctx context.Context) {
+	batch := make([]model.Point, 0, m.batchSize)
+	ticker := time.NewTicker(m.flushInterval)
+	defer ticker.Stop()
 
-			case point := <-m.dataChan:
-				// 记录数据来源
-				adapterCounts[point.DeviceID]++
-
-				// 更新指标计数
-				totalDataPoints++
-				// 估算数据点大小（设备ID + 键 + 值的字符串表示）
-				pointSize := len(point.DeviceID) + len(point.Key) + len(fmt.Sprintf("%v", point.Value))
-				totalBytesProcessed += int64(pointSize)
-
-				// 更新轻量级指标收集器
-				if lightweightMetrics := metrics.GetLightweightMetrics(); lightweightMetrics != nil {
-					lightweightMetrics.UpdateDataMetrics(totalDataPoints, totalBytesProcessed, 0)
-					log.Debug().Int64("total_data_points", totalDataPoints).Int64("total_bytes_processed", totalBytesProcessed).Msg("轻量级指标已更新")
-				} else {
-					log.Warn().Msg("轻量级指标收集器未初始化")
-				}
-
-				// 添加到批次
-				batch = append(batch, point)
-
-				// 详细记录每个数据点
-				log.Debug().Str("device_id", point.DeviceID).Str("key", point.Key).Interface("value", point.Value).Msg("收到数据点")
-
-				// 如果批次达到一定大小，立即发送
-				if len(batch) >= 10 {
-					m.sendBatchOptimized(batch)
-					batch = batch[:0] // 重置长度但保留底层数组
-				}
-
-			case <-ticker.C:
-				// 定期发送批次，即使没有达到批次大小
-				if len(batch) > 0 {
-					m.sendBatchOptimized(batch)
-					batch = batch[:0] // 重置长度但保留底层数组
-				}
-
-			case <-statsTicker.C:
-				// 输出统计信息
-				if len(adapterCounts) > 0 {
-					log.Info().Interface("adapter_counts", adapterCounts).Msg("适配器数据点统计")
-					log.Info().Int64("total_data_points", totalDataPoints).Int64("total_bytes_processed", totalBytesProcessed).Msg("累计数据统计")
-				}
-			}
+	var totalPoints, totalBytes int64
+	flush := func() {
+		if len(batch) == 0 {
+			return
 		}
-	}()
+		m.dispatchBatch(batch)
+		if lm := metrics.GetLightweightMetrics(); lm != nil {
+			lm.UpdateDataMetrics(totalPoints, totalBytes, 0)
+		}
+		// 分发时各连接器拿到的是副本，这里可以安全复用底层数组
+		batch = batch[:0]
+	}
 
-	log.Info().Msg("数据流设置完成")
+	for {
+		select {
+		case <-ctx.Done():
+			flush()
+			return
+		case point := <-m.dataChan:
+			m.pointsReceived.Add(1)
+			totalPoints++
+			// 粗略估算字节数（不做格式化，避免热路径分配）
+			totalBytes += int64(len(point.DeviceID) + len(point.Key) + 16)
+			batch = append(batch, point)
+			if len(batch) >= m.batchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// dispatchBatch 把一批数据点分发给所有连接器，并发布到 NATS 供规则引擎消费。
+func (m *Manager) dispatchBatch(points []model.Point) {
+	if len(points) == 0 {
+		return
+	}
+
+	m.dispMu.RLock()
+	for _, d := range m.dispatchers {
+		d.enqueue(copyBatchForSink(points))
+	}
+	m.dispMu.RUnlock()
+
+	if m.bus == nil {
+		return
+	}
+	for i := range points {
+		data, err := json.Marshal(points[i])
+		if err != nil {
+			m.natsPublishErrs.Add(1)
+			log.Error().Err(err).Str("device_id", points[i].DeviceID).Str("key", points[i].Key).Msg("序列化数据点失败")
+			continue
+		}
+		if err := m.bus.Publish(model.DataSubject(points[i].DeviceID, points[i].Key), data); err != nil {
+			m.natsPublishErrs.Add(1)
+			log.Error().Err(err).Msg("发布数据点到NATS失败")
+		}
+	}
+}
+
+// SetStore 设置本地暂存服务（必须在 Start 之前调用）
+func (m *Manager) SetStore(store *storage.Store) {
+	m.store = store
+}
+
+// attachSink 把连接器接入数据流：开启缓冲且本地暂存可用时使用 SinkRunner，否则使用分发器
+func (m *Manager) attachSink(name string, sink northbound.Sink) {
+	if bc, ok := m.bufferConfigs[name]; ok && bc.Enabled {
+		if m.store == nil {
+			log.Warn().Str("sink", name).Msg("连接器配置了 buffer，但本地暂存未启用（storage.enabled），退回直连模式")
+		} else {
+			ctx := m.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			r, err := m.store.StartSinkRunner(ctx, name, sink, bc)
+			if err == nil {
+				m.dispMu.Lock()
+				if old := m.runners[name]; old != nil {
+					defer old.Stop()
+				}
+				m.runners[name] = r
+				m.dispMu.Unlock()
+				return
+			}
+			log.Error().Err(err).Str("sink", name).Msg("启动缓冲运行器失败，退回直连模式")
+		}
+	}
+	m.addDispatcher(name, sink)
+}
+
+// detachSink 停止连接器的分发器或缓冲运行器
+func (m *Manager) detachSink(name string) {
+	m.removeDispatcher(name)
+	m.dispMu.Lock()
+	r := m.runners[name]
+	delete(m.runners, name)
+	m.dispMu.Unlock()
+	if r != nil {
+		r.Stop()
+	}
+}
+
+// GetBufferStats 返回开启缓冲的连接器的状态（积压量、丢失量等）
+func (m *Manager) GetBufferStats() []storage.RunnerStats {
+	m.dispMu.RLock()
+	runners := make([]*storage.SinkRunner, 0, len(m.runners))
+	for _, r := range m.runners {
+		runners = append(runners, r)
+	}
+	m.dispMu.RUnlock()
+	out := make([]storage.RunnerStats, 0, len(runners))
+	for _, r := range runners {
+		out = append(out, r.Stats())
+	}
+	return out
+}
+
+// ErrSinkNotBuffered 连接器未开启本地缓冲
+var ErrSinkNotBuffered = errors.New("连接器未开启本地缓冲")
+
+// ControlSinkBuffer 对开启缓冲的连接器执行运维操作：
+// pause（暂停写入，数据在本地积压）、resume（恢复）、skip（丢弃积压，从最新数据开始）、
+// replay（从 from 时刻起重新投递，会产生重复数据）。
+func (m *Manager) ControlSinkBuffer(name, action string, from time.Time) error {
+	m.bufferOpMu.Lock()
+	defer m.bufferOpMu.Unlock()
+	m.dispMu.RLock()
+	r := m.runners[name]
+	m.dispMu.RUnlock()
+	if r == nil || m.store == nil {
+		return ErrSinkNotBuffered
+	}
+	var startFrom string
+	switch action {
+	case "pause":
+		r.Pause()
+		return nil
+	case "resume":
+		r.Resume()
+		return nil
+	case "skip":
+		startFrom = "new"
+	case "replay":
+		startFrom = "time"
+	default:
+		return fmt.Errorf("不支持的操作 %q", action)
+	}
+	nr, err := m.store.ResetSinkRunner(r, startFrom, from)
+	if err != nil {
+		return err
+	}
+	m.dispMu.Lock()
+	if m.runners[name] == r {
+		m.runners[name] = nr
+		nr = nil
+	}
+	m.dispMu.Unlock()
+	if nr != nil {
+		nr.Stop() // 期间连接器被移除
+	}
+	log.Info().Str("sink", name).Str("action", action).Time("from", from).Msg("已执行本地缓冲运维操作")
+	return nil
+}
+
+// GetStore 返回本地暂存服务（未启用时为 nil）
+func (m *Manager) GetStore() *storage.Store { return m.store }
+
+// addDispatcher 为连接器创建分发器（若已存在则先停止旧的）
+func (m *Manager) addDispatcher(name string, sink northbound.Sink) {
+	d := newSinkDispatcher(name, sink, m.sinkQueueSize)
+	m.dispMu.Lock()
+	old := m.dispatchers[name]
+	m.dispatchers[name] = d
+	m.dispMu.Unlock()
+	if old != nil {
+		old.stop(5 * time.Second)
+	}
+}
+
+// removeDispatcher 停止并移除连接器的分发器
+func (m *Manager) removeDispatcher(name string) {
+	m.dispMu.Lock()
+	d := m.dispatchers[name]
+	delete(m.dispatchers, name)
+	m.dispMu.Unlock()
+	if d != nil {
+		d.stop(5 * time.Second)
+	}
+}
+
+// GetSinkDispatchStats 返回各连接器的分发统计（队列长度、发送和丢弃数量）
+func (m *Manager) GetSinkDispatchStats() []SinkDispatchStats {
+	m.dispMu.RLock()
+	defer m.dispMu.RUnlock()
+	out := make([]SinkDispatchStats, 0, len(m.dispatchers))
+	for _, d := range m.dispatchers {
+		out = append(out, d.stats())
+	}
+	return out
+}
+
+// PipelineStats 管道统计
+type PipelineStats struct {
+	PointsReceived  uint64 `json:"points_received"`
+	NATSPublishErrs uint64 `json:"nats_publish_errors"`
+	ChannelLen      int    `json:"channel_len"`
+	ChannelCap      int    `json:"channel_cap"`
+}
+
+// GetPipelineStats 返回数据管道统计
+func (m *Manager) GetPipelineStats() PipelineStats {
+	return PipelineStats{
+		PointsReceived:  m.pointsReceived.Load(),
+		NATSPublishErrs: m.natsPublishErrs.Load(),
+		ChannelLen:      len(m.dataChan),
+		ChannelCap:      cap(m.dataChan),
+	}
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -394,7 +584,23 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 func (m *Manager) Stop(ctx context.Context) error {
-	// 停止所有连接器（先停连接器）
+	// 先停止分发器（会尽量把队列中的数据写完），再停止连接器
+	m.dispMu.Lock()
+	dispatchers := m.dispatchers
+	m.dispatchers = make(map[string]*sinkDispatcher)
+	m.dispMu.Unlock()
+	for _, d := range dispatchers {
+		d.stop(5 * time.Second)
+	}
+	m.dispMu.Lock()
+	runners := m.runners
+	m.runners = make(map[string]*storage.SinkRunner)
+	m.dispMu.Unlock()
+	for _, r := range runners {
+		r.Stop()
+	}
+
+	// 停止所有连接器
 	for name, sink := range m.sinks {
 		log.Info().Str("name", name).Msg("停止连接器")
 		if err := sink.Stop(); err != nil {
@@ -417,16 +623,18 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 	}
 
-	// 关闭插件加载器
 	if m.loader != nil {
-		m.loader.Close()
-	}
-
-	// 停止所有sidecar进程
-	for name, proc := range m.loader.processes {
-		if err := proc.Kill(); err != nil {
-			log.Error().Err(err).Str("plugin", name).Msg("停止sidecar进程失败")
+		// 停止所有sidecar进程
+		for name, proc := range m.loader.processes {
+			if proc == nil {
+				continue
+			}
+			if err := proc.Kill(); err != nil {
+				log.Error().Err(err).Str("plugin", name).Msg("停止sidecar进程失败")
+			}
 		}
+		// 关闭插件加载器
+		m.loader.Close()
 	}
 
 	return nil
@@ -472,7 +680,7 @@ func (m *Manager) scanAndLoadMeta() error {
 func (m *Manager) invalidatePluginCache() {
 	m.pluginCacheMutex.Lock()
 	defer m.pluginCacheMutex.Unlock()
-	
+
 	m.pluginCacheValid = false
 	m.pluginCache = nil
 	log.Debug().Msg("插件缓存已失效")
@@ -508,164 +716,6 @@ func (m *Manager) GetSinkInterface(name string) (interface{}, bool) {
 	}
 	// 再从加载器中查找
 	return m.loader.GetSink(name)
-}
-
-// sendBatch 发送批量数据点到所有连接器
-func (m *Manager) sendBatch(points []model.Point) {
-	// 按设备ID分组数据点，便于调试
-	devicePoints := make(map[string][]model.Point)
-	for _, point := range points {
-		devicePoints[point.DeviceID] = append(devicePoints[point.DeviceID], point)
-	}
-
-	// 输出每个设备的数据点数量
-	for deviceID, deviceData := range devicePoints {
-		log.Info().Str("device_id", deviceID).Int("point_count", len(deviceData)).Msg("发送设备数据点")
-
-		// 输出前几个数据点的详细信息
-		for i, point := range deviceData {
-			if i < 3 { // 只输出前3个数据点
-				log.Info().Str("device_id", point.DeviceID).Str("key", point.Key).Interface("value", point.Value).Msg("数据点详情")
-			}
-		}
-	}
-
-	// 发送到所有连接器
-	for name, sink := range m.sinks {
-		// 直接发送到连接器
-		if err := sink.Publish(points); err != nil {
-			log.Error().Err(err).Str("name", name).Msg("发送数据到连接器失败")
-		} else {
-			log.Info().Str("name", name).Int("count", len(points)).Msg("成功发送数据到连接器")
-		}
-
-		// 同时发布到NATS总线，用于MQTT连接器和规则引擎订阅
-		if m.bus != nil {
-			topic := fmt.Sprintf("data.%s", name)
-			for _, point := range points {
-				data, err := json.Marshal(point)
-				if err != nil {
-					log.Error().Err(err).Str("name", name).Msg("序列化数据点失败")
-					continue
-				}
-
-				// 发布到sink特定的主题（用于MQTT连接器）
-				err = m.bus.Publish(topic, data)
-				if err != nil {
-					log.Error().Err(err).Str("name", name).Str("topic", topic).Msg("发布数据点到NATS失败")
-				} else {
-					log.Debug().Str("name", name).Str("topic", topic).Str("device_id", point.DeviceID).Str("key", point.Key).Msg("发布数据点到NATS")
-				}
-
-				// 同时发布到规则引擎主题
-				rulesTopic := fmt.Sprintf("iot.data.%s.%s", point.DeviceID, point.Key)
-				err = m.bus.Publish(rulesTopic, data)
-				if err != nil {
-					log.Error().Err(err).Str("topic", rulesTopic).Msg("发布数据点到规则引擎主题失败")
-				} else {
-					log.Debug().Str("topic", rulesTopic).Str("device_id", point.DeviceID).Str("key", point.Key).Msg("发布数据点到规则引擎主题")
-				}
-			}
-		}
-	}
-
-	// 记录统计信息
-	log.Info().Int("count", len(points)).Int("device_count", len(devicePoints)).Msg("发送数据点批次")
-}
-
-// sendBatchOptimized 优化的批量发送函数，使用对象池和批量NATS发布
-func (m *Manager) sendBatchOptimized(points []model.Point) {
-	if len(points) == 0 {
-		return
-	}
-
-	// 从对象池获取设备映射
-	devicePoints := deviceMapPool.Get().(map[string][]model.Point)
-	defer func() {
-		// 清理映射并归还到池
-		for k := range devicePoints {
-			delete(devicePoints, k)
-		}
-		deviceMapPool.Put(devicePoints)
-	}()
-
-	// 按设备ID分组数据点
-	for _, point := range points {
-		devicePoints[point.DeviceID] = append(devicePoints[point.DeviceID], point)
-	}
-
-	// 批量序列化数据点
-	var serializedData [][]byte
-	var natsSubjects []string
-	jsonBuffer := jsonBufferPool.Get().([]byte)
-	defer func() {
-		jsonBuffer = jsonBuffer[:0]
-		jsonBufferPool.Put(jsonBuffer)
-	}()
-
-	// 发送到所有连接器
-	for name, sink := range m.sinks {
-		// 直接发送到连接器
-		if err := sink.Publish(points); err != nil {
-			log.Error().Err(err).Str("name", name).Msg("发送数据到连接器失败")
-		} else {
-			log.Debug().Str("name", name).Int("count", len(points)).Msg("成功发送数据到连接器")
-		}
-	}
-
-	// 批量发布到NATS总线 - 优化网络调用
-	if m.bus != nil {
-		// 预分配切片容量
-		serializedData = make([][]byte, 0, len(points)*2)
-		natsSubjects = make([]string, 0, len(points)*2)
-
-		for _, point := range points {
-			// 复用JSON缓冲区
-			jsonBuffer = jsonBuffer[:0]
-			data, err := json.Marshal(point)
-			if err != nil {
-				log.Error().Err(err).Msg("序列化数据点失败")
-				continue
-			}
-
-			// 添加连接器特定主题
-			for name := range m.sinks {
-				topic := fmt.Sprintf("data.%s", name)
-				serializedData = append(serializedData, data)
-				natsSubjects = append(natsSubjects, topic)
-			}
-
-			// 添加规则引擎主题
-			rulesTopic := fmt.Sprintf("iot.data.%s.%s", point.DeviceID, point.Key)
-			serializedData = append(serializedData, data)
-			natsSubjects = append(natsSubjects, rulesTopic)
-		}
-
-		// 批量发布所有消息
-		if err := m.publishBatch(natsSubjects, serializedData); err != nil {
-			log.Error().Err(err).Msg("批量发布NATS消息失败")
-		}
-	}
-
-	// 输出统计信息（简化日志）
-	log.Debug().Int("count", len(points)).Int("device_count", len(devicePoints)).Msg("发送数据点批次完成")
-}
-
-// publishBatch 批量发布NATS消息以减少网络开销
-func (m *Manager) publishBatch(subjects []string, data [][]byte) error {
-	if len(subjects) != len(data) {
-		return fmt.Errorf("主题和数据数量不匹配")
-	}
-
-	// 使用异步发布提高性能
-	for i, subject := range subjects {
-		if err := m.bus.Publish(subject, data[i]); err != nil {
-			log.Error().Err(err).Str("subject", subject).Msg("发布消息失败")
-		}
-	}
-
-	// 刷新连接以确保消息发送
-	return m.bus.Flush()
 }
 
 // updatePluginStatus 更新插件的运行状态
@@ -819,7 +869,7 @@ func (m *Manager) GetPlugins() []*Meta {
 			Str("type", p.Type).
 			Bool("is_builtin_wrapper", strings.HasPrefix(p.Entry, "builtin://")).
 			Msg("Processing external plugin")
-		
+
 		// 只添加真正的外部插件，跳过指向builtin://的包装文件
 		if !strings.HasPrefix(p.Entry, "builtin://") {
 			// 创建副本避免修改原始数据
@@ -842,11 +892,11 @@ func (m *Manager) GetPlugins() []*Meta {
 	// 转换为列表并更新缓存
 	m.pluginCache = make([]*Meta, 0, len(pluginMap))
 	result := make([]*Meta, 0, len(pluginMap))
-	
+
 	for _, meta := range pluginMap {
 		// 更新运行状态
 		m.updatePluginStatus(meta)
-		
+
 		// 缓存副本（不包含动态状态）
 		cacheMeta := &Meta{
 			Name:        meta.Name,
@@ -1031,12 +1081,13 @@ func (m *Manager) startExternalPlugin(name string, meta *Meta) error {
 			return fmt.Errorf("failed to start sink '%s': %w", name, err)
 		}
 		m.sinks[name] = sink
+		m.attachSink(name, sink)
 		log.Info().Str("plugin_name", name).Msg("External sink plugin started successfully")
 	}
 
 	// 插件状态变化，使缓存失效
 	m.invalidatePluginCache()
-	
+
 	return nil
 }
 
@@ -1079,10 +1130,10 @@ func (m *Manager) startBuiltinAdapter(name string) error {
 
 	m.adapters[name] = adapter
 	log.Info().Str("plugin_name", name).Msg("Builtin adapter started successfully")
-	
+
 	// 插件状态变化，使缓存失效
 	m.invalidatePluginCache()
-	
+
 	return nil
 }
 
@@ -1133,11 +1184,12 @@ func (m *Manager) startBuiltinSink(name string) error {
 	}
 
 	m.sinks[name] = sink
+	m.attachSink(name, sink)
 	log.Info().Str("plugin_name", name).Msg("Builtin sink started successfully")
-	
+
 	// 插件状态变化，使缓存失效
 	m.invalidatePluginCache()
-	
+
 	return nil
 }
 
@@ -1196,16 +1248,17 @@ func (m *Manager) StopPlugin(name string) error {
 		}
 
 		log.Info().Str("plugin_name", name).Msg("Adapter plugin stopped successfully")
-		
+
 		// 插件状态变化，使缓存失效
 		m.invalidatePluginCache()
-		
+
 		return nil
 	}
 
 	// 检查是否是运行中的连接器
 	if sink, ok := m.sinks[name]; ok {
 		log.Info().Str("plugin_name", name).Msg("Stopping sink plugin")
+		m.detachSink(name)
 		if err := sink.Stop(); err != nil {
 			log.Error().Err(err).Str("plugin_name", name).Msg("Failed to stop sink cleanly, proceeding with cleanup")
 		}
@@ -1219,10 +1272,10 @@ func (m *Manager) StopPlugin(name string) error {
 		}
 
 		log.Info().Str("plugin_name", name).Msg("Sink plugin stopped successfully")
-		
+
 		// 插件状态变化，使缓存失效
 		m.invalidatePluginCache()
-		
+
 		return nil
 	}
 
@@ -1241,7 +1294,7 @@ func (m *Manager) RestartPlugin(name string) error {
 func (m *Manager) GetAdapter(name string) (southbound.Adapter, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	adapter, exists := m.adapters[name]
 	return adapter, exists
 }
@@ -1250,7 +1303,7 @@ func (m *Manager) GetAdapter(name string) (southbound.Adapter, bool) {
 func (m *Manager) GetSink(name string) (northbound.Sink, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	sink, exists := m.sinks[name]
 	return sink, exists
 }
@@ -1259,17 +1312,17 @@ func (m *Manager) GetSink(name string) (northbound.Sink, bool) {
 func (m *Manager) loadAllDiscoveredPlugins() error {
 	plugins := m.loader.List()
 	log.Info().Int("count", len(plugins)).Msg("开始加载发现的插件")
-	
+
 	var lastErr error
 	loadedCount := 0
-	
+
 	for _, plugin := range plugins {
 		log.Info().
 			Str("name", plugin.Name).
 			Str("type", plugin.Type).
 			Str("mode", plugin.Mode).
 			Msg("加载插件")
-		
+
 		if err := m.loader.LoadPlugin(*plugin); err != nil {
 			log.Error().
 				Err(err).
@@ -1279,19 +1332,19 @@ func (m *Manager) loadAllDiscoveredPlugins() error {
 			lastErr = err
 			continue
 		}
-		
+
 		loadedCount++
 		log.Info().
 			Str("name", plugin.Name).
 			Str("type", plugin.Type).
 			Msg("插件加载成功")
 	}
-	
+
 	log.Info().
 		Int("total", len(plugins)).
 		Int("loaded", loadedCount).
 		Msg("插件加载完成")
-	
+
 	return lastErr
 }
 

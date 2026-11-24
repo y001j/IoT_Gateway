@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/northbound"
+	"github.com/y001j/iot-gateway/internal/utils"
 )
 
 func init() {
@@ -63,10 +64,10 @@ type PointConfig struct {
 
 // WebSocketConfig 是WebSocket连接器的特定参数配置
 type WebSocketConfig struct {
-	Address      string                 `json:"address"`          // 监听地址，如 ":8080"
-	Path         string                 `json:"path"`             // WebSocket路径，如 "/ws"
-	Points       map[string]PointConfig `json:"points"`           // 数据点配置
-	AllowOrigins []string               `json:"allow_origins"`    // 允许的CORS源
+	Address      string                 `json:"address"`       // 监听地址，如 ":8080"
+	Path         string                 `json:"path"`          // WebSocket路径，如 "/ws"
+	Points       map[string]PointConfig `json:"points"`        // 数据点配置
+	AllowOrigins []string               `json:"allow_origins"` // 允许的CORS源
 }
 
 // WebSocketMessage 是发送到客户端的消息格式
@@ -98,19 +99,10 @@ func (s *WebSocketSink) Init(cfg json.RawMessage) error {
 	s.pointsConfig = wsConfig.Points
 
 	// 配置WebSocket升级器
+	// 默认只允许同源和非浏览器客户端；需要跨域时在 allow_origins 中显式配置（可用 "*"）
+	allowOrigins := wsConfig.AllowOrigins
 	s.upgrader.CheckOrigin = func(r *http.Request) bool {
-		// 如果未指定允许的源，则允许所有源
-		if len(wsConfig.AllowOrigins) == 0 {
-			return true
-		}
-
-		origin := r.Header.Get("Origin")
-		for _, allowed := range wsConfig.AllowOrigins {
-			if allowed == "*" || allowed == origin {
-				return true
-			}
-		}
-		return false
+		return utils.CheckOrigin(r, allowOrigins)
 	}
 
 	// 设置HTTP处理程序
@@ -206,8 +198,13 @@ func (s *WebSocketSink) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 注册新客户端
-	s.register <- conn
+	// 注册新客户端（连接器已停止时直接关闭，避免协程永久阻塞）
+	select {
+	case s.register <- conn:
+	case <-s.ctx.Done():
+		conn.Close()
+		return
+	}
 
 	log.Info().
 		Str("name", s.Name()).
@@ -217,7 +214,10 @@ func (s *WebSocketSink) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 	// 处理客户端消息
 	go func() {
 		defer func() {
-			s.unregister <- conn
+			select {
+			case s.unregister <- conn:
+			case <-s.ctx.Done():
+			}
 			conn.Close()
 		}()
 
@@ -268,6 +268,8 @@ func (s *WebSocketSink) broadcastLoop() {
 			// 向所有客户端广播消息
 			s.mu.Lock()
 			for client := range s.clients {
+				// 写超时：一个卡住的客户端以前会阻塞整个广播循环（所有客户端都收不到数据）
+				_ = client.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				w, err := client.NextWriter(websocket.TextMessage)
 				if err != nil {
 					s.HandleError(err, "WebSocket写入器")
@@ -320,7 +322,7 @@ func (s *WebSocketSink) Publish(batch []model.Point) error {
 				topic = config.Topic
 			} else {
 				// 使用默认主题格式
-				topic = fmt.Sprintf("iot.data.%s.%s", point.DeviceID, point.Key)
+				topic = model.DataSubject(point.DeviceID, point.Key)
 			}
 
 			// 创建安全的Tags副本 - 使用GetTagsCopy()
@@ -363,55 +365,15 @@ func (s *WebSocketSink) Publish(batch []model.Point) error {
 
 // convertValue 根据配置转换值
 func (s *WebSocketSink) convertValue(point model.Point, config PointConfig) interface{} {
-	// 首先根据数据类型转换值
-	var value interface{}
-	switch point.Type {
-	case model.TypeInt:
-		// 确保整数类型正确
-		switch v := point.Value.(type) {
-		case int:
-			value = v
-		case float64:
-			value = int(v)
-		default:
-			value = 0
-		}
-	case model.TypeFloat:
-		// 确保浮点类型正确
-		switch v := point.Value.(type) {
-		case float64:
-			value = v
-		case int:
-			value = float64(v)
-		default:
-			value = 0.0
-		}
-	case model.TypeBool:
-		// 确保布尔类型正确
-		if v, ok := point.Value.(bool); ok {
-			value = v
-		} else {
-			value = false
-		}
-	case model.TypeString:
-		// 确保字符串类型正确
-		if v, ok := point.Value.(string); ok {
-			value = v
-		} else {
-			value = fmt.Sprintf("%v", point.Value)
-		}
-	default:
-		// 默认作为字符串处理
-		value = fmt.Sprintf("%v", point.Value)
-	}
+	// 首先根据数据类型转换值（复合类型保留原结构，由 JSON 序列化处理）
+	value := northbound.NormalizeValueOrZero(point)
 
 	// 然后根据转换函数进一步处理
 	if config.Transform == "scale" && config.ScaleFactor != 0 {
-		switch v := value.(type) {
-		case int:
-			return float64(v) * config.ScaleFactor
-		case float64:
-			return v * config.ScaleFactor
+		if point.Type == model.TypeInt || point.Type == model.TypeFloat {
+			if f, ok := northbound.ToFloat64(value); ok {
+				return f * config.ScaleFactor
+			}
 		}
 	}
 

@@ -90,31 +90,51 @@ type AdapterConfig struct {
 
 // SinkConfig represents configuration for northbound sinks
 type SinkConfig struct {
-	BaseConfig  `json:",inline" yaml:",inline"`
-	BatchSize   int      `json:"batch_size,omitempty" yaml:"batch_size,omitempty" validate:"min=1,max=10000"`
-	BufferSize  int      `json:"buffer_size,omitempty" yaml:"buffer_size,omitempty" validate:"min=1,max=100000"`
+	BaseConfig   `json:",inline" yaml:",inline"`
+	BatchSize    int      `json:"batch_size,omitempty" yaml:"batch_size,omitempty" validate:"min=1,max=10000"`
+	BufferSize   int      `json:"buffer_size,omitempty" yaml:"buffer_size,omitempty" validate:"min=1,max=100000"`
 	FlushTimeout Duration `json:"flush_timeout,omitempty" yaml:"flush_timeout,omitempty"`
 }
 
 // ModbusConfig represents Modbus adapter configuration
 type ModbusConfig struct {
 	AdapterConfig `json:",inline" yaml:",inline"`
-	Host          string            `json:"host" yaml:"host" validate:"required"`
-	Port          int               `json:"port" yaml:"port" validate:"port"`
-	SlaveID       byte              `json:"slave_id" yaml:"slave_id" validate:"max=247"`
-	Protocol      string            `json:"protocol,omitempty" yaml:"protocol,omitempty" validate:"oneof=tcp rtu"`
-	Registers     []ModbusRegister  `json:"registers" yaml:"registers" validate:"required,min=1"`
+	// TCP 模式参数
+	Host string `json:"host" yaml:"host"`
+	Port int    `json:"port" yaml:"port" validate:"port"`
+	// RTU 模式参数
+	SerialPort string `json:"serial_port,omitempty" yaml:"serial_port,omitempty"`
+	BaudRate   int    `json:"baud_rate,omitempty" yaml:"baud_rate,omitempty"`
+	DataBits   int    `json:"data_bits,omitempty" yaml:"data_bits,omitempty"`
+	Parity     string `json:"parity,omitempty" yaml:"parity,omitempty" validate:"oneof=N E O"`
+	StopBits   int    `json:"stop_bits,omitempty" yaml:"stop_bits,omitempty"`
+
+	SlaveID   byte             `json:"slave_id" yaml:"slave_id" validate:"max=247"`
+	Protocol  string           `json:"protocol,omitempty" yaml:"protocol,omitempty" validate:"oneof=tcp rtu"`
+	Registers []ModbusRegister `json:"registers" yaml:"registers" validate:"required,min=1"`
+
+	// 默认字节序（寄存器未单独配置时使用）：ABCD(大端，默认) / CDAB / BADC / DCBA
+	ByteOrder string `json:"byte_order,omitempty" yaml:"byte_order,omitempty" validate:"oneof=ABCD CDAB BADC DCBA"`
+	// 合并读取：同类型、地址间隔不超过 MaxReadGap 的寄存器合并为一次请求（默认开启，间隔 10）
+	DisableMerge bool   `json:"disable_merge,omitempty" yaml:"disable_merge,omitempty"`
+	MaxReadGap   uint16 `json:"max_read_gap,omitempty" yaml:"max_read_gap,omitempty"`
+	// 断线重连的最大退避时间（默认 60s）
+	ReconnectMaxBackoff Duration `json:"reconnect_max_backoff,omitempty" yaml:"reconnect_max_backoff,omitempty"`
 }
 
 // ModbusRegister represents a Modbus register configuration
 type ModbusRegister struct {
-	Address    uint16 `json:"address" yaml:"address"`
-	Type       string `json:"type" yaml:"type" validate:"required,oneof=coil discrete_input input_register holding_register"`
-	DataType   string `json:"data_type,omitempty" yaml:"data_type,omitempty" validate:"oneof=uint16 int16 uint32 int32 float32"`
-	DeviceID   string `json:"device_id" yaml:"device_id" validate:"required"`
-	Key        string `json:"key" yaml:"key" validate:"required"`
-	Scale      float64 `json:"scale,omitempty" yaml:"scale,omitempty"`
-	Offset     float64 `json:"offset,omitempty" yaml:"offset,omitempty"`
+	Address  uint16 `json:"address" yaml:"address"`
+	Type     string `json:"type" yaml:"type" validate:"required,oneof=coil discrete_input input_register holding_register"`
+	DataType string `json:"data_type,omitempty" yaml:"data_type,omitempty" validate:"oneof=uint16 int16 uint32 int32 float32 uint64 int64 float64"`
+	DeviceID string `json:"device_id" yaml:"device_id" validate:"required"`
+	Key      string `json:"key" yaml:"key" validate:"required"`
+	// 线性换算：value*scale + offset。scale 未配置（0）时按 1 处理；
+	// 配置了非 1 的 scale 或非 0 的 offset 时输出浮点数，避免小数被截断。
+	Scale  float64 `json:"scale,omitempty" yaml:"scale,omitempty"`
+	Offset float64 `json:"offset,omitempty" yaml:"offset,omitempty"`
+	// 字节序，覆盖适配器级别的 byte_order
+	ByteOrder string `json:"byte_order,omitempty" yaml:"byte_order,omitempty" validate:"oneof=ABCD CDAB BADC DCBA"`
 }
 
 // HTTPConfig represents HTTP adapter configuration
@@ -132,7 +152,7 @@ type HTTPConfig struct {
 type HTTPDataPoint struct {
 	Key      string            `json:"key" yaml:"key" validate:"required"`
 	Path     string            `json:"path" yaml:"path" validate:"required"`
-	Type     string            `json:"type" yaml:"type" validate:"oneof=int float bool string location vector3d color"`
+	Type     string            `json:"type" yaml:"type" validate:"oneof=int float bool string location vector3d color vector array matrix timeseries"`
 	DeviceID string            `json:"device_id,omitempty" yaml:"device_id,omitempty"`
 	Tags     map[string]string `json:"tags,omitempty" yaml:"tags,omitempty"`
 	// 复合对象配置
@@ -143,7 +163,7 @@ type HTTPDataPoint struct {
 type HTTPCompositeConfig struct {
 	// Location 类型的字段映射
 	Location *HTTPLocationConfig `json:"location,omitempty" yaml:"location,omitempty"`
-	// Vector3D 类型的字段映射  
+	// Vector3D 类型的字段映射
 	Vector3D *HTTPVector3DConfig `json:"vector3d,omitempty" yaml:"vector3d,omitempty"`
 	// Color 类型的字段映射
 	Color *HTTPColorConfig `json:"color,omitempty" yaml:"color,omitempty"`
@@ -195,14 +215,14 @@ type MQTTSubConfig struct {
 
 // MQTTTopicConfig represents MQTT topic subscription configuration
 type MQTTTopicConfig struct {
-	Topic     string                     `json:"topic" yaml:"topic" validate:"required"`
-	QoS       byte                       `json:"qos,omitempty" yaml:"qos,omitempty" validate:"max=2"`
-	Key       string                     `json:"key" yaml:"key" validate:"required"`
-	Type      string                     `json:"type,omitempty" yaml:"type,omitempty" validate:"oneof=int float bool string location vector3d color"`
-	Path      string                     `json:"path,omitempty" yaml:"path,omitempty"`
-	DeviceID  string                     `json:"device_id,omitempty" yaml:"device_id,omitempty"`
-	Tags      map[string]string          `json:"tags,omitempty" yaml:"tags,omitempty"`
-	Composite *MQTTCompositeConfig       `json:"composite,omitempty" yaml:"composite,omitempty"`
+	Topic     string               `json:"topic" yaml:"topic" validate:"required"`
+	QoS       byte                 `json:"qos,omitempty" yaml:"qos,omitempty" validate:"max=2"`
+	Key       string               `json:"key" yaml:"key" validate:"required"`
+	Type      string               `json:"type,omitempty" yaml:"type,omitempty" validate:"oneof=int float bool string location vector3d color vector array matrix timeseries"`
+	Path      string               `json:"path,omitempty" yaml:"path,omitempty"`
+	DeviceID  string               `json:"device_id,omitempty" yaml:"device_id,omitempty"`
+	Tags      map[string]string    `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Composite *MQTTCompositeConfig `json:"composite,omitempty" yaml:"composite,omitempty"`
 }
 
 // MQTTCompositeConfig MQTT复合数据提取配置
@@ -248,9 +268,9 @@ type TLSConfig struct {
 // MockConfig represents Mock adapter configuration
 type MockConfig struct {
 	AdapterConfig `json:",inline" yaml:",inline"`
-	DeviceCount   int                    `json:"device_count,omitempty" yaml:"device_count,omitempty" validate:"min=1,max=1000"`
-	DataPoints    []MockDataPoint        `json:"data_points" yaml:"data_points" validate:"required,min=1"`
-	Pattern       string                 `json:"pattern,omitempty" yaml:"pattern,omitempty" validate:"oneof=sequential random sine"`
+	DeviceCount   int             `json:"device_count,omitempty" yaml:"device_count,omitempty" validate:"min=1,max=1000"`
+	DataPoints    []MockDataPoint `json:"data_points" yaml:"data_points" validate:"required,min=1"`
+	Pattern       string          `json:"pattern,omitempty" yaml:"pattern,omitempty" validate:"oneof=sequential random sine"`
 }
 
 // MockDataPoint represents a mock data point configuration
@@ -260,121 +280,121 @@ type MockDataPoint struct {
 	MinValue float64 `json:"min_value,omitempty" yaml:"min_value,omitempty"`
 	MaxValue float64 `json:"max_value,omitempty" yaml:"max_value,omitempty"`
 	Unit     string  `json:"unit,omitempty" yaml:"unit,omitempty"`
-	
+
 	// 复合数据类型配置
-	DataType         string                  `json:"data_type,omitempty" yaml:"data_type,omitempty"`
-	LocationConfig   *MockLocationConfig     `json:"location_config,omitempty" yaml:"location_config,omitempty"`
-	Vector3DConfig   *MockVector3DConfig     `json:"vector3d_config,omitempty" yaml:"vector3d_config,omitempty"`
-	ColorConfig      *MockColorConfig        `json:"color_config,omitempty" yaml:"color_config,omitempty"`
-	
+	DataType       string              `json:"data_type,omitempty" yaml:"data_type,omitempty"`
+	LocationConfig *MockLocationConfig `json:"location_config,omitempty" yaml:"location_config,omitempty"`
+	Vector3DConfig *MockVector3DConfig `json:"vector3d_config,omitempty" yaml:"vector3d_config,omitempty"`
+	ColorConfig    *MockColorConfig    `json:"color_config,omitempty" yaml:"color_config,omitempty"`
+
 	// 通用复合数据类型配置
-	VectorConfig     *MockVectorConfig       `json:"vector_config,omitempty" yaml:"vector_config,omitempty"`
-	ArrayConfig      *MockArrayConfig        `json:"array_config,omitempty" yaml:"array_config,omitempty"`
-	MatrixConfig     *MockMatrixConfig       `json:"matrix_config,omitempty" yaml:"matrix_config,omitempty"`
-	TimeSeriesConfig *MockTimeSeriesConfig   `json:"timeseries_config,omitempty" yaml:"timeseries_config,omitempty"`
+	VectorConfig     *MockVectorConfig     `json:"vector_config,omitempty" yaml:"vector_config,omitempty"`
+	ArrayConfig      *MockArrayConfig      `json:"array_config,omitempty" yaml:"array_config,omitempty"`
+	MatrixConfig     *MockMatrixConfig     `json:"matrix_config,omitempty" yaml:"matrix_config,omitempty"`
+	TimeSeriesConfig *MockTimeSeriesConfig `json:"timeseries_config,omitempty" yaml:"timeseries_config,omitempty"`
 }
 
 // MockLocationConfig GPS/地理位置模拟配置
 type MockLocationConfig struct {
-	StartLatitude   float64 `json:"start_latitude" yaml:"start_latitude" validate:"min=-90,max=90"`
-	StartLongitude  float64 `json:"start_longitude" yaml:"start_longitude" validate:"min=-180,max=180"`
-	LatitudeRange   float64 `json:"latitude_range,omitempty" yaml:"latitude_range,omitempty"`    // 纬度变化范围
-	LongitudeRange  float64 `json:"longitude_range,omitempty" yaml:"longitude_range,omitempty"`  // 经度变化范围
-	AltitudeMin     float64 `json:"altitude_min,omitempty" yaml:"altitude_min,omitempty"`
-	AltitudeMax     float64 `json:"altitude_max,omitempty" yaml:"altitude_max,omitempty"`
-	SpeedMin        float64 `json:"speed_min,omitempty" yaml:"speed_min,omitempty"`
-	SpeedMax        float64 `json:"speed_max,omitempty" yaml:"speed_max,omitempty"`
-	SimulateMovement bool   `json:"simulate_movement,omitempty" yaml:"simulate_movement,omitempty"`
-	MovementPattern string  `json:"movement_pattern,omitempty" yaml:"movement_pattern,omitempty" validate:"oneof=random_walk circular linear"`
+	StartLatitude    float64 `json:"start_latitude" yaml:"start_latitude" validate:"min=-90,max=90"`
+	StartLongitude   float64 `json:"start_longitude" yaml:"start_longitude" validate:"min=-180,max=180"`
+	LatitudeRange    float64 `json:"latitude_range,omitempty" yaml:"latitude_range,omitempty"`   // 纬度变化范围
+	LongitudeRange   float64 `json:"longitude_range,omitempty" yaml:"longitude_range,omitempty"` // 经度变化范围
+	AltitudeMin      float64 `json:"altitude_min,omitempty" yaml:"altitude_min,omitempty"`
+	AltitudeMax      float64 `json:"altitude_max,omitempty" yaml:"altitude_max,omitempty"`
+	SpeedMin         float64 `json:"speed_min,omitempty" yaml:"speed_min,omitempty"`
+	SpeedMax         float64 `json:"speed_max,omitempty" yaml:"speed_max,omitempty"`
+	SimulateMovement bool    `json:"simulate_movement,omitempty" yaml:"simulate_movement,omitempty"`
+	MovementPattern  string  `json:"movement_pattern,omitempty" yaml:"movement_pattern,omitempty" validate:"oneof=random_walk circular linear"`
 }
 
 // MockVector3DConfig 三轴向量模拟配置
 type MockVector3DConfig struct {
-	XMin          float64 `json:"x_min,omitempty" yaml:"x_min,omitempty"`
-	XMax          float64 `json:"x_max,omitempty" yaml:"x_max,omitempty"`
-	YMin          float64 `json:"y_min,omitempty" yaml:"y_min,omitempty"`
-	YMax          float64 `json:"y_max,omitempty" yaml:"y_max,omitempty"`
-	ZMin          float64 `json:"z_min,omitempty" yaml:"z_min,omitempty"`
-	ZMax          float64 `json:"z_max,omitempty" yaml:"z_max,omitempty"`
-	Correlation   float64 `json:"correlation,omitempty" yaml:"correlation,omitempty" validate:"min=0,max=1"`     // 轴间相关性
-	Oscillation   bool    `json:"oscillation,omitempty" yaml:"oscillation,omitempty"`                          // 是否模拟振荡
-	Frequency     float64 `json:"frequency,omitempty" yaml:"frequency,omitempty"`                              // 振荡频率
+	XMin        float64 `json:"x_min,omitempty" yaml:"x_min,omitempty"`
+	XMax        float64 `json:"x_max,omitempty" yaml:"x_max,omitempty"`
+	YMin        float64 `json:"y_min,omitempty" yaml:"y_min,omitempty"`
+	YMax        float64 `json:"y_max,omitempty" yaml:"y_max,omitempty"`
+	ZMin        float64 `json:"z_min,omitempty" yaml:"z_min,omitempty"`
+	ZMax        float64 `json:"z_max,omitempty" yaml:"z_max,omitempty"`
+	Correlation float64 `json:"correlation,omitempty" yaml:"correlation,omitempty" validate:"min=0,max=1"` // 轴间相关性
+	Oscillation bool    `json:"oscillation,omitempty" yaml:"oscillation,omitempty"`                        // 是否模拟振荡
+	Frequency   float64 `json:"frequency,omitempty" yaml:"frequency,omitempty"`                            // 振荡频率
 }
 
 // MockColorConfig 颜色模拟配置
 type MockColorConfig struct {
-	ColorMode        string   `json:"color_mode,omitempty" yaml:"color_mode,omitempty" validate:"oneof=random rainbow gradient fixed"`
-	FixedColors      []string `json:"fixed_colors,omitempty" yaml:"fixed_colors,omitempty"`      // 固定颜色列表 (hex格式)
-	BrightnessRange  [2]uint8 `json:"brightness_range,omitempty" yaml:"brightness_range,omitempty"` // 亮度范围 [min, max]
-	SaturationRange  [2]uint8 `json:"saturation_range,omitempty" yaml:"saturation_range,omitempty"` // 饱和度范围
-	HueChangeSpeed   float64  `json:"hue_change_speed,omitempty" yaml:"hue_change_speed,omitempty"`  // 色相变化速度
+	ColorMode       string   `json:"color_mode,omitempty" yaml:"color_mode,omitempty" validate:"oneof=random rainbow gradient fixed"`
+	FixedColors     []string `json:"fixed_colors,omitempty" yaml:"fixed_colors,omitempty"`         // 固定颜色列表 (hex格式)
+	BrightnessRange [2]uint8 `json:"brightness_range,omitempty" yaml:"brightness_range,omitempty"` // 亮度范围 [min, max]
+	SaturationRange [2]uint8 `json:"saturation_range,omitempty" yaml:"saturation_range,omitempty"` // 饱和度范围
+	HueChangeSpeed  float64  `json:"hue_change_speed,omitempty" yaml:"hue_change_speed,omitempty"` // 色相变化速度
 }
 
 // MockVectorConfig 通用向量模拟配置（支持任意维度）
 type MockVectorConfig struct {
-	Dimension      int       `json:"dimension" yaml:"dimension" validate:"min=1,max=1000"`             // 向量维度
-	MinValues      []float64 `json:"min_values,omitempty" yaml:"min_values,omitempty"`                 // 各维度最小值
-	MaxValues      []float64 `json:"max_values,omitempty" yaml:"max_values,omitempty"`                 // 各维度最大值
-	Labels         []string  `json:"labels,omitempty" yaml:"labels,omitempty"`                         // 维度标签
-	GlobalMin      float64   `json:"global_min,omitempty" yaml:"global_min,omitempty"`                 // 全局最小值（如果不指定各维度）
-	GlobalMax      float64   `json:"global_max,omitempty" yaml:"global_max,omitempty"`                 // 全局最大值
-	Correlation    float64   `json:"correlation,omitempty" yaml:"correlation,omitempty" validate:"min=0,max=1"` // 维度间相关性
-	Distribution   string    `json:"distribution,omitempty" yaml:"distribution,omitempty" validate:"oneof=uniform normal exponential"` // 分布类型
-	ChangePattern  string    `json:"change_pattern,omitempty" yaml:"change_pattern,omitempty" validate:"oneof=random walk oscillate"` // 变化模式
-	Unit           string    `json:"unit,omitempty" yaml:"unit,omitempty"`                             // 单位
+	Dimension     int       `json:"dimension" yaml:"dimension" validate:"min=1,max=1000"`                                             // 向量维度
+	MinValues     []float64 `json:"min_values,omitempty" yaml:"min_values,omitempty"`                                                 // 各维度最小值
+	MaxValues     []float64 `json:"max_values,omitempty" yaml:"max_values,omitempty"`                                                 // 各维度最大值
+	Labels        []string  `json:"labels,omitempty" yaml:"labels,omitempty"`                                                         // 维度标签
+	GlobalMin     float64   `json:"global_min,omitempty" yaml:"global_min,omitempty"`                                                 // 全局最小值（如果不指定各维度）
+	GlobalMax     float64   `json:"global_max,omitempty" yaml:"global_max,omitempty"`                                                 // 全局最大值
+	Correlation   float64   `json:"correlation,omitempty" yaml:"correlation,omitempty" validate:"min=0,max=1"`                        // 维度间相关性
+	Distribution  string    `json:"distribution,omitempty" yaml:"distribution,omitempty" validate:"oneof=uniform normal exponential"` // 分布类型
+	ChangePattern string    `json:"change_pattern,omitempty" yaml:"change_pattern,omitempty" validate:"oneof=random walk oscillate"`  // 变化模式
+	Unit          string    `json:"unit,omitempty" yaml:"unit,omitempty"`                                                             // 单位
 }
 
 // MockArrayConfig 数组模拟配置
 type MockArrayConfig struct {
-	Size             int         `json:"size" yaml:"size" validate:"min=1,max=10000"`                    // 数组大小
-	ElementType      string      `json:"element_type" yaml:"element_type" validate:"oneof=int float string bool mixed"` // 元素类型
-	MinValue         float64     `json:"min_value,omitempty" yaml:"min_value,omitempty"`                 // 数值元素最小值
-	MaxValue         float64     `json:"max_value,omitempty" yaml:"max_value,omitempty"`                 // 数值元素最大值
-	StringOptions    []string    `json:"string_options,omitempty" yaml:"string_options,omitempty"`       // 字符串选项（当元素类型为string时）
-	BoolProbability  float64     `json:"bool_probability,omitempty" yaml:"bool_probability,omitempty" validate:"min=0,max=1"` // true的概率
-	NullProbability  float64     `json:"null_probability,omitempty" yaml:"null_probability,omitempty" validate:"min=0,max=1"` // null的概率
-	Labels           []string    `json:"labels,omitempty" yaml:"labels,omitempty"`                       // 元素标签
-	ChangeElements   int         `json:"change_elements,omitempty" yaml:"change_elements,omitempty"`     // 每次改变的元素数量
-	Unit             string      `json:"unit,omitempty" yaml:"unit,omitempty"`                           // 单位
+	Size            int      `json:"size" yaml:"size" validate:"min=1,max=10000"`                                         // 数组大小
+	ElementType     string   `json:"element_type" yaml:"element_type" validate:"oneof=int float string bool mixed"`       // 元素类型
+	MinValue        float64  `json:"min_value,omitempty" yaml:"min_value,omitempty"`                                      // 数值元素最小值
+	MaxValue        float64  `json:"max_value,omitempty" yaml:"max_value,omitempty"`                                      // 数值元素最大值
+	StringOptions   []string `json:"string_options,omitempty" yaml:"string_options,omitempty"`                            // 字符串选项（当元素类型为string时）
+	BoolProbability float64  `json:"bool_probability,omitempty" yaml:"bool_probability,omitempty" validate:"min=0,max=1"` // true的概率
+	NullProbability float64  `json:"null_probability,omitempty" yaml:"null_probability,omitempty" validate:"min=0,max=1"` // null的概率
+	Labels          []string `json:"labels,omitempty" yaml:"labels,omitempty"`                                            // 元素标签
+	ChangeElements  int      `json:"change_elements,omitempty" yaml:"change_elements,omitempty"`                          // 每次改变的元素数量
+	Unit            string   `json:"unit,omitempty" yaml:"unit,omitempty"`                                                // 单位
 }
 
 // MockMatrixConfig 矩阵模拟配置
 type MockMatrixConfig struct {
-	Rows         int     `json:"rows" yaml:"rows" validate:"min=1,max=1000"`                      // 行数
-	Cols         int     `json:"cols" yaml:"cols" validate:"min=1,max=1000"`                      // 列数
-	MinValue     float64 `json:"min_value,omitempty" yaml:"min_value,omitempty"`                  // 元素最小值
-	MaxValue     float64 `json:"max_value,omitempty" yaml:"max_value,omitempty"`                  // 元素最大值
+	Rows         int     `json:"rows" yaml:"rows" validate:"min=1,max=1000"`                                                              // 行数
+	Cols         int     `json:"cols" yaml:"cols" validate:"min=1,max=1000"`                                                              // 列数
+	MinValue     float64 `json:"min_value,omitempty" yaml:"min_value,omitempty"`                                                          // 元素最小值
+	MaxValue     float64 `json:"max_value,omitempty" yaml:"max_value,omitempty"`                                                          // 元素最大值
 	MatrixType   string  `json:"matrix_type,omitempty" yaml:"matrix_type,omitempty" validate:"oneof=general diagonal identity symmetric"` // 矩阵类型
-	Distribution string  `json:"distribution,omitempty" yaml:"distribution,omitempty" validate:"oneof=uniform normal"` // 分布类型
-	Sparsity     float64 `json:"sparsity,omitempty" yaml:"sparsity,omitempty" validate:"min=0,max=1"` // 稀疏度（0为稠密，1为全零）
-	Unit         string  `json:"unit,omitempty" yaml:"unit,omitempty"`                            // 单位
+	Distribution string  `json:"distribution,omitempty" yaml:"distribution,omitempty" validate:"oneof=uniform normal"`                    // 分布类型
+	Sparsity     float64 `json:"sparsity,omitempty" yaml:"sparsity,omitempty" validate:"min=0,max=1"`                                     // 稀疏度（0为稠密，1为全零）
+	Unit         string  `json:"unit,omitempty" yaml:"unit,omitempty"`                                                                    // 单位
 }
 
 // MockTimeSeriesConfig 时间序列模拟配置
 type MockTimeSeriesConfig struct {
-	Length          int           `json:"length" yaml:"length" validate:"min=2,max=10000"`                // 数据点数量
-	StartTime       string        `json:"start_time,omitempty" yaml:"start_time,omitempty"`               // 开始时间（RFC3339格式）
-	Interval        string        `json:"interval" yaml:"interval" validate:"required"`                   // 采样间隔
-	BaseValue       float64       `json:"base_value,omitempty" yaml:"base_value,omitempty"`               // 基准值
-	Trend           float64       `json:"trend,omitempty" yaml:"trend,omitempty"`                         // 趋势斜率（每个时间单位的变化）
-	Seasonality     *SeasonalityConfig `json:"seasonality,omitempty" yaml:"seasonality,omitempty"`        // 季节性配置
-	Noise           float64       `json:"noise,omitempty" yaml:"noise,omitempty"`                         // 噪声水平（标准差）
-	Anomalies       *AnomaliesConfig   `json:"anomalies,omitempty" yaml:"anomalies,omitempty"`            // 异常值配置
-	Unit            string        `json:"unit,omitempty" yaml:"unit,omitempty"`                           // 单位
+	Length      int                `json:"length" yaml:"length" validate:"min=2,max=10000"`    // 数据点数量
+	StartTime   string             `json:"start_time,omitempty" yaml:"start_time,omitempty"`   // 开始时间（RFC3339格式）
+	Interval    string             `json:"interval" yaml:"interval" validate:"required"`       // 采样间隔
+	BaseValue   float64            `json:"base_value,omitempty" yaml:"base_value,omitempty"`   // 基准值
+	Trend       float64            `json:"trend,omitempty" yaml:"trend,omitempty"`             // 趋势斜率（每个时间单位的变化）
+	Seasonality *SeasonalityConfig `json:"seasonality,omitempty" yaml:"seasonality,omitempty"` // 季节性配置
+	Noise       float64            `json:"noise,omitempty" yaml:"noise,omitempty"`             // 噪声水平（标准差）
+	Anomalies   *AnomaliesConfig   `json:"anomalies,omitempty" yaml:"anomalies,omitempty"`     // 异常值配置
+	Unit        string             `json:"unit,omitempty" yaml:"unit,omitempty"`               // 单位
 }
 
 // SeasonalityConfig 季节性配置
 type SeasonalityConfig struct {
-	Period    string  `json:"period" yaml:"period" validate:"required"`                       // 周期（如"24h"表示日周期）
-	Amplitude float64 `json:"amplitude" yaml:"amplitude"`                                     // 振幅
-	Phase     float64 `json:"phase,omitempty" yaml:"phase,omitempty"`                         // 相位偏移（弧度）
+	Period    string  `json:"period" yaml:"period" validate:"required"` // 周期（如"24h"表示日周期）
+	Amplitude float64 `json:"amplitude" yaml:"amplitude"`               // 振幅
+	Phase     float64 `json:"phase,omitempty" yaml:"phase,omitempty"`   // 相位偏移（弧度）
 }
 
 // AnomaliesConfig 异常值配置
 type AnomaliesConfig struct {
-	Probability float64 `json:"probability" yaml:"probability" validate:"min=0,max=1"`        // 异常值出现概率
-	Magnitude   float64 `json:"magnitude" yaml:"magnitude"`                                   // 异常值的倍数（相对于正常范围）
-	Duration    int     `json:"duration,omitempty" yaml:"duration,omitempty"`                 // 异常持续的数据点数
+	Probability float64 `json:"probability" yaml:"probability" validate:"min=0,max=1"` // 异常值出现概率
+	Magnitude   float64 `json:"magnitude" yaml:"magnitude"`                            // 异常值的倍数（相对于正常范围）
+	Duration    int     `json:"duration,omitempty" yaml:"duration,omitempty"`          // 异常持续的数据点数
 }
 
 // MQTTSinkConfig represents MQTT sink configuration
@@ -429,8 +449,8 @@ type ConsoleConfig struct {
 // WebSocketConfig represents WebSocket sink configuration
 type WebSocketConfig struct {
 	SinkConfig `json:",inline" yaml:",inline"`
-	Port       int    `json:"port" yaml:"port" validate:"port"`
-	Path       string `json:"path,omitempty" yaml:"path,omitempty"`
+	Port       int      `json:"port" yaml:"port" validate:"port"`
+	Path       string   `json:"path,omitempty" yaml:"path,omitempty"`
 	Origins    []string `json:"origins,omitempty" yaml:"origins,omitempty"`
 }
 

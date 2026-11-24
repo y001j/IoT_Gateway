@@ -63,8 +63,8 @@ func NewManager(configPath string) (ConfigManager, error) {
 
 	// 初始化热加载配置
 	hotReloadConfig := &HotReloadConfig{
-		Enabled:          true,  // 默认启用
-		GracefulFallback: true,  // 默认优雅降级
+		Enabled:          true, // 默认启用
+		GracefulFallback: true, // 默认优雅降级
 		RetryInterval:    "30s",
 		MaxRetries:       3,
 	}
@@ -159,12 +159,12 @@ type HotReloadConfig struct {
 
 // hotReloadManager implements HotReloadManager
 type hotReloadManager struct {
-	manager   *Manager
-	config    *HotReloadConfig
-	enabled   bool
-	watcher   *fsnotify.Watcher
+	manager    *Manager
+	config     *HotReloadConfig
+	enabled    bool
+	watcher    *fsnotify.Watcher
 	retryCount int
-	mu        sync.RWMutex
+	mu         sync.RWMutex
 }
 
 // Enable enables hot reloading
@@ -186,7 +186,7 @@ func (h *hotReloadManager) Enable() error {
 	err := h.startHotReload()
 	if err != nil {
 		log.Error().Err(err).Msg("启动配置文件热加载失败")
-		
+
 		// 是否优雅降级
 		if h.config != nil && h.config.GracefulFallback {
 			log.Warn().Msg("启用优雅降级，继续运行但不监控文件变更")
@@ -211,7 +211,7 @@ func (h *hotReloadManager) startHotReload() error {
 	h.manager.viper.WatchConfig()
 	h.manager.viper.OnConfigChange(func(e fsnotify.Event) {
 		log.Info().Str("file", e.Name).Str("op", e.Op.String()).Msg("检测到配置文件变更")
-		
+
 		// Notify all watchers
 		h.manager.mu.RLock()
 		for key := range h.manager.watchers {

@@ -49,12 +49,12 @@ type Endpoint struct {
 
 // DataPoint 定义了从HTTP响应中提取的数据点
 type DataPoint struct {
-	Key       string                   `json:"key"`                 // 数据点标识符
-	Path      string                   `json:"path"`                // JSON路径，用于从响应中提取值 (基础类型)
-	Type      string                   `json:"type"`                // 数据类型: int, float, bool, string, location, vector3d, color
-	DeviceID  string                   `json:"device_id"`           // 设备ID，如果为空则使用适配器默认值
-	Tags      map[string]string        `json:"tags,omitempty"`      // 附加标签
-	Composite *CompositeExtractConfig  `json:"composite,omitempty"` // 复合数据提取配置
+	Key       string                  `json:"key"`                 // 数据点标识符
+	Path      string                  `json:"path"`                // JSON路径，用于从响应中提取值 (基础类型)
+	Type      string                  `json:"type"`                // 数据类型: int, float, bool, string, location, vector3d, color
+	DeviceID  string                  `json:"device_id"`           // 设备ID，如果为空则使用适配器默认值
+	Tags      map[string]string       `json:"tags,omitempty"`      // 附加标签
+	Composite *CompositeExtractConfig `json:"composite,omitempty"` // 复合数据提取配置
 }
 
 // CompositeExtractConfig 复合数据提取配置
@@ -74,7 +74,7 @@ type LocationExtractConfig struct {
 	HeadingPath   string `json:"heading_path,omitempty"`
 }
 
-// Vector3DExtractConfig 3D向量提取配置  
+// Vector3DExtractConfig 3D向量提取配置
 type Vector3DExtractConfig struct {
 	XPath string `json:"x_path"`
 	YPath string `json:"y_path"`
@@ -89,7 +89,6 @@ type ColorExtractConfig struct {
 	AlphaPath string `json:"alpha_path,omitempty"`
 }
 
-
 // Name 返回适配器名称
 func (a *HTTPAdapter) Name() string {
 	return a.BaseAdapter.Name()
@@ -99,7 +98,7 @@ func (a *HTTPAdapter) Name() string {
 func (a *HTTPAdapter) Init(cfg json.RawMessage) error {
 	// 创建配置解析器
 	a.parser = config.NewParserWithDefaults(config.GetDefaultHTTPConfig())
-	
+
 	// 解析配置
 	httpConfig, err := a.parser.Parse(cfg)
 	if err != nil {
@@ -131,11 +130,11 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 			DeviceID: dp.DeviceID,
 			Tags:     dp.Tags,
 		}
-		
+
 		// 转换复合对象配置
 		if dp.Composite != nil {
 			dataPoint.Composite = &CompositeExtractConfig{}
-			
+
 			if dp.Composite.Location != nil {
 				dataPoint.Composite.Location = &LocationExtractConfig{
 					LatitudePath:  dp.Composite.Location.LatitudePath,
@@ -146,7 +145,7 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 					HeadingPath:   dp.Composite.Location.HeadingPath,
 				}
 			}
-			
+
 			if dp.Composite.Vector3D != nil {
 				dataPoint.Composite.Vector3D = &Vector3DExtractConfig{
 					XPath: dp.Composite.Vector3D.XPath,
@@ -154,7 +153,7 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 					ZPath: dp.Composite.Vector3D.ZPath,
 				}
 			}
-			
+
 			if dp.Composite.Color != nil {
 				dataPoint.Composite.Color = &ColorExtractConfig{
 					RedPath:   dp.Composite.Color.RedPath,
@@ -164,10 +163,10 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 				}
 			}
 		}
-		
+
 		dataPoints[i] = dataPoint
 	}
-	
+
 	a.endpoints = []Endpoint{
 		{
 			URL:        config.URL,
@@ -189,7 +188,6 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 	return nil
 }
 
-
 // Start 启动适配器
 func (a *HTTPAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 	a.mutex.Lock()
@@ -199,6 +197,11 @@ func (a *HTTPAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 		return nil
 	}
 	a.running = true
+	a.stopCh = make(chan struct{})
+	stopCh := a.stopCh
+	if a.BaseAdapter != nil {
+		a.SetRunning(true)
+	}
 
 	go func() {
 		ticker := time.NewTicker(a.interval)
@@ -207,151 +210,10 @@ func (a *HTTPAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 		for {
 			select {
 			case <-ticker.C:
-				// 请求所有端点
 				for _, endpoint := range a.endpoints {
-					// 创建请求
-					req, err := a.createRequest(endpoint)
-					if err != nil {
-						log.Error().
-							Err(err).
-							Str("name", a.Name()).
-							Str("url", endpoint.URL).
-							Msg("创建HTTP请求失败")
-						continue
-					}
-
-					// 设置超时
-					timeout := time.Duration(endpoint.Timeout) * time.Millisecond
-					if timeout > 0 {
-						reqCtx, cancel := context.WithTimeout(ctx, timeout)
-						req = req.WithContext(reqCtx)
-						defer cancel()
-					}
-
-					// 记录请求开始时间
-					requestStart := time.Now()
-					
-					// 发送请求
-					resp, err := a.client.Do(req)
-					if err != nil {
-						log.Error().
-							Err(err).
-							Str("name", a.Name()).
-							Str("url", endpoint.URL).
-							Msg("HTTP请求失败")
-						continue
-					}
-
-					// 确保响应体被关闭
-					defer resp.Body.Close()
-
-					// 检查响应状态码
-					if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-						log.Error().
-							Str("name", a.Name()).
-							Str("url", endpoint.URL).
-							Int("status", resp.StatusCode).
-							Msg("HTTP请求返回非成功状态码")
-						continue
-					}
-
-					// 读取响应体
-					body, err := io.ReadAll(resp.Body)
-					if err != nil {
-						log.Error().
-							Err(err).
-							Str("name", a.Name()).
-							Str("url", endpoint.URL).
-							Msg("读取HTTP响应失败")
-						continue
-					}
-
-					// 解析JSON响应
-					var data map[string]interface{}
-					if err := json.Unmarshal(body, &data); err != nil {
-						log.Error().
-							Err(err).
-							Str("name", a.Name()).
-							Str("url", endpoint.URL).
-							Msg("解析HTTP响应JSON失败")
-						continue
-					}
-
-					// 处理每个数据点
-					for _, dp := range endpoint.DataPoints {
-						// 确定设备ID
-						deviceID := dp.DeviceID
-						if deviceID == "" {
-							deviceID = a.deviceID
-						}
-						if deviceID == "" {
-							deviceID = "http"
-						}
-
-						var value interface{}
-						var dataType model.DataType
-						var err error
-
-						// 根据类型处理数据提取
-						switch dp.Type {
-						case "location":
-							value, dataType, err = a.extractLocationData(data, dp)
-						case "vector3d":
-							value, dataType, err = a.extractVector3DData(data, dp)
-						case "color":
-							value, dataType, err = a.extractColorData(data, dp)
-						default:
-							// 处理基础数据类型
-							value, err = a.extractValue(data, dp.Path)
-							if err != nil {
-								log.Error().
-									Err(err).
-									Str("name", a.Name()).
-									Str("url", endpoint.URL).
-									Str("path", dp.Path).
-									Msg("从HTTP响应中提取值失败")
-								continue
-							}
-							dataType, value, err = a.convertBasicType(dp.Type, value, endpoint.URL)
-						}
-
-						if err != nil {
-							log.Error().
-								Err(err).
-								Str("name", a.Name()).
-								Str("url", endpoint.URL).
-								Str("key", dp.Key).
-								Msg("数据处理失败")
-							continue
-						}
-
-						// 数据类型转换已经在上面的switch中处理完成
-
-						// 创建数据点
-						point := model.NewPoint(dp.Key, deviceID, value, dataType)
-
-						// 添加标签
-						point.AddTag("source", "http")
-						point.AddTag("url", endpoint.URL)
-
-						// 添加自定义标签
-						for k, v := range dp.Tags {
-							point.AddTag(k, v)
-						}
-
-						// 使用BaseAdapter的SafeSendDataPoint方法，自动处理统计
-						a.SafeSendDataPoint(ch, point, requestStart)
-						
-						log.Debug().
-							Str("name", a.Name()).
-							Str("key", dp.Key).
-							Str("url", endpoint.URL).
-							Interface("value", value).
-							Str("type", string(dataType)).
-							Msg("发送HTTP数据点")
-					}
+					a.pollEndpoint(ctx, endpoint, ch)
 				}
-			case <-a.stopCh:
+			case <-stopCh:
 				log.Info().Str("name", a.Name()).Msg("HTTP适配器停止")
 				return
 			case <-ctx.Done():
@@ -363,6 +225,126 @@ func (a *HTTPAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 
 	log.Info().Str("name", a.Name()).Msg("HTTP适配器启动")
 	return nil
+}
+
+// pollEndpoint 请求单个端点并发送解析出的数据点。
+// 以前这段逻辑直接写在无限循环里，defer cancel() / defer resp.Body.Close()
+// 要等协程退出才会执行，每次轮询都会泄漏一个超时上下文和一个未关闭的响应体。
+func (a *HTTPAdapter) pollEndpoint(ctx context.Context, endpoint Endpoint, ch chan<- model.Point) {
+	req, err := a.createRequest(endpoint)
+	if err != nil {
+		log.Error().Err(err).Str("name", a.Name()).Str("url", endpoint.URL).Msg("创建HTTP请求失败")
+		return
+	}
+
+	if timeout := time.Duration(endpoint.Timeout) * time.Millisecond; timeout > 0 {
+		reqCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		req = req.WithContext(reqCtx)
+	} else {
+		req = req.WithContext(ctx)
+	}
+
+	requestStart := time.Now()
+	resp, err := a.client.Do(req)
+	if err != nil {
+		a.SetLastError(err)
+		log.Error().Err(err).Str("name", a.Name()).Str("url", endpoint.URL).Msg("HTTP请求失败")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		log.Error().Str("name", a.Name()).Str("url", endpoint.URL).Int("status", resp.StatusCode).Msg("HTTP请求返回非成功状态码")
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Error().Err(err).Str("name", a.Name()).Str("url", endpoint.URL).Msg("读取HTTP响应失败")
+		return
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		log.Error().Err(err).Str("name", a.Name()).Str("url", endpoint.URL).Msg("解析HTTP响应JSON失败")
+		return
+	}
+
+	// 处理每个数据点
+	for _, dp := range endpoint.DataPoints {
+		// 确定设备ID
+		deviceID := dp.DeviceID
+		if deviceID == "" {
+			deviceID = a.deviceID
+		}
+		if deviceID == "" {
+			deviceID = "http"
+		}
+
+		var value interface{}
+		var dataType model.DataType
+		var err error
+
+		// 根据类型处理数据提取
+		switch dp.Type {
+		case "location":
+			value, dataType, err = a.extractLocationData(data, dp)
+		case "vector3d":
+			value, dataType, err = a.extractVector3DData(data, dp)
+		case "color":
+			value, dataType, err = a.extractColorData(data, dp)
+		default:
+			// 处理基础数据类型
+			value, err = a.extractValue(data, dp.Path)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("name", a.Name()).
+					Str("url", endpoint.URL).
+					Str("path", dp.Path).
+					Msg("从HTTP响应中提取值失败")
+				continue
+			}
+			dataType, value, err = a.convertBasicType(dp.Type, value, endpoint.URL)
+		}
+
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("name", a.Name()).
+				Str("url", endpoint.URL).
+				Str("key", dp.Key).
+				Msg("数据处理失败")
+			continue
+		}
+
+		// 数据类型转换已经在上面的switch中处理完成
+
+		// 创建数据点
+		point := model.NewPoint(dp.Key, deviceID, value, dataType)
+
+		// 添加标签
+		point.AddTag("source", "http")
+		point.AddTag("url", endpoint.URL)
+
+		// 添加自定义标签
+		for k, v := range dp.Tags {
+			point.AddTag(k, v)
+		}
+
+		// 使用BaseAdapter的SafeSendDataPoint方法，自动处理统计
+		a.SafeSendDataPoint(ch, point, requestStart)
+
+		log.Debug().
+			Str("name", a.Name()).
+			Str("key", dp.Key).
+			Str("url", endpoint.URL).
+			Interface("value", value).
+			Str("type", string(dataType)).
+			Msg("发送HTTP数据点")
+	}
 }
 
 // createRequest 创建HTTP请求
@@ -440,6 +422,9 @@ func (a *HTTPAdapter) Stop() error {
 
 	close(a.stopCh)
 	a.running = false
+	if a.BaseAdapter != nil {
+		a.SetRunning(false)
+	}
 	return nil
 }
 
@@ -461,7 +446,7 @@ func (a *HTTPAdapter) convertBasicType(dataType string, value interface{}, url s
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为整数", v)
 		}
-		
+
 	case "float":
 		switch v := value.(type) {
 		case float64:
@@ -477,7 +462,7 @@ func (a *HTTPAdapter) convertBasicType(dataType string, value interface{}, url s
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为浮点数", v)
 		}
-		
+
 	case "bool":
 		switch v := value.(type) {
 		case bool:
@@ -498,13 +483,13 @@ func (a *HTTPAdapter) convertBasicType(dataType string, value interface{}, url s
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为布尔值", v)
 		}
-		
+
 	case "string":
 		if s, ok := value.(string); ok {
 			return model.TypeString, s, nil
 		}
 		return model.TypeString, fmt.Sprintf("%v", value), nil
-		
+
 	default:
 		// 默认为字符串类型
 		if s, ok := value.(string); ok {
@@ -519,12 +504,12 @@ func (a *HTTPAdapter) extractFloatValue(data map[string]interface{}, path string
 	if path == "" {
 		return 0, nil // 可选字段为空时返回0
 	}
-	
+
 	value, err := a.extractValue(data, path)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	switch v := value.(type) {
 	case float64:
 		return v, nil
@@ -546,55 +531,55 @@ func (a *HTTPAdapter) extractLocationData(data map[string]interface{}, dp DataPo
 	if dp.Composite == nil || dp.Composite.Location == nil {
 		return nil, "", fmt.Errorf("location类型数据点缺少复合配置")
 	}
-	
+
 	config := dp.Composite.Location
-	
+
 	// 提取必需字段
 	lat, err := a.extractFloatValue(data, config.LatitudePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取纬度失败: %w", err)
 	}
-	
+
 	lon, err := a.extractFloatValue(data, config.LongitudePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取经度失败: %w", err)
 	}
-	
+
 	location := &model.LocationData{
 		Latitude:  lat,
 		Longitude: lon,
 	}
-	
+
 	// 提取可选字段
 	if config.AltitudePath != "" {
 		if alt, err := a.extractFloatValue(data, config.AltitudePath); err == nil {
 			location.Altitude = alt
 		}
 	}
-	
+
 	if config.AccuracyPath != "" {
 		if acc, err := a.extractFloatValue(data, config.AccuracyPath); err == nil {
 			location.Accuracy = acc
 		}
 	}
-	
+
 	if config.SpeedPath != "" {
 		if speed, err := a.extractFloatValue(data, config.SpeedPath); err == nil {
 			location.Speed = speed
 		}
 	}
-	
+
 	if config.HeadingPath != "" {
 		if heading, err := a.extractFloatValue(data, config.HeadingPath); err == nil {
 			location.Heading = heading
 		}
 	}
-	
+
 	// 验证数据
 	if err := location.Validate(); err != nil {
 		return nil, "", fmt.Errorf("GPS位置数据验证失败: %w", err)
 	}
-	
+
 	return location, model.TypeLocation, nil
 }
 
@@ -603,36 +588,36 @@ func (a *HTTPAdapter) extractVector3DData(data map[string]interface{}, dp DataPo
 	if dp.Composite == nil || dp.Composite.Vector3D == nil {
 		return nil, "", fmt.Errorf("vector3d类型数据点缺少复合配置")
 	}
-	
+
 	config := dp.Composite.Vector3D
-	
+
 	// 提取XYZ坐标
 	x, err := a.extractFloatValue(data, config.XPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取X坐标失败: %w", err)
 	}
-	
+
 	y, err := a.extractFloatValue(data, config.YPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取Y坐标失败: %w", err)
 	}
-	
+
 	z, err := a.extractFloatValue(data, config.ZPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取Z坐标失败: %w", err)
 	}
-	
+
 	vector := &model.Vector3D{
 		X: x,
 		Y: y,
 		Z: z,
 	}
-	
+
 	// 验证数据
 	if err := vector.Validate(); err != nil {
 		return nil, "", fmt.Errorf("3D向量数据验证失败: %w", err)
 	}
-	
+
 	return vector, model.TypeVector3D, nil
 }
 
@@ -641,36 +626,36 @@ func (a *HTTPAdapter) extractColorData(data map[string]interface{}, dp DataPoint
 	if dp.Composite == nil || dp.Composite.Color == nil {
 		return nil, "", fmt.Errorf("color类型数据点缺少复合配置")
 	}
-	
+
 	config := dp.Composite.Color
-	
+
 	// 提取RGB值
 	red, err := a.extractFloatValue(data, config.RedPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取红色分量失败: %w", err)
 	}
-	
+
 	green, err := a.extractFloatValue(data, config.GreenPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取绿色分量失败: %w", err)
 	}
-	
+
 	blue, err := a.extractFloatValue(data, config.BluePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取蓝色分量失败: %w", err)
 	}
-	
+
 	// 将0-255范围的RGB值转换为uint8
 	r := uint8(math.Min(255, math.Max(0, red)))
 	g := uint8(math.Min(255, math.Max(0, green)))
 	b := uint8(math.Min(255, math.Max(0, blue)))
-	
+
 	color := &model.ColorData{
 		R: r,
 		G: g,
 		B: b,
 	}
-	
+
 	// 提取Alpha值 (可选)，将0-1范围转换为0-255
 	if config.AlphaPath != "" {
 		if alpha, err := a.extractFloatValue(data, config.AlphaPath); err == nil {
@@ -681,12 +666,12 @@ func (a *HTTPAdapter) extractColorData(data map[string]interface{}, dp DataPoint
 	} else {
 		color.A = 255 // 默认不透明
 	}
-	
+
 	// 验证数据
 	if err := color.Validate(); err != nil {
 		return nil, "", fmt.Errorf("颜色数据验证失败: %w", err)
 	}
-	
+
 	return color, model.TypeColor, nil
 }
 

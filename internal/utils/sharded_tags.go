@@ -5,309 +5,175 @@ import (
 	"sync"
 )
 
-// ShardedTags 高性能分片锁标签容器
-// 为Go 1.24 maps.fatal问题设计的最优解决方案
-// 性能测试: 28,317,724 ops/sec (比baseline快22%)
+// ShardedTags 线程安全的标签容器。
+//
+// 历史上这里使用 16 分片 + 全局统计锁的实现：每个数据点创建时要分配 16 个 map 和
+// 16 把锁（约 40 次分配、2.8KB），而且每次读写都要获取同一把统计锁，分片并没有
+// 减少竞争。数据点上的标签通常只有几个，并且绝大多数时候只被一个协程访问，所以
+// 这里改为"单把读写锁 + 惰性创建的 map"，保持原有 API 不变。
 type ShardedTags struct {
-	shards    []*tagShard
-	shardMask uint32
-	
-	// 元数据
-	totalShards int
-	stats       *shardStats
-}
-
-type tagShard struct {
 	mu   sync.RWMutex
 	data map[string]string
 }
 
-type shardStats struct {
-	mu              sync.RWMutex
-	totalOperations int64
-	shardHits       []int64
-}
-
-// NewShardedTags 创建分片标签容器
+// NewShardedTags 创建标签容器。shardCount 参数仅为兼容旧接口保留，已不再使用。
 func NewShardedTags(shardCount int) *ShardedTags {
-	// 确保shardCount是2的幂，优化hash性能
-	if shardCount <= 0 {
-		shardCount = 16  // 默认16个分片，适合IoT高并发场景
-	}
-	
-	// 向上调整到最近的2的幂
-	actualShardCount := 1
-	for actualShardCount < shardCount {
-		actualShardCount <<= 1
-	}
-	
-	shards := make([]*tagShard, actualShardCount)
-	shardHits := make([]int64, actualShardCount)
-	
-	for i := 0; i < actualShardCount; i++ {
-		shards[i] = &tagShard{
-			data: make(map[string]string),
-		}
-	}
-	
-	return &ShardedTags{
-		shards:      shards,
-		shardMask:   uint32(actualShardCount - 1),
-		totalShards: actualShardCount,
-		stats: &shardStats{
-			shardHits: shardHits,
-		},
-	}
+	return &ShardedTags{}
 }
 
-// NewShardedTagsFromMap 从map安全创建（一次性转换）
+// NewShardedTagsFromMap 从 map 创建（复制一份，调用方后续修改 sourceMap 不会影响容器）
 func NewShardedTagsFromMap(sourceMap map[string]string) *ShardedTags {
-	st := NewShardedTags(16)
-	
-	if sourceMap != nil {
-		// 安全地分发到各个分片
+	st := &ShardedTags{}
+	if len(sourceMap) > 0 {
+		st.data = make(map[string]string, len(sourceMap))
 		for k, v := range sourceMap {
-			st.Set(k, v)
+			st.data[k] = v
 		}
 	}
-	
 	return st
 }
 
-// getShard 获取key对应的分片（高性能hash）
-func (st *ShardedTags) getShard(key string) *tagShard {
-	hash := fnv32aOptimized(key)
-	shardIndex := hash & st.shardMask
-	
-	// 统计分片命中（可选，调试用）
-	st.stats.mu.Lock()
-	st.stats.shardHits[shardIndex]++
-	st.stats.totalOperations++
-	st.stats.mu.Unlock()
-	
-	return st.shards[shardIndex]
-}
-
-// Set 设置标签值（高性能）
+// Set 设置标签值
 func (st *ShardedTags) Set(key, value string) {
-	shard := st.getShard(key)
-	shard.mu.Lock()
-	defer shard.mu.Unlock()
-	shard.data[key] = value
+	st.mu.Lock()
+	if st.data == nil {
+		st.data = make(map[string]string, 4)
+	}
+	st.data[key] = value
+	st.mu.Unlock()
 }
 
-// Get 获取标签值（高性能）
+// Get 获取标签值
 func (st *ShardedTags) Get(key string) (string, bool) {
-	shard := st.getShard(key)
-	shard.mu.RLock()
-	defer shard.mu.RUnlock()
-	value, ok := shard.data[key]
+	st.mu.RLock()
+	value, ok := st.data[key]
+	st.mu.RUnlock()
 	return value, ok
 }
 
-// GetAll 获取所有标签的安全副本
+// GetAll 获取所有标签的副本
 func (st *ShardedTags) GetAll() map[string]string {
-	result := make(map[string]string)
-	
-	// 并行读取所有分片（最小化锁持有时间）
-	for _, shard := range st.shards {
-		shard.mu.RLock()
-		for k, v := range shard.data {
-			result[k] = v
-		}
-		shard.mu.RUnlock()
+	st.mu.RLock()
+	result := make(map[string]string, len(st.data))
+	for k, v := range st.data {
+		result[k] = v
 	}
-	
+	st.mu.RUnlock()
 	return result
 }
 
 // GetKeys 获取所有键
 func (st *ShardedTags) GetKeys() []string {
-	keys := make([]string, 0)
-	
-	for _, shard := range st.shards {
-		shard.mu.RLock()
-		for k := range shard.data {
-			keys = append(keys, k)
-		}
-		shard.mu.RUnlock()
+	st.mu.RLock()
+	keys := make([]string, 0, len(st.data))
+	for k := range st.data {
+		keys = append(keys, k)
 	}
-	
+	st.mu.RUnlock()
 	return keys
 }
 
 // Len 获取标签总数
 func (st *ShardedTags) Len() int {
-	count := 0
-	for _, shard := range st.shards {
-		shard.mu.RLock()
-		count += len(shard.data)
-		shard.mu.RUnlock()
-	}
-	return count
+	st.mu.RLock()
+	n := len(st.data)
+	st.mu.RUnlock()
+	return n
 }
 
 // Delete 删除标签
 func (st *ShardedTags) Delete(key string) {
-	shard := st.getShard(key)
-	shard.mu.Lock()
-	defer shard.mu.Unlock()
-	delete(shard.data, key)
+	st.mu.Lock()
+	delete(st.data, key)
+	st.mu.Unlock()
 }
 
 // Clear 清空所有标签
 func (st *ShardedTags) Clear() {
-	for _, shard := range st.shards {
-		shard.mu.Lock()
-		shard.data = make(map[string]string)
-		shard.mu.Unlock()
-	}
+	st.mu.Lock()
+	st.data = nil
+	st.mu.Unlock()
 }
 
-// SetMultiple 批量设置（性能优化）
+// SetMultiple 批量设置
 func (st *ShardedTags) SetMultiple(tags map[string]string) {
 	if len(tags) == 0 {
 		return
 	}
-	
-	// 按分片组织数据，减少锁获取次数
-	shardGroups := make([]map[string]string, st.totalShards)
-	for i := 0; i < st.totalShards; i++ {
-		shardGroups[i] = make(map[string]string)
+	st.mu.Lock()
+	if st.data == nil {
+		st.data = make(map[string]string, len(tags))
 	}
-	
-	// 分组keys到对应分片
 	for k, v := range tags {
-		hash := fnv32aOptimized(k)
-		shardIndex := hash & st.shardMask
-		shardGroups[shardIndex][k] = v
+		st.data[k] = v
 	}
-	
-	// 并发更新各分片
-	var wg sync.WaitGroup
-	for i, group := range shardGroups {
-		if len(group) > 0 {
-			wg.Add(1)
-			go func(shardIndex int, data map[string]string) {
-				defer wg.Done()
-				shard := st.shards[shardIndex]
-				shard.mu.Lock()
-				defer shard.mu.Unlock()
-				for k, v := range data {
-					shard.data[k] = v
-				}
-			}(i, group)
-		}
-	}
-	wg.Wait()
+	st.mu.Unlock()
 }
 
-// MarshalJSON JSON序列化支持
+// MarshalJSON JSON 序列化
 func (st *ShardedTags) MarshalJSON() ([]byte, error) {
 	return json.Marshal(st.GetAll())
 }
 
-// UnmarshalJSON JSON反序列化支持
+// UnmarshalJSON JSON 反序列化
 func (st *ShardedTags) UnmarshalJSON(data []byte) error {
 	var temp map[string]string
 	if err := json.Unmarshal(data, &temp); err != nil {
 		return err
 	}
-	
-	st.Clear()
-	st.SetMultiple(temp)
+	st.mu.Lock()
+	st.data = temp
+	st.mu.Unlock()
 	return nil
 }
 
 // Clone 创建深度副本
 func (st *ShardedTags) Clone() *ShardedTags {
-	newST := NewShardedTags(st.totalShards)
-	newST.SetMultiple(st.GetAll())
-	return newST
+	if st == nil {
+		return nil
+	}
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	return NewShardedTagsFromMap(st.data)
 }
 
-// Merge 合并另一个ShardedTags
+// Merge 合并另一个容器
 func (st *ShardedTags) Merge(other *ShardedTags) {
-	if other == nil {
+	if other == nil || other == st {
 		return
 	}
 	st.SetMultiple(other.GetAll())
 }
 
-// GetStats 获取分片统计信息
+// GetStats 获取统计信息（保留旧接口字段，便于监控页面兼容）
 func (st *ShardedTags) GetStats() map[string]interface{} {
-	st.stats.mu.RLock()
-	defer st.stats.mu.RUnlock()
-	
-	// 计算分片负载均衡情况
-	maxHits := int64(0)
-	minHits := int64(^uint64(0) >> 1) // MaxInt64
-	for _, hits := range st.stats.shardHits {
-		if hits > maxHits {
-			maxHits = hits
-		}
-		if hits < minHits {
-			minHits = hits
-		}
-	}
-	
-	loadBalance := 0.0
-	if maxHits > 0 {
-		loadBalance = float64(minHits) / float64(maxHits) * 100
-	}
-	
 	return map[string]interface{}{
-		"total_shards":     st.totalShards,
-		"total_operations": st.stats.totalOperations,
-		"load_balance":     loadBalance,
-		"current_size":     st.Len(),
-		"max_hits":         maxHits,
-		"min_hits":         minHits,
+		"total_shards": 1,
+		"current_size": st.Len(),
 	}
 }
 
 // IsEmpty 检查是否为空
 func (st *ShardedTags) IsEmpty() bool {
-	for _, shard := range st.shards {
-		shard.mu.RLock()
-		isEmpty := len(shard.data) == 0
-		shard.mu.RUnlock()
-		if !isEmpty {
-			return false
-		}
-	}
-	return true
+	return st.Len() == 0
 }
 
-// 优化的FNV-1a哈希函数（内联优化）
-func fnv32aOptimized(s string) uint32 {
-	const (
-		offset32 = 2166136261
-		prime32  = 16777619
-	)
-	hash := uint32(offset32)
-	for i := 0; i < len(s); i++ {
-		hash ^= uint32(s[i])
-		hash *= prime32
-	}
-	return hash
-}
-
-// 兼容性适配器，提供map[string]string接口
+// ShardedTagsAdapter 兼容性适配器，提供 map[string]string 接口
 type ShardedTagsAdapter struct {
 	*ShardedTags
 }
 
+// NewShardedTagsAdapter 创建适配器
 func NewShardedTagsAdapter() *ShardedTagsAdapter {
-	return &ShardedTagsAdapter{
-		ShardedTags: NewShardedTags(16),
-	}
+	return &ShardedTagsAdapter{ShardedTags: NewShardedTags(0)}
 }
 
+// ToMap 转换为 map 副本
 func (sta *ShardedTagsAdapter) ToMap() map[string]string {
 	return sta.GetAll()
 }
 
+// FromMap 从 map 批量设置
 func (sta *ShardedTagsAdapter) FromMap(source map[string]string) {
 	sta.SetMultiple(source)
 }

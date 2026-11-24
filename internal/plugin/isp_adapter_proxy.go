@@ -36,7 +36,7 @@ func NewISPAdapterProxy(name string, address string) (*ISPAdapterProxy, error) {
 	}
 
 	proxy.SetHealthStatus("healthy", "ISP adapter proxy created")
-	
+
 	log.Info().
 		Str("name", name).
 		Str("address", address).
@@ -74,7 +74,7 @@ func (p *ISPAdapterProxy) Init(cfg json.RawMessage) error {
 	} else {
 		actualConfig = rawConfig // 如果没有plugin_config，使用原始配置
 	}
-	
+
 	// 转换为ISP配置格式
 	config := p.convertToISPConfig(actualConfig)
 
@@ -82,7 +82,7 @@ func (p *ISPAdapterProxy) Init(cfg json.RawMessage) error {
 	p.config = &config
 
 	// 发送配置消息
-	log.Info().
+	log.Debug().
 		Str("name", p.Name()).
 		Int("registers_count", len(config.Registers)).
 		Str("address", config.Address).
@@ -129,7 +129,7 @@ func (p *ISPAdapterProxy) convertToISPConfig(rawConfig map[string]interface{}) C
 	} else if protocol, ok := rawConfig["protocol"].(string); ok {
 		config.Mode = protocol // protocol字段映射到Mode
 	}
-	
+
 	if address, ok := rawConfig["address"].(string); ok {
 		config.Address = address
 	} else if host, ok := rawConfig["host"].(string); ok {
@@ -148,7 +148,7 @@ func (p *ISPAdapterProxy) convertToISPConfig(rawConfig map[string]interface{}) C
 			config.TimeoutMS = int(duration.Milliseconds())
 		}
 	}
-	
+
 	// 处理间隔配置（支持多种格式）
 	if interval, ok := rawConfig["interval_ms"].(float64); ok {
 		config.IntervalMS = int(interval)
@@ -297,7 +297,10 @@ func (p *ISPAdapterProxy) dataReceiveLoop(ctx context.Context, ch chan<- model.P
 			return
 		case <-time.After(5 * time.Second):
 			// 定期检查连接状态
-			if !p.client.IsConnected() {
+			p.mu.Lock()
+			client := p.client
+			p.mu.Unlock()
+			if !client.IsConnected() {
 				p.SetHealthStatus("degraded", "ISP connection lost, attempting reconnection")
 				log.Warn().Str("name", p.Name()).Msg("ISP客户端连接断开，尝试重连...")
 
@@ -306,8 +309,12 @@ func (p *ISPAdapterProxy) dataReceiveLoop(ctx context.Context, ch chan<- model.P
 					p.SetLastError(err)
 					p.SetHealthStatus("unhealthy", fmt.Sprintf("Reconnection failed: %v", err))
 					log.Error().Err(err).Str("name", p.Name()).Msg("重连失败")
-					// 等待一段时间后再次尝试
-					time.Sleep(10 * time.Second)
+					// 等待一段时间后再次尝试（可被停止信号打断）
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(10 * time.Second):
+					}
 					continue
 				}
 
@@ -322,7 +329,10 @@ func (p *ISPAdapterProxy) dataReceiveLoop(ctx context.Context, ch chan<- model.P
 // reconnect 重连ISP客户端
 func (p *ISPAdapterProxy) reconnect(ctx context.Context) error {
 	// 断开现有连接
-	p.client.Disconnect()
+	p.mu.Lock()
+	old := p.client
+	p.mu.Unlock()
+	old.Disconnect()
 
 	// 创建新的ISP客户端
 	newClient := NewISPClient(p.address)
@@ -352,18 +362,20 @@ func (p *ISPAdapterProxy) reconnect(ctx context.Context) error {
 		}
 	})
 
-	// 替换客户端
+	// 替换客户端（加锁：Status/GetMetrics 会并发读取 p.client）
+	p.mu.Lock()
 	p.client = newClient
+	p.mu.Unlock()
 
 	return nil
 }
 
 // handleDataMessage 处理数据消息
 func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Point) {
-	log.Info().
+	log.Debug().
 		Str("name", p.Name()).
 		Msg("🔵 [调试] ISP适配器代理收到数据消息")
-	
+
 	dataPayload, err := msg.ParseDataPayload()
 	if err != nil {
 		p.SetLastError(fmt.Errorf("解析数据消息失败: %w", err))
@@ -371,7 +383,7 @@ func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Poi
 		return
 	}
 
-	log.Info().
+	log.Debug().
 		Str("name", p.Name()).
 		Int("points_count", len(dataPayload.Points)).
 		Msg("🔵 [调试] 解析到数据点")
@@ -384,7 +396,7 @@ func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Poi
 			case ch <- *internalPoint:
 				// 成功发送，更新指标
 				p.IncrementDataPoints()
-				log.Info().
+				log.Debug().
 					Str("name", p.Name()).
 					Str("key", internalPoint.Key).
 					Interface("value", internalPoint.Value).
@@ -400,43 +412,37 @@ func (p *ISPAdapterProxy) handleDataMessage(msg *ISPMessage, ch chan<- model.Poi
 	}
 }
 
-// convertDataPoint 转换数据点格式
+// convertDataPoint 把 sidecar 的数据点转换为网关数据点；未知数据类型返回 nil
 func (p *ISPAdapterProxy) convertDataPoint(point DataPoint) *model.Point {
+	ts := time.Unix(0, point.Timestamp)
+	if point.Timestamp == 0 {
+		// sidecar 未提供时间戳时以前会得到 1970 年的时间
+		ts = time.Now()
+	}
 	internalPoint := &model.Point{
 		Key:       point.Key,
 		DeviceID:  point.Source,
-		Timestamp: time.Unix(0, point.Timestamp),
+		Timestamp: ts,
 		Quality:   point.Quality,
 		Value:     point.Value,
 	}
-
-	// Go 1.24安全：使用安全方法复制ISP DataPoint的标签
-	if point.Tags != nil {
-		// 对于ISP DataPoint，直接复制Tags map是安全的（单线程访问）
-		for k, v := range point.Tags {
-			internalPoint.AddTag(k, v)
-		}
+	if len(point.Tags) > 0 {
+		internalPoint.SetTagsSafe(point.Tags)
 	}
 
-	// 设置数据类型
 	switch point.Type {
-	case "bool":
+	case "bool", "boolean":
 		internalPoint.Type = model.TypeBool
-	case "int", "int16", "int32", "uint16", "uint32":
+	case "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64":
 		internalPoint.Type = model.TypeInt
-	case "float", "float32", "float64":
+	case "float", "float32", "float64", "double":
 		internalPoint.Type = model.TypeFloat
 	case "string":
 		internalPoint.Type = model.TypeString
 	default:
-		log.Warn().
-			Str("name", p.Name()).
-			Str("key", point.Key).
-			Str("type", point.Type).
-			Msg("未知数据类型")
+		log.Warn().Str("name", p.Name()).Str("key", point.Key).Str("type", point.Type).Msg("未知数据类型")
 		return nil
 	}
-
 	return internalPoint
 }
 

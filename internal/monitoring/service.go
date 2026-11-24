@@ -27,7 +27,7 @@ type ServiceConfig struct {
 // NewService 创建监控服务
 func NewService(config ServiceConfig) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &Service{
 		config:          config,
 		systemCollector: NewSystemCollector(config.SystemCollector),
@@ -54,7 +54,7 @@ func (s *Service) Start() error {
 
 	s.started = true
 	log.Info().Msg("Monitoring service started successfully")
-	
+
 	return nil
 }
 
@@ -76,7 +76,7 @@ func (s *Service) Stop() error {
 
 	s.cancel()
 	s.started = false
-	
+
 	log.Info().Msg("Monitoring service stopped")
 	return nil
 }

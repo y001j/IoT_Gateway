@@ -253,13 +253,13 @@ func (s *JetStreamSink) Healthy() error {
 	if s.js == nil {
 		return fmt.Errorf("JetStream上下文未初始化")
 	}
-	
+
 	// 检查流是否存在
 	_, err := s.js.StreamInfo(s.streamName)
 	if err != nil {
 		return fmt.Errorf("JetStream流不存在或无法访问: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -276,27 +276,40 @@ func (s *JetStreamSink) flushLocked() error {
 		return nil
 	}
 
-	// 发布所有数据点到JetStream
+	// 异步发布整批数据，最后统一等待确认
+	// （以前逐条同步 Publish，每条都要等待一次 ACK 往返）
+	futures := make([]nats.PubAckFuture, 0, len(s.buffer))
 	for _, point := range s.buffer {
 		data, err := json.Marshal(point)
 		if err != nil {
 			s.HandleError(err, "序列化数据点")
 			continue
 		}
-
-		// 使用JetStream发布
-		_, err = s.js.Publish(s.subject, data)
+		f, err := s.js.PublishAsync(s.subject, data)
 		if err != nil {
 			s.HandleError(err, "发布数据点到JetStream")
 			continue
 		}
+		futures = append(futures, f)
+	}
 
-		log.Debug().
-			Str("name", s.Name()).
-			Str("key", point.Key).
-			Str("device_id", point.DeviceID).
-			Str("subject", s.subject).
-			Msg("数据点已发布到JetStream")
+	select {
+	case <-s.js.PublishAsyncComplete():
+	case <-time.After(10 * time.Second):
+		s.HandleError(fmt.Errorf("等待JetStream确认超时"), "发布数据点到JetStream")
+	}
+	failed := 0
+	for _, f := range futures {
+		select {
+		case err := <-f.Err():
+			if err != nil {
+				failed++
+			}
+		default:
+		}
+	}
+	if failed > 0 {
+		s.HandleError(fmt.Errorf("%d 条数据未被JetStream确认", failed), "发布数据点到JetStream")
 	}
 
 	// 清空缓冲区

@@ -286,9 +286,9 @@ northbound:
       type: "nats_subscriber"
       params:
         subscriptions:
-          - subject: "iot.rules.*"
+          - subject: "iot.rules.>"   # 包含 iot.rules.forward.<设备>.<点位> 等多级主题
             data_type: "rule"
-          - subject: "iot.alerts.*"  
+          - subject: "iot.alerts.>"
             data_type: "alert"
         target_sinks:
           - name: "storage"
@@ -300,6 +300,19 @@ northbound:
 ```
 
 **💡 设计优势**: 统一订阅管理、简化配置、清晰数据流、灵活路由转换
+
+#### 断网续传（本地暂存）
+
+开启 `storage.enabled` 后，采集数据写入内嵌 JetStream 持久化流；在连接器配置中添加 `buffer: {enabled: true}` 的连接器在目标不可用时数据保留在本地磁盘，恢复后按原顺序补发，网关重启后从断点继续。保留时长和容量由 `storage.raw.max_age` / `max_bytes` 控制，状态见 `GET http://<网关>:8080/storage`。
+
+同一份本地数据还可以直接查询：Web 界面的"历史数据"页（接口 `/api/v1/data/series|latest|history|export`）按设备和点位查看近期曲线、导出 CSV，点数过多时在网关端降采样。开启 `storage.rollup.enabled` 后会按分钟汇总并长期保留（默认 30 天），查询更早的时间段时自动使用汇总数据。管理员可以在该页面暂停、恢复缓冲连接器的补发，跳过积压或从指定时间重放。设计与实现说明见 [本地暂存设计](docs/design_local_storage.md)。
+
+#### 规则输出主题与环路保护
+
+- `forward` 动作未配置 `subject` 时发布到 `iot.rules.forward.<device_id>.<key>`，聚合结果发布到 `iot.rules.aggregate.<device_id>.<key>`（以前默认发布到 `iot.data.*`，会被规则引擎再次消费形成死循环）。
+- 规则引擎发布的所有输出都带有 `Iot-Origin: rule-engine` 消息头，规则引擎订阅 `iot.data.>` 时会忽略这类消息，即使显式把数据转发回 `iot.data.*` 也不会形成环路。
+- 主题中的设备 ID / 点位 key 会做可逆转义（`.`→`~2E`、`*`→`~2A`、`>`→`~3E`、空格→`~20`），避免设备 ID 含点号时主题层级错乱。
+- 每次条件评估的 `iot.rules.evaluated` 等事件默认不再发布（数量与"数据点数 × 规则数"成正比），需要时在 `rule_engine.publish_rule_events: true` 中开启；规则命中事件 `iot.rules.matched` 始终发布。
 
 **📖 详细文档**: [NATS架构文档](docs/nats_architecture.md#sink架构与nats订阅机制)
 

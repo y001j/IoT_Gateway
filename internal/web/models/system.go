@@ -87,15 +87,15 @@ type MetricsConfig struct {
 
 // NATSConfig NATS配置
 type NATSConfig struct {
-	Enabled     bool               `json:"enabled"`
-	Embedded    bool               `json:"embedded"`
-	Host        string             `json:"host"`
-	Port        int                `json:"port"`
-	ClusterPort int                `json:"cluster_port"`
-	MonitorPort int                `json:"monitor_port"`
-	JetStream   JetStreamConfig    `json:"jetstream"`
-	Cluster     ClusterConfig      `json:"cluster"`
-	TLS         NATSTLSConfig      `json:"tls"`
+	Enabled     bool            `json:"enabled"`
+	Embedded    bool            `json:"embedded"`
+	Host        string          `json:"host"`
+	Port        int             `json:"port"`
+	ClusterPort int             `json:"cluster_port"`
+	MonitorPort int             `json:"monitor_port"`
+	JetStream   JetStreamConfig `json:"jetstream"`
+	Cluster     ClusterConfig   `json:"cluster"`
+	TLS         NATSTLSConfig   `json:"tls"`
 }
 
 // JetStreamConfig JetStream配置
@@ -131,16 +131,15 @@ type WebUIConfig struct {
 
 // WebSocketConfig WebSocket配置
 type WebSocketConfig struct {
-	MaxClients         int `json:"max_clients"`          // 最大客户端连接数
-	MessageRate        int `json:"message_rate"`         // 消息发送速率限制 (每秒)
-	ReadBufferSize     int `json:"read_buffer_size"`     // 读取缓冲区大小
-	WriteBufferSize    int `json:"write_buffer_size"`    // 写入缓冲区大小
-	CleanupInterval    int `json:"cleanup_interval"`     // 清理间隔 (秒)
-	InactivityTimeout  int `json:"inactivity_timeout"`   // 不活跃超时 (秒)
-	PingInterval       int `json:"ping_interval"`        // Ping间隔 (秒)
-	PongTimeout        int `json:"pong_timeout"`         // Pong超时 (秒)
+	MaxClients        int `json:"max_clients"`        // 最大客户端连接数
+	MessageRate       int `json:"message_rate"`       // 消息发送速率限制 (每秒)
+	ReadBufferSize    int `json:"read_buffer_size"`   // 读取缓冲区大小
+	WriteBufferSize   int `json:"write_buffer_size"`  // 写入缓冲区大小
+	CleanupInterval   int `json:"cleanup_interval"`   // 清理间隔 (秒)
+	InactivityTimeout int `json:"inactivity_timeout"` // 不活跃超时 (秒)
+	PingInterval      int `json:"ping_interval"`      // Ping间隔 (秒)
+	PongTimeout       int `json:"pong_timeout"`       // Pong超时 (秒)
 }
-
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
@@ -149,11 +148,11 @@ type DatabaseConfig struct {
 
 // SQLiteConfig SQLite配置
 type SQLiteConfig struct {
-	Path              string `json:"path"`
-	MaxOpenConns      int    `json:"max_open_conns"`
-	MaxIdleConns      int    `json:"max_idle_conns"`
-	ConnMaxLifetime   string `json:"conn_max_lifetime"`
-	ConnMaxIdleTime   string `json:"conn_max_idle_time"`
+	Path            string `json:"path"`
+	MaxOpenConns    int    `json:"max_open_conns"`
+	MaxIdleConns    int    `json:"max_idle_conns"`
+	ConnMaxLifetime string `json:"conn_max_lifetime"`
+	ConnMaxIdleTime string `json:"conn_max_idle_time"`
 }
 
 // SecurityConfig 安全配置

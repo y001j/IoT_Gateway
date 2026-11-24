@@ -128,6 +128,7 @@ type UserStore interface {
 	GetSessionByRefreshToken(refreshToken string) (*Session, error)
 	UpdateSession(session *Session) error
 	DeleteSession(id string) error
+	DeleteUserSessions(userID int) error
 	CleanExpiredSessions() error
 
 	// 登录历史

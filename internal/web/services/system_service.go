@@ -216,31 +216,48 @@ func (s *systemService) GetHealth() (*models.HealthCheck, error) {
 	return health, nil
 }
 
-// GetConfig 获取系统配置
+// maskedSecret API 返回配置时用于替换敏感字段的占位值
+const maskedSecret = "******"
+
+// GetConfig 获取系统配置（返回副本，JWT 密钥被遮盖，不会通过 API 泄露）
 func (s *systemService) GetConfig() (*models.SystemConfig, error) {
+	var cfg *models.SystemConfig
 	if s.configService != nil {
-		return s.configService.GetConfig()
+		c, err := s.configService.GetConfig()
+		if err != nil {
+			return nil, err
+		}
+		cfg = c
+	} else {
+		cfg = s.getDefaultConfig()
 	}
-
-	// 如果没有配置服务，返回默认配置
-	return s.getDefaultConfig(), nil
+	out := *cfg
+	if out.WebUI.Auth.JWTSecret != "" {
+		out.WebUI.Auth.JWTSecret = maskedSecret
+	}
+	return &out, nil
 }
 
-// UpdateConfig 更新系统配置
+// UpdateConfig 更新系统配置。提交的 JWT 密钥为遮盖占位值或为空时保留原值。
 func (s *systemService) UpdateConfig(config *models.SystemConfig) error {
-	if s.configService != nil {
-		return s.configService.UpdateConfig(config)
+	if s.configService == nil {
+		return fmt.Errorf("配置服务不可用")
 	}
-
-	// 如果没有配置服务，只返回成功
-	return nil
+	if config.WebUI.Auth.JWTSecret == maskedSecret || config.WebUI.Auth.JWTSecret == "" {
+		if current, err := s.configService.GetConfig(); err == nil && current != nil {
+			config.WebUI.Auth.JWTSecret = current.WebUI.Auth.JWTSecret
+		}
+	}
+	return s.configService.UpdateConfig(config)
 }
 
-// RestartService 重启服务
+// ErrRestartNotSupported 不支持在线重启
+var ErrRestartNotSupported = fmt.Errorf("不支持在线重启，请通过 systemd/容器等进程管理器重启网关")
+
+// RestartService 重启服务。
+// 以前什么也不做却返回成功，界面会显示"重启已开始"；在线重启尚未实现，如实返回错误。
 func (s *systemService) RestartService(serviceName string) error {
-	// 这里应该实现服务重启逻辑
-	// 暂时返回成功
-	return nil
+	return ErrRestartNotSupported
 }
 
 // MainConfigForSystem 主配置文件结构（SystemService使用）

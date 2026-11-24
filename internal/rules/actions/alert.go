@@ -162,7 +162,7 @@ func (h *AlertHandler) parseConfig(config map[string]interface{}) (*AlertConfig,
 		Throttle:   5 * time.Minute,
 		Tags:       make(map[string]string),
 		Template:   make(map[string]interface{}),
-		RetryCount: 0,                    // 默认不重试
+		RetryCount: 0,                      // 默认不重试
 		RetryDelay: 100 * time.Millisecond, // 默认重试延迟
 	}
 
@@ -279,7 +279,7 @@ func (h *AlertHandler) parseMessageTemplate(templateStr string, point model.Poin
 		"DeviceID":  point.DeviceID,
 		"Key":       point.Key,
 		"Value":     point.Value,
-		"value":     point.Value,  // 添加小写版本以支持 {{.value.field}} 语法
+		"value":     point.Value, // 添加小写版本以支持 {{.value.field}} 语法
 		"Type":      string(point.Type),
 		"Timestamp": point.Timestamp,
 		"Level":     config.Level,
@@ -338,7 +338,7 @@ func (h *AlertHandler) parseMessageTemplate(templateStr string, point model.Poin
 			return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 		},
 	}).Parse(templateStr)
-	
+
 	if err != nil {
 		// 如果Go模板解析失败，回退到简单字符串替换
 		log.Warn().Err(err).Str("template", templateStr).Msg("Go模板解析失败，回退到简单替换")
@@ -401,34 +401,34 @@ func (h *AlertHandler) replaceNestedValuePaths(message string, value interface{}
 	// 使用正则表达式匹配 {{.value.xxx}} 模式
 	re := regexp.MustCompile(`\{\{\.value\.([^}]+)\}\}`)
 	matches := re.FindAllStringSubmatch(message, -1)
-	
+
 	log.Debug().
 		Str("message", message).
 		Interface("value", value).
 		Int("matches_count", len(matches)).
 		Msg("开始处理嵌套值路径")
-	
+
 	for _, match := range matches {
 		if len(match) < 2 {
 			continue
 		}
-		
+
 		placeholder := match[0] // 完整的占位符，如 {{.value.speed}}
 		fieldPath := match[1]   // 字段路径，如 speed
-		
+
 		log.Debug().
 			Str("placeholder", placeholder).
 			Str("field_path", fieldPath).
 			Msg("处理占位符")
-		
+
 		// 尝试从value中提取字段值
 		fieldValue := h.extractFieldFromValue(value, fieldPath)
-		
+
 		log.Debug().
 			Str("field_path", fieldPath).
 			Interface("field_value", fieldValue).
 			Msg("字段值提取结果")
-		
+
 		if fieldValue != nil {
 			replacement := fmt.Sprintf("%v", fieldValue)
 			message = strings.ReplaceAll(message, placeholder, replacement)
@@ -439,7 +439,7 @@ func (h *AlertHandler) replaceNestedValuePaths(message string, value interface{}
 				Msg("替换完成")
 		}
 	}
-	
+
 	return message
 }
 
@@ -448,7 +448,7 @@ func (h *AlertHandler) extractFieldFromValue(value interface{}, fieldPath string
 	if value == nil {
 		return nil
 	}
-	
+
 	// 尝试将value转换为map[string]interface{}
 	if valueMap, ok := value.(map[string]interface{}); ok {
 		if fieldValue, exists := valueMap[fieldPath]; exists {
@@ -461,7 +461,7 @@ func (h *AlertHandler) extractFieldFromValue(value interface{}, fieldPath string
 			}
 		}
 	}
-	
+
 	// 尝试JSON解析
 	// 情况1: value是JSON字符串
 	if jsonStr, ok := value.(string); ok {
@@ -478,7 +478,7 @@ func (h *AlertHandler) extractFieldFromValue(value interface{}, fieldPath string
 			}
 		}
 	}
-	
+
 	// 情况2: value是其他类型，尝试通过Marshal/Unmarshal处理
 	if valueBytes, err := json.Marshal(value); err == nil {
 		var valueMap map[string]interface{}
@@ -494,7 +494,7 @@ func (h *AlertHandler) extractFieldFromValue(value interface{}, fieldPath string
 			}
 		}
 	}
-	
+
 	// 使用反射处理结构体字段
 	return h.extractFieldUsingReflection(value, fieldPath)
 }
@@ -504,9 +504,9 @@ func (h *AlertHandler) extractFieldUsingReflection(value interface{}, fieldPath 
 	if value == nil {
 		return nil
 	}
-	
+
 	v := reflect.ValueOf(value)
-	
+
 	// 如果是指针，解引用
 	if v.Kind() == reflect.Ptr {
 		if v.IsNil() {
@@ -514,18 +514,18 @@ func (h *AlertHandler) extractFieldUsingReflection(value interface{}, fieldPath 
 		}
 		v = v.Elem()
 	}
-	
+
 	// 只处理结构体
 	if v.Kind() != reflect.Struct {
 		return nil
 	}
-	
+
 	// 查找字段（不区分大小写）
 	t := v.Type()
 	for i := 0; i < v.NumField(); i++ {
 		field := t.Field(i)
 		fieldName := field.Name
-		
+
 		// 检查字段名（不区分大小写）
 		if strings.EqualFold(fieldName, fieldPath) {
 			fieldValue := v.Field(i)
@@ -533,7 +533,7 @@ func (h *AlertHandler) extractFieldUsingReflection(value interface{}, fieldPath 
 				return fieldValue.Interface()
 			}
 		}
-		
+
 		// 检查JSON标签
 		if jsonTag := field.Tag.Get("json"); jsonTag != "" {
 			jsonName := strings.Split(jsonTag, ",")[0]
@@ -545,7 +545,7 @@ func (h *AlertHandler) extractFieldUsingReflection(value interface{}, fieldPath 
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -634,7 +634,7 @@ func (h *AlertHandler) recordThrottle(alert *rules.Alert) {
 // sendAlert 发送报警，支持重试和故障转移
 func (h *AlertHandler) sendAlert(ctx context.Context, alert *rules.Alert, config *AlertConfig) map[string]ChannelResult {
 	results := make(map[string]ChannelResult)
-	
+
 	// 如果配置了重试，尝试逐个渠道发送，支持故障转移
 	if config.RetryCount > 0 {
 		return h.sendAlertWithRetry(ctx, alert, config)
@@ -679,14 +679,14 @@ func (h *AlertHandler) sendAlert(ctx context.Context, alert *rules.Alert, config
 // sendAlertWithRetry 带重试和故障转移的报警发送
 func (h *AlertHandler) sendAlertWithRetry(ctx context.Context, alert *rules.Alert, config *AlertConfig) map[string]ChannelResult {
 	results := make(map[string]ChannelResult)
-	
+
 	// 尝试每个渠道，如果失败则重试，最终使用故障转移
 	for i, channel := range config.Channels {
 		channelKey := fmt.Sprintf("%s_%d", channel.Type, i)
 		success := false
 		var lastErr error
 		var totalDuration time.Duration
-		
+
 		// 重试逻辑
 		for attempt := 0; attempt <= config.RetryCount; attempt++ {
 			start := time.Now()
@@ -706,23 +706,23 @@ func (h *AlertHandler) sendAlertWithRetry(ctx context.Context, alert *rules.Aler
 			default:
 				err = fmt.Errorf("不支持的通知渠道: %s", channel.Type)
 			}
-			
+
 			duration := time.Since(start)
 			totalDuration += duration
-			
+
 			if err == nil {
 				success = true
 				break
 			}
-			
+
 			lastErr = err
-			
+
 			// 如果不是最后一次尝试，等待重试延迟
 			if attempt < config.RetryCount {
 				time.Sleep(config.RetryDelay)
 			}
 		}
-		
+
 		results[channelKey] = ChannelResult{
 			Success: success,
 			Error: func() string {
@@ -733,7 +733,7 @@ func (h *AlertHandler) sendAlertWithRetry(ctx context.Context, alert *rules.Aler
 			}(),
 			Duration: totalDuration,
 		}
-		
+
 		// 如果某个渠道成功了，可以选择是否继续尝试其他渠道
 		// 这里继续尝试所有渠道以获得完整结果
 	}
@@ -902,7 +902,7 @@ func (h *AlertHandler) sendEmailAlert(alert *rules.Alert, config map[string]inte
 	log.Info().
 		Str("alert_id", alert.ID).
 		Str("type", "email").
-		Interface("config", config).
+		Interface("config", rules.RedactConfig(config)).
 		Msg("邮件报警发送（占位符实现）")
 
 	return nil
@@ -915,7 +915,7 @@ func (h *AlertHandler) sendSMSAlert(alert *rules.Alert, config map[string]interf
 	log.Info().
 		Str("alert_id", alert.ID).
 		Str("type", "sms").
-		Interface("config", config).
+		Interface("config", rules.RedactConfig(config)).
 		Msg("短信报警发送（占位符实现）")
 
 	return nil

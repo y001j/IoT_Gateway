@@ -2,12 +2,12 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -20,6 +20,7 @@ import (
 	"github.com/y001j/iot-gateway/internal/plugin"
 	"github.com/y001j/iot-gateway/internal/rules"
 	"github.com/y001j/iot-gateway/internal/rules/actions"
+	"github.com/y001j/iot-gateway/internal/storage"
 )
 
 type Service interface {
@@ -34,10 +35,58 @@ type Runtime struct {
 	Bus        *nats.Conn
 	Js         nats.JetStreamContext
 	NatsServer *server.Server
+	Store      *storage.Store // 本地暂存（未启用时为 nil）
 	Svcs       []Service
 	PluginMgr  *plugin.Manager
 	Mu         sync.Mutex
 	metrics    *metrics.LightweightMetrics
+
+	// NATS 异步错误统计（slow consumer 等），以前这类丢消息完全没有日志
+	slowConsumerDrops atomic.Int64
+	natsAsyncErrors   atomic.Int64
+	lastNatsErrLog    atomic.Int64
+	started           atomic.Bool
+}
+
+// natsOptions 返回网关使用的 NATS 连接参数
+func (rt *Runtime) natsOptions(extra ...nats.Option) []nats.Option {
+	opts := []nats.Option{
+		nats.Name("iot-gateway"),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2 * time.Second),
+		nats.ErrorHandler(rt.handleNATSAsyncError),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			if err != nil {
+				log.Warn().Err(err).Msg("NATS连接断开")
+			}
+		}),
+		nats.ReconnectHandler(func(c *nats.Conn) {
+			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS已重新连接")
+		}),
+	}
+	return append(opts, extra...)
+}
+
+// handleNATSAsyncError 处理 NATS 异步错误（订阅回调处理不过来时的 slow consumer 丢消息等）
+func (rt *Runtime) handleNATSAsyncError(_ *nats.Conn, sub *nats.Subscription, err error) {
+	if err == nats.ErrSlowConsumer {
+		rt.slowConsumerDrops.Add(1)
+	} else {
+		rt.natsAsyncErrors.Add(1)
+	}
+	now := time.Now().UnixNano()
+	last := rt.lastNatsErrLog.Load()
+	if now-last < int64(10*time.Second) || !rt.lastNatsErrLog.CompareAndSwap(last, now) {
+		return
+	}
+	ev := log.Error().Err(err)
+	if sub != nil {
+		ev = ev.Str("subject", sub.Subject)
+		if dropped, derr := sub.Dropped(); derr == nil {
+			ev = ev.Int("dropped_total", dropped)
+		}
+	}
+	ev.Int64("slow_consumer_events", rt.slowConsumerDrops.Load()).Msg("NATS异步错误（可能有消息被丢弃）")
 }
 
 func NewRuntime(cfgPath string) (*Runtime, error) {
@@ -67,12 +116,20 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	level, _ := zerolog.ParseLevel(v.GetString("gateway.log_level"))
 	zerolog.SetGlobalLevel(level)
 
+	// 先创建 Runtime，NATS 连接参数中的错误回调需要引用它
+	rtOpts := &Runtime{V: v}
+
+	// 本地暂存（断网续传）配置
+	storageCfg, err := storage.ConfigFromViper(v)
+	if err != nil {
+		return nil, fmt.Errorf("storage 配置错误: %w", err)
+	}
+
 	// nats embedded or external
 	natsURL := v.GetString("gateway.nats_url")
 	var nc *nats.Conn
 	var js nats.JetStreamContext
 	var natsServer *server.Server
-	var err error
 
 	if natsURL == "embedded" {
 		// 使用更可靠的方法启动嵌入式 NATS
@@ -109,11 +166,16 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 				Host:       "127.0.0.1",
 				Port:       port,
 				JetStream:  true,
-				StoreDir:   "./data/jetstream",
+				StoreDir:   storageDir(v),
 				Debug:      false, // 设置为 true 可查看更多调试信息
 				Trace:      false,
 				NoLog:      false,
 				LogFile:    "", // 留空表示使用标准输出
+			}
+			if storageCfg.Enabled {
+				// 限制 JetStream 总磁盘占用；刷盘间隔决定掉电时最多丢失的数据窗口
+				opts.JetStreamMaxStore = storageCfg.MaxDisk
+				opts.SyncInterval = storageCfg.SyncInterval
 			}
 
 			// 创建并启动服务器
@@ -144,10 +206,9 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 			// 使用重试机制连接
 			var connectErr error
 			for i := 0; i < 5; i++ {
-				nc, connectErr = nats.Connect(natsURL,
+				nc, connectErr = nats.Connect(natsURL, rtOpts.natsOptions(
 					nats.Timeout(2*time.Second),
-					nats.RetryOnFailedConnect(true),
-					nats.MaxReconnects(5))
+					nats.RetryOnFailedConnect(true))...)
 
 				if connectErr == nil {
 					break
@@ -169,10 +230,10 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 	} else if natsURL != "" {
 		// 连接到外部 NATS 服务器
-		nc, err = nats.Connect(natsURL)
+		nc, err = nats.Connect(natsURL, rtOpts.natsOptions()...)
 	} else {
 		// 默认连接
-		nc, err = nats.Connect(nats.DefaultURL)
+		nc, err = nats.Connect(nats.DefaultURL, rtOpts.natsOptions()...)
 	}
 
 	if err != nil {
@@ -189,7 +250,8 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		return nil, fmt.Errorf("创建 JetStream 上下文失败: %w", err)
 	}
 
-	rt := &Runtime{V: v, Bus: nc, Js: js, NatsServer: natsServer}
+	rt := rtOpts
+	rt.Bus, rt.Js, rt.NatsServer = nc, js, natsServer
 
 	// 初始化插件管理器
 	pluginManager := plugin.NewManager(v.GetString("gateway.plugins_dir"), rt.Bus, v)
@@ -197,6 +259,26 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		log.Fatal().Err(err).Msg("初始化插件管理器失败")
 	}
 	rt.PluginMgr = pluginManager
+
+	// 本地暂存：JetStream 不可用时只记录警告，开启缓冲的连接器退回直连模式
+	if storageCfg.Enabled {
+		store, err := storage.New(nc, storageCfg)
+		if err != nil {
+			log.Error().Err(err).Msg("本地暂存不可用，开启缓冲的连接器将退回直连模式")
+		} else {
+			rt.Store = store
+			pluginManager.SetStore(store)
+			if storageCfg.Rollup.Enabled {
+				if _, err := store.StartRollup(context.Background()); err != nil {
+					log.Error().Err(err).Msg("启动汇总层失败，长时间范围的查询不可用")
+				}
+			}
+			if storageCfg.Alerts.Enabled {
+				// 积压逼近保留上限、数据被淘汰、磁盘快满时发布告警（iot.alerts.triggered）
+				store.StartAlertMonitor(context.Background(), nc, pluginManager.GetBufferStats)
+			}
+		}
+	}
 
 	// 注册规则引擎服务
 	var ruleEngineService *rules.RuleEngineService
@@ -210,10 +292,12 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		}
 		// 传递Runtime连接到规则引擎服务
 		ruleEngineService.SetRuntime(rt)
-		
+		// 注册完整的动作处理器（filter/transform/forward/aggregate），必须在服务启动前完成
+		actions.RegisterBuiltinHandlers(ruleEngineService, nc)
+
 		// 注册Transform和Forward动作处理器
 		// 注意：这些处理器需要NATS连接，将在Start阶段设置
-		
+
 		rt.RegisterService(ruleEngineService)
 		log.Info().Msg("规则引擎服务已注册")
 	}
@@ -233,14 +317,14 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	}
 
 	// 初始化轻量级指标收集器
-	metrics.InitLightweightMetrics() // 初始化全局单例
+	metrics.InitLightweightMetrics()             // 初始化全局单例
 	rt.metrics = metrics.GetLightweightMetrics() // 使用全局单例
-	
+
 	// 设置更新回调，用于同步规则引擎统计数据
 	rt.metrics.SetUpdateCallback(func() {
 		rt.updateRuleEngineMetrics()
 	})
-	
+
 	// 更新网关基础指标
 	rt.metrics.UpdateGatewayMetrics(
 		"running",
@@ -257,104 +341,13 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	}
 
 	go func() {
-		mux := http.NewServeMux()
-
-		// 轻量级指标端点 - JSON格式
-		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-			// 添加CORS头支持前端跨域访问
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			
-			// 处理预检请求
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			
-			format := r.URL.Query().Get("format")
-			if format == "" {
-				format = "json"
-			}
-			
-			// 更新系统指标
-			rt.UpdateMetrics()
-			
-			switch format {
-			case "json":
-				w.Header().Set("Content-Type", "application/json")
-				data, err := rt.metrics.ToJSON()
-				if err != nil {
-					w.WriteHeader(http.StatusInternalServerError)
-					json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-					return
-				}
-				w.WriteHeader(http.StatusOK)
-				w.Write(data)
-			case "text", "plain":
-				w.Header().Set("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(rt.metrics.ToPlainText()))
-			default:
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "不支持的格式，支持的格式: json, text, plain"})
-			}
-		})
-
-		// 健康检查端点
-		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			// 添加CORS头支持前端跨域访问
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			
-			// 处理预检请求
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status":    "healthy",
-				"timestamp": time.Now().Format(time.RFC3339),
-				"services": map[string]string{
-					"nats":    "running",
-					"gateway": "running",
-				},
-			})
-		})
-
-		// 系统信息端点
-		mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-			// 添加CORS头支持前端跨域访问
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			
-			// 处理预检请求
-			if r.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			natsPort := "N/A"
-			if natsServer != nil {
-				natsPort = fmt.Sprintf("%d", natsServer.Addr().(*net.TCPAddr).Port)
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"name":         "IoT Gateway",
-				"version":      "1.0.0",
-				"nats_port":    natsPort,
-				"gateway_port": gatewayPort,
-			})
-		})
-
+		srv := &http.Server{
+			Addr:              ":" + gatewayPort,
+			Handler:           rt.GatewayHTTPHandler(gatewayPort),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
 		log.Info().Str("port", gatewayPort).Msg("启动Gateway主服务HTTP服务器")
-		if err := http.ListenAndServe(":"+gatewayPort, mux); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("Gateway主服务HTTP服务器启动失败")
 		}
 	}()
@@ -378,7 +371,7 @@ func (r *Runtime) GetBus() *nats.Conn { return r.Bus }
 
 func (r *Runtime) Start(ctx context.Context) error {
 	log.Info().Msg("Runtime.Start() 被调用")
-	
+
 	// 启动插件管理器
 	if err := r.PluginMgr.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("启动插件管理器失败")
@@ -414,16 +407,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 			return fmt.Errorf("服务 %s 启动失败: %w", s.Name(), err)
 		}
 
-		
-		// 如果是规则引擎服务，在启动后注册Transform action handler
-		if s.Name() == "rule-engine" {
-			if ruleService, ok := s.(*rules.RuleEngineService); ok {
-				// 注册Transform处理器
-				transformHandler := actions.NewTransformHandler(r.Bus)
-				ruleService.RegisterActionHandler("transform", transformHandler)
-			}
-		}
 	}
+	r.started.Store(true)
 	return nil
 }
 
@@ -437,6 +422,11 @@ func (r *Runtime) Stop(ctx context.Context) {
 
 	for i := len(r.Svcs) - 1; i >= 0; i-- {
 		_ = r.Svcs[i].Stop(ctx)
+	}
+
+	// 停止本地暂存的后台任务（汇总器）
+	if r.Store != nil {
+		r.Store.Close()
 	}
 
 	// 关闭 NATS 连接
@@ -455,7 +445,7 @@ func (r *Runtime) updateRuleEngineMetrics() {
 	if r.metrics == nil {
 		return
 	}
-	
+
 	// 找到规则引擎服务
 	for _, s := range r.Svcs {
 		if s.Name() == "rule-engine" {
@@ -474,17 +464,17 @@ func (r *Runtime) updateRuleEngineMetrics() {
 						Int64("raw_points_processed", engineMetrics.PointsProcessed).
 						Time("raw_last_processed", engineMetrics.LastProcessedAt).
 						Msg("🔍 规则引擎原始指标数据")
-					
+
 					// 同步统计数据到全局指标系统
 					r.metrics.UpdateRuleMetrics(
-						int(engineMetrics.RulesTotal),       // 总规则数
-						int(engineMetrics.RulesEnabled),     // 启用规则数
-						engineMetrics.RulesMatched,          // 匹配次数
-						engineMetrics.ActionsExecuted,       // 动作执行次数
-						engineMetrics.ActionsSucceeded,      // 动作成功次数
-						engineMetrics.ActionsFailed,         // 动作失败次数
+						int(engineMetrics.RulesTotal),   // 总规则数
+						int(engineMetrics.RulesEnabled), // 启用规则数
+						engineMetrics.RulesMatched,      // 匹配次数
+						engineMetrics.ActionsExecuted,   // 动作执行次数
+						engineMetrics.ActionsSucceeded,  // 动作成功次数
+						engineMetrics.ActionsFailed,     // 动作失败次数
 					)
-					
+
 					log.Info().
 						Int("synced_total_rules", int(engineMetrics.RulesTotal)).
 						Int("synced_enabled_rules", int(engineMetrics.RulesEnabled)).
@@ -512,7 +502,7 @@ func (r *Runtime) UpdateMetrics() {
 		if r.PluginMgr != nil {
 			plugins := r.PluginMgr.GetPlugins()
 			var totalAdapters, runningAdapters, totalSinks, runningSinks int
-			
+
 			for _, plugin := range plugins {
 				if plugin.Type == "adapter" {
 					totalAdapters++
@@ -526,20 +516,28 @@ func (r *Runtime) UpdateMetrics() {
 					}
 				}
 			}
-			
+
 			// 更新网关指标
 			r.metrics.GatewayMetrics.TotalAdapters = totalAdapters
 			r.metrics.GatewayMetrics.RunningAdapters = runningAdapters
 			r.metrics.GatewayMetrics.TotalSinks = totalSinks
 			r.metrics.GatewayMetrics.RunningSinks = runningSinks
 			r.metrics.GatewayMetrics.NATSConnected = (r.Bus != nil && r.Bus.IsConnected())
-			
+
 			if r.Bus != nil {
 				r.metrics.GatewayMetrics.NATSConnectionURL = r.Bus.ConnectedUrl()
 			}
 		}
-		
+
 		// 更新系统指标
 		r.metrics.UpdateSystemMetrics()
 	}
+}
+
+// storageDir JetStream 存储目录（storage.store_dir，默认 ./data/jetstream）
+func storageDir(v *viper.Viper) string {
+	if d := v.GetString("storage.store_dir"); d != "" {
+		return d
+	}
+	return "./data/jetstream"
 }

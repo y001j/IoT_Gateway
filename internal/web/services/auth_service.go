@@ -3,7 +3,10 @@ package services
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/y001j/iot-gateway/internal/web/models"
 	"github.com/y001j/iot-gateway/internal/web/utils"
@@ -24,6 +27,16 @@ type AuthService interface {
 	CreateUser(user *models.User) error
 	ListUsers(offset, limit int) ([]*models.User, int, error)
 	GetUserLoginHistory(userID int, limit int) ([]*models.LoginHistory, error)
+	// JWTSecret 返回实际用于签发和校验令牌的密钥（可能是自动生成的）
+	JWTSecret() string
+}
+
+// DataDir 返回网关数据目录（环境变量 IOT_GATEWAY_DATA_DIR，默认 ./data）
+func DataDir() string {
+	if d := os.Getenv("IOT_GATEWAY_DATA_DIR"); d != "" {
+		return d
+	}
+	return "./data"
 }
 
 // authService 认证服务实现
@@ -31,6 +44,7 @@ type authService struct {
 	store     models.UserStore
 	jwtConfig *utils.JWTConfig
 	config    *models.AuthConfig
+	guard     *loginGuard
 }
 
 // NewAuthService 创建认证服务
@@ -53,9 +67,21 @@ func NewAuthService(store models.UserStore, config *models.AuthConfig) AuthServi
 		}
 	}
 
+	// JWT 密钥为空或仍是占位值时，使用自动生成并持久化的随机密钥
+	cfgCopy := *config
+	secret, generated, err := utils.EnsureJWTSecret(cfgCopy.JWTSecret, DataDir())
+	if err == nil {
+		if generated {
+			log.Warn().Msg("web_ui.auth.jwt_secret 未配置或使用了不安全的默认值，已使用自动生成的随机密钥（保存在数据目录 .jwt_secret）")
+		}
+		cfgCopy.JWTSecret = secret
+	}
+	config = &cfgCopy
+
 	return &authService{
 		store:  store,
 		config: config,
+		guard:  newLoginGuard(config.MaxLoginAttempts, config.LockoutDuration),
 		jwtConfig: &utils.JWTConfig{
 			SecretKey:     config.JWTSecret,
 			TokenDuration: config.TokenDuration,
@@ -63,25 +89,37 @@ func NewAuthService(store models.UserStore, config *models.AuthConfig) AuthServi
 	}
 }
 
+// JWTSecret 返回签发令牌使用的密钥
+func (a *authService) JWTSecret() string {
+	return a.jwtConfig.SecretKey
+}
+
 // Login 用户登录
 func (a *authService) Login(req *models.LoginRequest) (*models.LoginResponse, error) {
+	// 连续失败次数过多时临时锁定（锁定期间即使密码正确也拒绝）
+	if a.guard.locked(req.Username) {
+		return nil, ErrAccountLocked
+	}
+
 	// 获取用户
 	user, err := a.store.GetUserByUsername(req.Username)
 	if err != nil {
-		// 调试：打印用户查找失败的错误
-		fmt.Printf("查找用户失败: Username=[%s], Error=[%v]\n", req.Username, err)
-		return nil, errors.New("用户名或密码错误 (用户未找到)")
+		// 不区分"用户不存在"和"密码错误"，避免用户名枚举
+		if a.guard.recordFailure(req.Username) {
+			log.Warn().Str("username", req.Username).Msg("登录失败次数过多，已临时锁定")
+		}
+		return nil, errors.New("用户名或密码错误")
 	}
-
-	// 调试：打印从数据库获取的密码哈希
-	fmt.Printf("数据库中的哈希: [%s]\n", user.Password)
 
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		// 调试：打印密码比较失败的错误
-		fmt.Printf("密码比较失败: %v\n", err)
-		return nil, errors.New("用户名或密码错误 (密码不匹配)")
+		if a.guard.recordFailure(req.Username) {
+			log.Warn().Str("username", req.Username).Msg("登录失败次数过多，已临时锁定")
+		}
+		_ = a.store.AddLoginHistory(&models.LoginHistory{UserID: user.ID, Success: false, LoginTime: time.Now()})
+		return nil, errors.New("用户名或密码错误")
 	}
+	a.guard.recordSuccess(req.Username)
 
 	// 生成访问令牌
 	token, err := utils.GenerateJWT(user.ID, user.Username, user.Role, a.jwtConfig)
@@ -152,11 +190,11 @@ func (a *authService) Login(req *models.LoginRequest) (*models.LoginResponse, er
 func (a *authService) Logout(token string) error {
 	session, err := a.store.GetSessionByToken(token)
 	if err != nil {
-		return err
+		// 会话不存在（例如修改密码后已失效）时登出视为成功，保持幂等
+		return nil
 	}
-
-	session.Active = false
-	return a.store.UpdateSession(session)
+	// 直接删除会话：SQLite 存储没有 active 列，以前设置 Active=false 不会被持久化
+	return a.store.DeleteSession(session.ID)
 }
 
 // RefreshToken 刷新令牌
@@ -273,7 +311,11 @@ func (a *authService) ChangePassword(userID int, req *models.ChangePasswordReque
 	}
 
 	user.Password = string(hashedPassword)
-	return a.store.UpdateUser(user)
+	if err := a.store.UpdateUser(user); err != nil {
+		return err
+	}
+	// 修改密码后使该用户所有已签发的令牌失效
+	return a.store.DeleteUserSessions(user.ID)
 }
 
 // ValidateToken 验证令牌

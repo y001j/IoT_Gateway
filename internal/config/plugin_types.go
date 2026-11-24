@@ -15,11 +15,11 @@ type PluginMetadata struct {
 	Author      string            `json:"author,omitempty" yaml:"author,omitempty"`
 	License     string            `json:"license,omitempty" yaml:"license,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty" yaml:"tags,omitempty"`
-	
+
 	// ISP Sidecar specific
-	ISPPort    int               `json:"isp_port,omitempty" yaml:"isp_port,omitempty" validate:"port"`
-	ISPTimeout time.Duration     `json:"isp_timeout,omitempty" yaml:"isp_timeout,omitempty"`
-	
+	ISPPort    int           `json:"isp_port,omitempty" yaml:"isp_port,omitempty" validate:"port"`
+	ISPTimeout time.Duration `json:"isp_timeout,omitempty" yaml:"isp_timeout,omitempty"`
+
 	// External plugin specific
 	Command     string            `json:"command,omitempty" yaml:"command,omitempty"`
 	Args        []string          `json:"args,omitempty" yaml:"args,omitempty"`
@@ -28,13 +28,13 @@ type PluginMetadata struct {
 
 // SidecarPluginConfig represents configuration for ISP sidecar plugins
 type SidecarPluginConfig struct {
-	BaseConfig   `json:",inline" yaml:",inline"`
-	ISPPort      int           `json:"isp_port" yaml:"isp_port" validate:"required,port"`
-	ISPTimeout   time.Duration `json:"isp_timeout,omitempty" yaml:"isp_timeout,omitempty"`
-	Entry        string        `json:"entry" yaml:"entry" validate:"required"`
-	AutoRestart  bool          `json:"auto_restart,omitempty" yaml:"auto_restart,omitempty"`
-	MaxRetries   int           `json:"max_retries,omitempty" yaml:"max_retries,omitempty" validate:"min=0,max=10"`
-	
+	BaseConfig  `json:",inline" yaml:",inline"`
+	ISPPort     int           `json:"isp_port" yaml:"isp_port" validate:"required,port"`
+	ISPTimeout  time.Duration `json:"isp_timeout,omitempty" yaml:"isp_timeout,omitempty"`
+	Entry       string        `json:"entry" yaml:"entry" validate:"required"`
+	AutoRestart bool          `json:"auto_restart,omitempty" yaml:"auto_restart,omitempty"`
+	MaxRetries  int           `json:"max_retries,omitempty" yaml:"max_retries,omitempty" validate:"min=0,max=10"`
+
 	// Plugin-specific configuration (passed to sidecar)
 	PluginConfig map[string]interface{} `json:"plugin_config,omitempty" yaml:"plugin_config,omitempty"`
 }

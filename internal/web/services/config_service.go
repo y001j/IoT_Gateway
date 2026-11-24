@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -125,14 +126,15 @@ func (s *configService) SaveConfig(config *models.SystemConfig) error {
 
 // GetConfig 获取当前配置
 func (s *configService) GetConfig() (*models.SystemConfig, error) {
+	// 以前持有读锁时调用 LoadConfig（需要写锁），配置尚未加载时必然死锁
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	cfg := s.currentConfig
+	s.mu.RUnlock()
 
-	if s.currentConfig == nil {
+	if cfg == nil {
 		return s.LoadConfig()
 	}
-
-	return s.currentConfig, nil
+	return cfg, nil
 }
 
 // UpdateConfig 更新配置
@@ -167,8 +169,8 @@ func (s *configService) ApplyConfig(config *models.SystemConfig) error {
 	// 配置应用的逻辑应该在调用者处理，这里只是验证并保存配置
 	// 实际的服务重启和配置应用应该在上层服务中处理
 
-	fmt.Printf("配置已更新并应用: 网关端口=%d, 数据库路径=%s, NATS端口=%d\n",
-		config.Gateway.HTTPPort, config.Database.SQLite.Path, config.NATS.Port)
+	log.Info().Int("gateway_port", config.Gateway.HTTPPort).Str("db_path", config.Database.SQLite.Path).
+		Int("nats_port", config.NATS.Port).Msg("配置已更新并应用")
 	return nil
 }
 
@@ -187,7 +189,8 @@ func (s *configService) saveConfigFile(config *models.SystemConfig) error {
 	}
 
 	// 写入文件
-	if err := ioutil.WriteFile(s.configPath, data, 0644); err != nil {
+	// 配置中包含 JWT 密钥等敏感信息，只允许所有者读写
+	if err := ioutil.WriteFile(s.configPath, data, 0600); err != nil {
 		return fmt.Errorf("写入配置文件失败: %v", err)
 	}
 

@@ -44,39 +44,39 @@ type mockPoint struct {
 	Constant interface{}   `json:"constant"` // 常量值，如果设置则忽略Min/Max/Variance
 	Values   []interface{} `json:"values"`   // 预定义值列表，随机选择
 	lastVal  float64       // 内部状态，不导出
-	
+
 	// 复合数据配置
 	DataType       string                     `json:"data_type,omitempty"`
 	LocationConfig *config.MockLocationConfig `json:"location_config,omitempty"`
 	Vector3DConfig *config.MockVector3DConfig `json:"vector3d_config,omitempty"`
 	ColorConfig    *config.MockColorConfig    `json:"color_config,omitempty"`
-	
+
 	// 通用复合数据类型配置
 	VectorConfig     *config.MockVectorConfig     `json:"vector_config,omitempty"`
 	ArrayConfig      *config.MockArrayConfig      `json:"array_config,omitempty"`
 	MatrixConfig     *config.MockMatrixConfig     `json:"matrix_config,omitempty"`
 	TimeSeriesConfig *config.MockTimeSeriesConfig `json:"timeseries_config,omitempty"`
-	
+
 	// 复合数据内部状态
-	locationState  *locationState
-	vector3dState  *vector3dState  
-	colorState     *colorState
-	vectorState    *vectorState
-	arrayState     *arrayState
-	matrixState    *matrixState
+	locationState   *locationState
+	vector3dState   *vector3dState
+	colorState      *colorState
+	vectorState     *vectorState
+	arrayState      *arrayState
+	matrixState     *matrixState
 	timeseriesState *timeseriesState
 }
 
 // locationState GPS位置模拟内部状态
 type locationState struct {
-	currentLat  float64
-	currentLng  float64
-	direction   float64 // 移动方向 (弧度)
-	speed       float64 // 当前速度
-	lastUpdate  time.Time
+	currentLat float64
+	currentLng float64
+	direction  float64 // 移动方向 (弧度)
+	speed      float64 // 当前速度
+	lastUpdate time.Time
 }
 
-// vector3dState 三轴向量模拟内部状态  
+// vector3dState 三轴向量模拟内部状态
 type vector3dState struct {
 	lastX, lastY, lastZ float64
 	time                float64 // 用于振荡计算
@@ -114,12 +114,11 @@ type timeseriesState struct {
 	startTime  time.Time   // 开始时间
 }
 
-
 // NewMockAdapter 创建新的Mock适配器实例
 func NewMockAdapter() *MockAdapter {
 	return &MockAdapter{
 		BaseAdapter: southbound.NewBaseAdapter("mock-adapter", "mock"),
-		deviceID:    "mock-device", 
+		deviceID:    "mock-device",
 		interval:    5000 * time.Millisecond,
 		stopCh:      make(chan struct{}),
 	}
@@ -132,12 +131,12 @@ func (a *MockAdapter) Init(cfg json.RawMessage) error {
 		Int("config_size", len(cfg)).
 		Str("device_id", a.deviceID).
 		Msg("🔍 MockAdapter.Init() 开始执行 - 调试入口点")
-		
+
 	log.Debug().
 		Int("config_size", len(cfg)).
 		Str("device_id", a.deviceID).
 		Msg("MockAdapter.Init() 开始执行")
-		
+
 	// 重置状态
 	a.points = make([]mockPoint, 0)
 	a.SetHealthStatus("healthy", "Initializing mock adapter")
@@ -172,7 +171,7 @@ func (a *MockAdapter) initWithUnifiedConfig(cfg json.RawMessage) error {
 		Int("config_datapoints_count", len(mockConfig.DataPoints)).
 		Int("config_tags_count", len(mockConfig.Tags)).
 		Msg("✅ 成功使用新配置格式解析")
-		
+
 	return a.initFromNewConfig(mockConfig)
 }
 
@@ -215,11 +214,11 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 		Int("config_datapoints_count", len(config.DataPoints)).
 		Int("config_tags_count", len(config.Tags)).
 		Msg("initFromNewConfig() 开始执行")
-		
+
 	// 初始化BaseAdapter
 	a.BaseAdapter = southbound.NewBaseAdapter(config.Name, "mock")
 	a.interval = config.Interval.Duration()
-	
+
 	// 从新配置格式转换到内部格式
 	a.points = make([]mockPoint, len(config.DataPoints))
 	for i, dp := range config.DataPoints {
@@ -232,12 +231,12 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 			Variance: 0.1,     // 默认波动
 			lastVal:  dp.MinValue + rand.Float64()*(dp.MaxValue-dp.MinValue),
 		}
-		
+
 		// 处理复合数据类型配置
 		if dp.DataType != "" {
 			point.DataType = dp.DataType
 			point.Type = dp.DataType
-			
+
 			switch dp.DataType {
 			case "location":
 				if dp.LocationConfig != nil {
@@ -291,9 +290,9 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 				}
 			}
 		}
-		
+
 		a.points[i] = point
-		
+
 		// 使用第一个设备ID作为适配器默认值（仅用于日志）
 		if i == 0 {
 			a.deviceID = dp.DeviceID
@@ -327,8 +326,6 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 	return nil
 }
 
-
-
 // Start 启动适配器
 func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 	if a.IsRunning() {
@@ -344,6 +341,9 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 		return nil
 	}
 
+	// 捕获本次启动的停止通道：Stop 会替换 a.stopCh，
+	// 协程如果读字段可能错过关闭信号而在停止后继续产生数据
+	stopCh := a.stopCh
 	go func() {
 		ticker := time.NewTicker(a.interval)
 		defer ticker.Stop()
@@ -353,7 +353,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 			case <-ticker.C:
 				// 记录数据生成开始时间
 				operationStart := time.Now()
-				
+
 				// 生成所有点位的数据
 				for i := range a.points {
 					p := &a.points[i]
@@ -498,7 +498,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						point = model.NewPoint(p.Key, pointDeviceID, pointValue, pointType)
 					}
 					point.AddTag("source", "mock")
-					
+
 					// 添加设备标签
 					if a.tags != nil {
 						log.Debug().
@@ -508,11 +508,11 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 							Interface("available_tags", a.tags).
 							Int("tags_count", len(a.tags)).
 							Msg("准备添加设备标签到数据点")
-							
+
 						for tagKey, tagValue := range a.tags {
 							tagValueStr := fmt.Sprintf("%v", tagValue)
 							point.AddTag(tagKey, tagValueStr)
-							
+
 							log.Debug().
 								Str("device_id", pointDeviceID).
 								Str("adapter_device_id", a.deviceID).
@@ -521,7 +521,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 								Str("tag_value", tagValueStr).
 								Msg("已添加标签到数据点")
 						}
-						
+
 						// 验证标签是否正确添加
 						actualTags := point.GetTagsCopy()
 						log.Debug().
@@ -556,7 +556,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 					// 使用BaseAdapter的SafeSendDataPoint方法，自动处理统计
 					a.SafeSendDataPoint(ch, point, operationStart)
 				}
-			case <-a.stopCh:
+			case <-stopCh:
 				log.Info().Str("device_id", a.deviceID).Msg("模拟适配器停止")
 				return
 			case <-ctx.Done():
@@ -579,7 +579,7 @@ func (a *MockAdapter) Stop() error {
 	close(a.stopCh)
 	a.SetRunning(false)
 	a.SetHealthStatus("healthy", "Mock adapter stopped")
-	
+
 	// 重新创建stopCh为下次使用
 	a.stopCh = make(chan struct{})
 	return nil
@@ -620,15 +620,15 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 		log.Error().Msg("位置配置或状态为空")
 		return nil, model.TypeLocation
 	}
-	
+
 	config := p.LocationConfig
 	state := p.locationState
-	
+
 	// 如果启用了移动模拟
 	if config.SimulateMovement {
 		now := time.Now()
 		timeDelta := now.Sub(state.lastUpdate).Seconds()
-		
+
 		// 更新位置
 		switch config.MovementPattern {
 		case "random_walk":
@@ -636,82 +636,82 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 			state.direction += (rand.Float64() - 0.5) * 0.2 // 方向略微变化
 			speedKmh := state.speed
 			speedMs := speedKmh / 3.6 // 转换为米/秒
-			
+
 			// 计算移动距离 (米)
 			distance := speedMs * timeDelta
-			
+
 			// 地球半径 (米)
 			const earthRadius = 6371000.0
-			
+
 			// 计算新的经纬度
 			dLat := distance * math.Cos(state.direction) / earthRadius * (180.0 / math.Pi)
 			dLng := distance * math.Sin(state.direction) / (earthRadius * math.Cos(state.currentLat*math.Pi/180.0)) * (180.0 / math.Pi)
-			
+
 			state.currentLat += dLat
 			state.currentLng += dLng
-			
+
 			// 确保在指定范围内
 			if config.LatitudeRange > 0 {
-				if math.Abs(state.currentLat - config.StartLatitude) > config.LatitudeRange {
+				if math.Abs(state.currentLat-config.StartLatitude) > config.LatitudeRange {
 					state.currentLat = config.StartLatitude + (config.LatitudeRange * (rand.Float64()*2 - 1))
 				}
 			}
 			if config.LongitudeRange > 0 {
-				if math.Abs(state.currentLng - config.StartLongitude) > config.LongitudeRange {
+				if math.Abs(state.currentLng-config.StartLongitude) > config.LongitudeRange {
 					state.currentLng = config.StartLongitude + (config.LongitudeRange * (rand.Float64()*2 - 1))
 				}
 			}
-			
+
 		case "circular":
 			// 圆形移动
-			radius := 0.001 // 大约100米半径
+			radius := 0.001                                       // 大约100米半径
 			angle := time.Since(state.lastUpdate).Seconds() * 0.1 // 慢速旋转
 			state.currentLat = config.StartLatitude + radius*math.Cos(angle)
 			state.currentLng = config.StartLongitude + radius*math.Sin(angle)
-			
+
 		case "linear":
 			// 线性移动
 			speedKmh := state.speed
 			speedMs := speedKmh / 3.6
 			distance := speedMs * timeDelta
 			const earthRadius = 6371000.0
-			
+
 			dLat := distance / earthRadius * (180.0 / math.Pi)
 			state.currentLat += dLat
 		}
-		
+
 		state.lastUpdate = now
-		
+
 		// 随机调整速度
 		if rand.Float64() < 0.1 { // 10%概率调整速度
 			state.speed = config.SpeedMin + rand.Float64()*(config.SpeedMax-config.SpeedMin)
 		}
 	}
-	
+
 	// 创建位置数据
 	locationData := &model.LocationData{
 		Latitude:  state.currentLat,
 		Longitude: state.currentLng,
 	}
-	
+
 	// 添加可选字段
 	if config.AltitudeMin < config.AltitudeMax {
 		locationData.Altitude = config.AltitudeMin + rand.Float64()*(config.AltitudeMax-config.AltitudeMin)
 	}
-	
+
 	if state.speed > 0 {
 		locationData.Speed = state.speed
 	}
-	
+
 	// 添加GPS精度 (3-10米)
 	locationData.Accuracy = 3.0 + rand.Float64()*7.0
-	
+
 	// 添加方向角
 	locationData.Heading = state.direction * (180.0 / math.Pi)
 	if locationData.Heading < 0 {
 		locationData.Heading += 360
 	}
-	
+
 	return locationData, model.TypeLocation
 }
 
@@ -721,28 +721,28 @@ func (a *MockAdapter) generateVector3DData(p *mockPoint) (*model.Vector3D, model
 		log.Error().Msg("向量配置或状态为空")
 		return nil, model.TypeVector3D
 	}
-	
+
 	config := p.Vector3DConfig
 	state := p.vector3dState
-	
+
 	var x, y, z float64
-	
+
 	if config.Oscillation && config.Frequency > 0 {
 		// 振荡模式
 		state.time += 0.1 // 时间步进
-		
+
 		x = (config.XMax-config.XMin)/2*math.Sin(2*math.Pi*config.Frequency*state.time) + (config.XMax+config.XMin)/2
 		y = (config.YMax-config.YMin)/2*math.Sin(2*math.Pi*config.Frequency*state.time+2*math.Pi/3) + (config.YMax+config.YMin)/2
 		z = (config.ZMax-config.ZMin)/2*math.Sin(2*math.Pi*config.Frequency*state.time+4*math.Pi/3) + (config.ZMax+config.ZMin)/2
 	} else {
 		// 随机波动模式
 		variance := 0.1
-		
+
 		// 考虑轴间相关性
 		if config.Correlation > 0 {
 			// 生成相关的随机变化
 			baseChange := (rand.Float64() - 0.5) * variance
-			
+
 			x = state.lastX + baseChange*(config.XMax-config.XMin)
 			y = state.lastY + (baseChange*config.Correlation+(rand.Float64()-0.5)*variance*(1-config.Correlation))*(config.YMax-config.YMin)
 			z = state.lastZ + (baseChange*config.Correlation+(rand.Float64()-0.5)*variance*(1-config.Correlation))*(config.ZMax-config.ZMin)
@@ -752,21 +752,33 @@ func (a *MockAdapter) generateVector3DData(p *mockPoint) (*model.Vector3D, model
 			y = state.lastY + (rand.Float64()-0.5)*variance*(config.YMax-config.YMin)
 			z = state.lastZ + (rand.Float64()-0.5)*variance*(config.ZMax-config.ZMin)
 		}
-		
+
 		// 确保在范围内
-		if x > config.XMax { x = config.XMax }
-		if x < config.XMin { x = config.XMin }
-		if y > config.YMax { y = config.YMax }
-		if y < config.YMin { y = config.YMin }
-		if z > config.ZMax { z = config.ZMax }
-		if z < config.ZMin { z = config.ZMin }
-		
+		if x > config.XMax {
+			x = config.XMax
+		}
+		if x < config.XMin {
+			x = config.XMin
+		}
+		if y > config.YMax {
+			y = config.YMax
+		}
+		if y < config.YMin {
+			y = config.YMin
+		}
+		if z > config.ZMax {
+			z = config.ZMax
+		}
+		if z < config.ZMin {
+			z = config.ZMin
+		}
+
 		// 更新状态
 		state.lastX = x
 		state.lastY = y
 		state.lastZ = z
 	}
-	
+
 	return &model.Vector3D{
 		X: x,
 		Y: y,
@@ -780,31 +792,31 @@ func (a *MockAdapter) generateColorData(p *mockPoint) (*model.ColorData, model.D
 		log.Error().Msg("颜色配置或状态为空")
 		return nil, model.TypeColor
 	}
-	
+
 	config := p.ColorConfig
 	state := p.colorState
-	
+
 	var r, g, b uint8 = 255, 255, 255 // 默认白色
-	
+
 	switch config.ColorMode {
 	case "random":
 		// 完全随机颜色
 		r = uint8(rand.Intn(256))
 		g = uint8(rand.Intn(256))
 		b = uint8(rand.Intn(256))
-		
+
 	case "rainbow":
 		// 彩虹色相循环
 		state.currentHue += config.HueChangeSpeed
 		if state.currentHue >= 360 {
 			state.currentHue -= 360
 		}
-		
+
 		// HSV转RGB
 		h := state.currentHue / 60.0
 		c := 1.0
-		x := c * (1.0 - math.Abs(math.Mod(h, 2.0) - 1.0))
-		
+		x := c * (1.0 - math.Abs(math.Mod(h, 2.0)-1.0))
+
 		var r1, g1, b1 float64
 		if h >= 0 && h < 1 {
 			r1, g1, b1 = c, x, 0
@@ -819,11 +831,11 @@ func (a *MockAdapter) generateColorData(p *mockPoint) (*model.ColorData, model.D
 		} else {
 			r1, g1, b1 = c, 0, x
 		}
-		
+
 		r = uint8(r1 * 255)
 		g = uint8(g1 * 255)
 		b = uint8(b1 * 255)
-		
+
 	case "fixed":
 		// 固定颜色列表
 		if len(config.FixedColors) > 0 {
@@ -840,20 +852,20 @@ func (a *MockAdapter) generateColorData(p *mockPoint) (*model.ColorData, model.D
 					b = uint8(bv)
 				}
 			}
-			
+
 			// 循环颜色索引
 			if rand.Float64() < 0.1 { // 10%概率切换颜色
 				state.colorIndex = (state.colorIndex + 1) % len(config.FixedColors)
 			}
 		}
-		
+
 	default:
 		// 默认随机模式
 		r = uint8(rand.Intn(256))
 		g = uint8(rand.Intn(256))
 		b = uint8(rand.Intn(256))
 	}
-	
+
 	return &model.ColorData{
 		R: r,
 		G: g,
@@ -869,7 +881,7 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 	if config == nil {
 		return nil
 	}
-	
+
 	values := make([]float64, config.Dimension)
 	for i := 0; i < config.Dimension; i++ {
 		var minVal, maxVal float64
@@ -883,12 +895,12 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 		} else {
 			maxVal = config.GlobalMax
 		}
-		
+
 		// 根据分布类型生成初始值
 		switch config.Distribution {
 		case "normal":
 			// 正态分布（简化版本）
-			values[i] = (minVal + maxVal) / 2.0 + (rand.Float64()-0.5)*(maxVal-minVal)*0.3
+			values[i] = (minVal+maxVal)/2.0 + (rand.Float64()-0.5)*(maxVal-minVal)*0.3
 		case "exponential":
 			// 指数分布（简化版本）
 			values[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-rand.Float64()))
@@ -897,7 +909,7 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 			values[i] = minVal + rand.Float64()*(maxVal-minVal)
 		}
 	}
-	
+
 	return &vectorState{
 		lastValues: values,
 		time:       0,
@@ -909,12 +921,12 @@ func (a *MockAdapter) initArrayState(config *config.MockArrayConfig) *arrayState
 	if config == nil {
 		return nil
 	}
-	
+
 	values := make([]interface{}, config.Size)
 	for i := 0; i < config.Size; i++ {
 		values[i] = a.generateArrayElement(config)
 	}
-	
+
 	return &arrayState{
 		lastValues: values,
 		generation: 0,
@@ -926,7 +938,7 @@ func (a *MockAdapter) initMatrixState(config *config.MockMatrixConfig) *matrixSt
 	if config == nil {
 		return nil
 	}
-	
+
 	values := make([][]float64, config.Rows)
 	for i := 0; i < config.Rows; i++ {
 		values[i] = make([]float64, config.Cols)
@@ -934,7 +946,7 @@ func (a *MockAdapter) initMatrixState(config *config.MockMatrixConfig) *matrixSt
 			values[i][j] = a.generateMatrixElement(config, i, j)
 		}
 	}
-	
+
 	return &matrixState{
 		lastValues: values,
 		generation: 0,
@@ -946,14 +958,14 @@ func (a *MockAdapter) initTimeSeriesState(config *config.MockTimeSeriesConfig) *
 	if config == nil {
 		return nil
 	}
-	
+
 	// 解析时间间隔
 	interval, err := time.ParseDuration(config.Interval)
 	if err != nil {
 		log.Error().Err(err).Str("interval", config.Interval).Msg("解析时间间隔失败，使用默认值1s")
 		interval = time.Second
 	}
-	
+
 	// 解析开始时间
 	var startTime time.Time
 	if config.StartTime != "" {
@@ -965,46 +977,46 @@ func (a *MockAdapter) initTimeSeriesState(config *config.MockTimeSeriesConfig) *
 	} else {
 		startTime = time.Now().Add(-time.Duration(config.Length) * interval)
 	}
-	
+
 	// 生成初始时间序列
 	values := make([]float64, 0, config.Length)
 	timestamps := make([]time.Time, 0, config.Length)
-	
+
 	baseValue := config.BaseValue
 	if baseValue == 0 {
 		baseValue = 50.0 // 默认基准值
 	}
-	
+
 	for i := 0; i < config.Length; i++ {
 		timestamp := startTime.Add(time.Duration(i) * interval)
 		value := baseValue
-		
+
 		// 添加趋势
 		value += config.Trend * float64(i)
-		
+
 		// 添加季节性（如果配置了）
 		if config.Seasonality != nil {
 			periodDuration, err := time.ParseDuration(config.Seasonality.Period)
 			if err == nil {
 				seasonalPhase := float64(timestamp.UnixNano()) / float64(periodDuration.Nanoseconds()) * 2 * math.Pi
-				value += config.Seasonality.Amplitude * math.Sin(seasonalPhase + config.Seasonality.Phase)
+				value += config.Seasonality.Amplitude * math.Sin(seasonalPhase+config.Seasonality.Phase)
 			}
 		}
-		
+
 		// 添加噪声
 		if config.Noise > 0 {
 			value += (rand.Float64() - 0.5) * 2 * config.Noise
 		}
-		
+
 		// 添加异常值（如果配置了）
 		if config.Anomalies != nil && rand.Float64() < config.Anomalies.Probability {
 			value += (rand.Float64() - 0.5) * config.Anomalies.Magnitude * value
 		}
-		
+
 		values = append(values, value)
 		timestamps = append(timestamps, timestamp)
 	}
-	
+
 	return &timeseriesState{
 		values:     values,
 		timestamps: timestamps,
@@ -1021,13 +1033,13 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 		log.Error().Msg("向量配置或状态为空")
 		return nil, model.TypeVector
 	}
-	
+
 	config := p.VectorConfig
 	state := p.vectorState
-	
+
 	newValues := make([]float64, len(state.lastValues))
 	copy(newValues, state.lastValues)
-	
+
 	switch config.ChangePattern {
 	case "walk":
 		// 随机游走
@@ -1043,7 +1055,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			} else {
 				maxVal = config.GlobalMax
 			}
-			
+
 			// 随机变化，有相关性
 			change := (rand.Float64() - 0.5) * 0.1 * (maxVal - minVal)
 			if config.Correlation > 0 && i > 0 {
@@ -1051,7 +1063,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 				prevChange := newValues[i-1] - state.lastValues[i-1]
 				change += prevChange * config.Correlation
 			}
-			
+
 			newValues[i] += change
 			// 边界检查
 			if newValues[i] < minVal {
@@ -1061,7 +1073,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 				newValues[i] = maxVal
 			}
 		}
-		
+
 	case "oscillate":
 		// 振荡模式
 		state.time += 0.1
@@ -1071,7 +1083,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			frequency := 1.0 + float64(i)*0.1 // 不同维度不同频率
 			newValues[i] = center + amplitude*math.Sin(state.time*frequency)
 		}
-		
+
 	default:
 		// 随机模式
 		for i := range newValues {
@@ -1086,7 +1098,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			} else {
 				maxVal = config.GlobalMax
 			}
-			
+
 			switch config.Distribution {
 			case "normal":
 				// 正态分布
@@ -1101,10 +1113,10 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			}
 		}
 	}
-	
+
 	// 更新状态
 	state.lastValues = newValues
-	
+
 	return &model.VectorData{
 		Values:    newValues,
 		Dimension: len(newValues),
@@ -1119,10 +1131,10 @@ func (a *MockAdapter) generateArrayData(p *mockPoint) (*model.ArrayData, model.D
 		log.Error().Msg("数组配置或状态为空")
 		return nil, model.TypeArray
 	}
-	
+
 	config := p.ArrayConfig
 	state := p.arrayState
-	
+
 	// 决定要更改的元素数量
 	changeCount := config.ChangeElements
 	if changeCount <= 0 {
@@ -1131,33 +1143,33 @@ func (a *MockAdapter) generateArrayData(p *mockPoint) (*model.ArrayData, model.D
 	if changeCount > len(state.lastValues) {
 		changeCount = len(state.lastValues)
 	}
-	
+
 	// 复制当前值
 	newValues := make([]interface{}, len(state.lastValues))
 	copy(newValues, state.lastValues)
-	
+
 	// 随机选择要更改的元素
 	indices := make([]int, len(newValues))
 	for i := range indices {
 		indices[i] = i
 	}
-	
+
 	// 随机打乱
 	for i := len(indices) - 1; i > 0; i-- {
 		j := rand.Intn(i + 1)
 		indices[i], indices[j] = indices[j], indices[i]
 	}
-	
+
 	// 更改前几个元素
 	for i := 0; i < changeCount; i++ {
 		idx := indices[i]
 		newValues[idx] = a.generateArrayElement(config)
 	}
-	
+
 	// 更新状态
 	state.lastValues = newValues
 	state.generation++
-	
+
 	return &model.ArrayData{
 		Values:   newValues,
 		DataType: config.ElementType,
@@ -1173,17 +1185,17 @@ func (a *MockAdapter) generateMatrixData(p *mockPoint) (*model.MatrixData, model
 		log.Error().Msg("矩阵配置或状态为空")
 		return nil, model.TypeMatrix
 	}
-	
+
 	config := p.MatrixConfig
 	state := p.matrixState
-	
+
 	// 复制当前矩阵
 	newValues := make([][]float64, len(state.lastValues))
 	for i := range newValues {
 		newValues[i] = make([]float64, len(state.lastValues[i]))
 		copy(newValues[i], state.lastValues[i])
 	}
-	
+
 	// 根据生成次数决定更新策略
 	if state.generation%10 == 0 {
 		// 每10次完全重新生成
@@ -1200,7 +1212,7 @@ func (a *MockAdapter) generateMatrixData(p *mockPoint) (*model.MatrixData, model
 			j := rand.Intn(config.Cols)
 			change := (rand.Float64() - 0.5) * (config.MaxValue - config.MinValue) * 0.1
 			newValues[i][j] += change
-			
+
 			// 边界检查
 			if newValues[i][j] < config.MinValue {
 				newValues[i][j] = config.MinValue
@@ -1210,11 +1222,11 @@ func (a *MockAdapter) generateMatrixData(p *mockPoint) (*model.MatrixData, model
 			}
 		}
 	}
-	
+
 	// 更新状态
 	state.lastValues = newValues
 	state.generation++
-	
+
 	return &model.MatrixData{
 		Values: newValues,
 		Rows:   config.Rows,
@@ -1229,53 +1241,53 @@ func (a *MockAdapter) generateTimeSeriesData(p *mockPoint) (*model.TimeSeriesDat
 		log.Error().Msg("时间序列配置或状态为空")
 		return nil, model.TypeTimeSeries
 	}
-	
+
 	config := p.TimeSeriesConfig
 	state := p.timeseriesState
-	
+
 	// 解析间隔
 	interval, err := time.ParseDuration(config.Interval)
 	if err != nil {
 		interval = time.Second
 	}
-	
+
 	// 添加新的数据点
 	now := time.Now()
 	newValue := state.lastValue
-	
+
 	// 添加趋势
 	newValue += config.Trend
-	
+
 	// 添加季节性
 	if config.Seasonality != nil {
 		periodDuration, err := time.ParseDuration(config.Seasonality.Period)
 		if err == nil {
 			seasonalPhase := float64(now.UnixNano()) / float64(periodDuration.Nanoseconds()) * 2 * math.Pi
-			newValue += config.Seasonality.Amplitude * math.Sin(seasonalPhase + config.Seasonality.Phase)
+			newValue += config.Seasonality.Amplitude * math.Sin(seasonalPhase+config.Seasonality.Phase)
 		}
 	}
-	
+
 	// 添加噪声
 	if config.Noise > 0 {
 		newValue += (rand.Float64() - 0.5) * 2 * config.Noise
 	}
-	
+
 	// 添加异常值
 	if config.Anomalies != nil && rand.Float64() < config.Anomalies.Probability {
 		newValue += (rand.Float64() - 0.5) * config.Anomalies.Magnitude * newValue
 	}
-	
+
 	// 更新序列（滑动窗口）
 	state.values = append(state.values, newValue)
 	state.timestamps = append(state.timestamps, now)
 	state.lastValue = newValue
-	
+
 	// 保持固定长度
 	if len(state.values) > config.Length {
 		state.values = state.values[1:]
 		state.timestamps = state.timestamps[1:]
 	}
-	
+
 	// 计算采样间隔
 	var avgInterval time.Duration
 	if len(state.timestamps) > 1 {
@@ -1284,7 +1296,7 @@ func (a *MockAdapter) generateTimeSeriesData(p *mockPoint) (*model.TimeSeriesDat
 	} else {
 		avgInterval = interval
 	}
-	
+
 	return &model.TimeSeriesData{
 		Timestamps: append([]time.Time{}, state.timestamps...), // 复制切片
 		Values:     append([]float64{}, state.values...),       // 复制切片
@@ -1301,7 +1313,7 @@ func (a *MockAdapter) generateArrayElement(config *config.MockArrayConfig) inter
 	if config.NullProbability > 0 && rand.Float64() < config.NullProbability {
 		return nil
 	}
-	
+
 	switch config.ElementType {
 	case "int":
 		return int(config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue))
@@ -1334,7 +1346,7 @@ func (a *MockAdapter) generateArrayElement(config *config.MockArrayConfig) inter
 			return rand.Float64() < 0.5
 		}
 	}
-	
+
 	return 0.0
 }
 
@@ -1344,9 +1356,9 @@ func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row
 	if config.Sparsity > 0 && rand.Float64() < config.Sparsity {
 		return 0.0
 	}
-	
+
 	var value float64
-	
+
 	switch config.MatrixType {
 	case "diagonal":
 		if row != col {
@@ -1376,7 +1388,7 @@ func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row
 			value = config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue)
 		}
 	}
-	
+
 	return value
 }
 

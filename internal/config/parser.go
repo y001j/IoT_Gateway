@@ -59,7 +59,11 @@ func (p *ConfigParser[T]) ParseFromMap(data map[string]interface{}) (*T, error) 
 
 // ParseFromManager parses configuration from ConfigManager
 func (p *ConfigParser[T]) ParseFromManager(mgr ConfigManager, key string) (*T, error) {
+	// 与 Parse 一致：先应用默认值（以前直接使用零值，导致默认端口等无法生效）
 	var config T
+	if !reflect.ValueOf(p.defaults).IsZero() {
+		config = p.defaults
+	}
 	if err := mgr.GetAs(key, &config); err != nil {
 		return nil, fmt.Errorf("get config from manager: %w", err)
 	}
@@ -84,7 +88,7 @@ func validateStruct(v reflect.Value, prefix string) error {
 		field := v.Field(i)
 		fieldType := t.Field(i)
 		fieldName := fieldType.Name
-		
+
 		if prefix != "" {
 			fieldName = prefix + "." + fieldName
 		}
@@ -103,6 +107,13 @@ func validateStruct(v reflect.Value, prefix string) error {
 					return err
 				}
 			}
+			if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.Struct {
+				for j := 0; j < field.Len(); j++ {
+					if err := validateStruct(field.Index(j), fmt.Sprintf("%s[%d]", fieldName, j)); err != nil {
+						return err
+					}
+				}
+			}
 			continue
 		}
 
@@ -119,6 +130,15 @@ func validateStruct(v reflect.Value, prefix string) error {
 		if field.Kind() == reflect.Struct {
 			if err := validateStruct(field, fieldName); err != nil {
 				return err
+			}
+		}
+
+		// Validate elements of slices of structs (e.g. Modbus registers)
+		if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.Struct {
+			for j := 0; j < field.Len(); j++ {
+				if err := validateStruct(field.Index(j), fmt.Sprintf("%s[%d]", fieldName, j)); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -170,6 +190,10 @@ func validateField(field reflect.Value, fieldName, rule string) error {
 		}
 
 	case strings.HasPrefix(rule, "oneof="):
+		// 未设置（零值）表示使用默认值，不做枚举校验；需要必填时请同时使用 required
+		if isZeroValue(field) {
+			return nil
+		}
 		optionsStr := strings.TrimPrefix(rule, "oneof=")
 		options := strings.Split(optionsStr, " ")
 		if err := validateOneOf(field, fieldName, options); err != nil {

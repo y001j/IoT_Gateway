@@ -5,7 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	
+
 	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/model"
 )
@@ -16,34 +16,34 @@ type BaseAdapter struct {
 	dataPointsCollected int64
 	errorsCount         int64
 	// 64-bit fields for time and float64
-	avgResponseTime     float64   // 平均响应时间(毫秒)
+	avgResponseTime float64 // 平均响应时间(毫秒)
 	// 32-bit fields
-	running        int32 // 使用atomic操作
-	maxResponseTimes    int       // 最多保存的响应时间记录数
+	running          int32 // 使用atomic操作
+	maxResponseTimes int   // 最多保存的响应时间记录数
 	// Other fields
-	name           string
-	adapterType    string
-	startTime      time.Time
-	mu             sync.RWMutex
-	lastDataPointTime   time.Time
-	lastError           error
+	name              string
+	adapterType       string
+	startTime         time.Time
+	mu                sync.RWMutex
+	lastDataPointTime time.Time
+	lastError         error
 	// 响应时间统计
-	responseTimes       []float64 // 最近的响应时间记录
+	responseTimes []float64 // 最近的响应时间记录
 	// 健康状态
-	healthStatus   string
-	healthMessage  string
+	healthStatus    string
+	healthMessage   string
 	lastHealthCheck time.Time
 }
 
 // NewBaseAdapter 创建新的基础适配器
 func NewBaseAdapter(name, adapterType string) *BaseAdapter {
 	return &BaseAdapter{
-		name:           name,
-		adapterType:    adapterType,
-		healthStatus:   "healthy",
-		healthMessage:  "Adapter initialized",
-		lastHealthCheck: time.Now(),
-		responseTimes:   make([]float64, 0, 100),
+		name:             name,
+		adapterType:      adapterType,
+		healthStatus:     "healthy",
+		healthMessage:    "Adapter initialized",
+		lastHealthCheck:  time.Now(),
+		responseTimes:    make([]float64, 0, 100),
 		maxResponseTimes: 100, // 保存最近100个响应时间
 	}
 }
@@ -82,7 +82,7 @@ func (b *BaseAdapter) IncrementDataPointsWithTiming(operationStart time.Time) {
 	b.mu.Lock()
 	b.lastDataPointTime = time.Now()
 	b.mu.Unlock()
-	
+
 	// 记录响应时间
 	b.RecordDataOperation(operationStart)
 }
@@ -118,7 +118,7 @@ func (b *BaseAdapter) SetHealthStatus(status, message string) {
 func (b *BaseAdapter) Health() (HealthStatus, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	
+
 	// 如果适配器正在运行但很久没有数据，标记为降级
 	if b.IsRunning() && !b.lastDataPointTime.IsZero() {
 		if time.Since(b.lastDataPointTime) > 2*time.Minute {
@@ -129,7 +129,7 @@ func (b *BaseAdapter) Health() (HealthStatus, error) {
 			}, nil
 		}
 	}
-	
+
 	return HealthStatus{
 		Status:    b.healthStatus,
 		Message:   b.healthMessage,
@@ -141,17 +141,17 @@ func (b *BaseAdapter) Health() (HealthStatus, error) {
 func (b *BaseAdapter) GetMetrics() (interface{}, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	
+
 	var uptime time.Duration
 	if b.IsRunning() {
 		uptime = time.Since(b.startTime)
 	}
-	
+
 	var lastErrorMsg string
 	if b.lastError != nil {
 		lastErrorMsg = b.lastError.Error()
 	}
-	
+
 	return AdapterMetrics{
 		DataPointsCollected: atomic.LoadInt64(&b.dataPointsCollected),
 		ErrorsCount:         atomic.LoadInt64(&b.errorsCount),
@@ -173,15 +173,15 @@ func (b *BaseAdapter) GetLastError() error {
 func (b *BaseAdapter) AddResponseTime(responseTimeMs float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	
+
 	// 添加新的响应时间
 	b.responseTimes = append(b.responseTimes, responseTimeMs)
-	
+
 	// 如果超过最大记录数，移除最旧的记录
 	if len(b.responseTimes) > b.maxResponseTimes {
 		b.responseTimes = b.responseTimes[1:]
 	}
-	
+
 	// 重新计算平均响应时间
 	if len(b.responseTimes) > 0 {
 		var sum float64

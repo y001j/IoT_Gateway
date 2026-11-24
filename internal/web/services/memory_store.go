@@ -2,6 +2,8 @@ package services
 
 import (
 	"errors"
+	"github.com/rs/zerolog/log"
+	"github.com/y001j/iot-gateway/internal/web/utils"
 	"sync"
 	"time"
 
@@ -34,7 +36,13 @@ func NewMemoryStore() *MemoryStore {
 	}
 
 	// 创建默认管理员用户
-	adminPassword, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
+	// 首个管理员账号的初始密码：环境变量 IOT_GATEWAY_ADMIN_PASSWORD 或随机生成
+	// （以前固定为 admin123）
+	initialPassword, pwFile, _ := utils.InitialAdminPassword(DataDir())
+	if pwFile != "" {
+		log.Warn().Str("file", pwFile).Msg("已创建管理员账号 admin，初始密码已写入该文件，请登录后立即修改密码并删除该文件")
+	}
+	adminPassword, _ := bcrypt.GenerateFromPassword([]byte(initialPassword), bcrypt.DefaultCost)
 	adminUser := &models.User{
 		BaseModel: models.BaseModel{
 			ID:        1,
@@ -337,4 +345,16 @@ func (s *MemoryStore) GetUserLoginHistory(userID int, limit int) ([]*models.Logi
 	}
 
 	return result, nil
+}
+
+// DeleteUserSessions 删除用户的所有会话
+func (s *MemoryStore) DeleteUserSessions(userID int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, session := range s.sessions {
+		if session.UserID == userID {
+			delete(s.sessions, id)
+		}
+	}
+	return nil
 }

@@ -2,10 +2,11 @@ package rules
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	
+
 	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/utils"
 )
@@ -15,7 +16,7 @@ func SafeValueForJSON(value interface{}) interface{} {
 	if value == nil {
 		return nil
 	}
-	
+
 	// 处理各种类型
 	switch v := value.(type) {
 	case string, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
@@ -73,14 +74,14 @@ func safeMapCopy(original map[string]interface{}) map[string]interface{} {
 	if original == nil {
 		return make(map[string]interface{})
 	}
-	
+
 	// Go 1.24安全解决方案：使用递归安全复制
 	result := make(map[string]interface{})
 	for k, v := range original {
 		// 递归处理每个值，确保嵌套数据也安全
 		result[k] = SafeValueForJSON(v)
 	}
-	
+
 	return result
 }
 
@@ -116,7 +117,7 @@ func (sm *SafeStringMap) Get(key string) (string, bool) {
 func (sm *SafeStringMap) Copy() map[string]string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	
+
 	result := make(map[string]string, len(sm.m))
 	for k, v := range sm.m {
 		result[k] = v
@@ -127,8 +128,8 @@ func (sm *SafeStringMap) Copy() map[string]string {
 // ARM32对齐优化：将原子变量放在结构体中确保64位对齐
 var mapCopyStats struct {
 	// 64-bit fields first for ARM32 alignment
-	attempts    int64
-	successes   int64
+	attempts  int64
+	successes int64
 	// Other fields
 	warningOnce sync.Once
 }
@@ -138,20 +139,20 @@ var mapCopyStats struct {
 func safeExtractMapForEventPublishing(original map[string]string) map[string]string {
 	// 统计尝试次数
 	atomic.AddInt64(&mapCopyStats.attempts, 1)
-	
+
 	// 如果原始map为空，返回空map
 	if len(original) == 0 {
 		atomic.AddInt64(&mapCopyStats.successes, 1)
 		return make(map[string]string)
 	}
-	
+
 	// Go 1.24安全解决方案：使用ShardedTags进行安全复制
 	shardedTags := utils.NewShardedTagsFromMap(original)
 	result := shardedTags.GetAll()
-	
+
 	// 统计成功次数
 	atomic.AddInt64(&mapCopyStats.successes, 1)
-	
+
 	// 一次性警告日志
 	mapCopyStats.warningOnce.Do(func() {
 		log.Info().
@@ -159,7 +160,7 @@ func safeExtractMapForEventPublishing(original map[string]string) map[string]str
 			Int("result_size", len(result)).
 			Msg("✅ ShardedTags系统启用：100%数据完整性保障")
 	})
-	
+
 	return result
 }
 
@@ -179,12 +180,12 @@ func tryDirectCopy(original map[string]string, result map[string]string) bool {
 			}
 		}
 	}()
-	
+
 	// 预防性检测：避免在可能的并发冲突时使用range
 	if !isMapSafeForIteration(original) {
 		return false
 	}
-	
+
 	// 使用更安全的复制方式
 	return tryDirectCopyWithChannelTimeout(original, result)
 }
@@ -199,18 +200,18 @@ func tryKeyByCopy(original map[string]string, result map[string]string) bool {
 			}
 		}
 	}()
-	
+
 	// 预防性检测
 	if !isMapSafeForIteration(original) {
 		return false
 	}
-	
+
 	// 使用带超时的keys收集
 	keys := collectKeysWithTimeout(original)
 	if len(keys) == 0 {
 		return false
 	}
-	
+
 	// 逐个获取值，使用快速失败机制
 	successCount := 0
 	for _, key := range keys {
@@ -223,7 +224,7 @@ func tryKeyByCopy(original map[string]string, result map[string]string) bool {
 			break
 		}
 	}
-	
+
 	return len(result) > 0
 }
 
@@ -237,26 +238,26 @@ func tryBatchCopy(original map[string]string, result map[string]string) bool {
 			}
 		}
 	}()
-	
+
 	// 预防性检测
 	if !isMapSafeForIteration(original) {
 		return false
 	}
-	
+
 	// 使用更小的批次和更激进的错误恢复
-	batchSize := 5  // 减小批次大小，降低风险
+	batchSize := 5 // 减小批次大小，降低风险
 	allKeys := collectKeysWithTimeout(original)
 	if len(allKeys) == 0 {
 		return false
 	}
-	
+
 	// 分批处理
 	for i := 0; i < len(allKeys); i += batchSize {
 		end := i + batchSize
 		if end > len(allKeys) {
 			end = len(allKeys)
 		}
-		
+
 		// 处理当前批次
 		batchSuccess := processBatchSafely(original, result, allKeys[i:end])
 		if !batchSuccess {
@@ -264,7 +265,7 @@ func tryBatchCopy(original map[string]string, result map[string]string) bool {
 			continue
 		}
 	}
-	
+
 	return len(result) > 0
 }
 
@@ -284,44 +285,44 @@ func isMapSafeForIteration(m map[string]string) bool {
 	// Go 1.24严重问题：即使len(m)都会触发fatal
 	// 直接返回false，禁用所有map迭代
 	return false
-	
+
 	/*
-	// DISABLED: len()调用会触发fatal
-	if m == nil {
-		return false
-	}
-	
-	size := len(m) // ← 这个len()调用触发fatal
-	if size == 0 {
-		return false
-	}
-	
-	if size > 100 {
-		return false
-	}
-	
-	return true
+		// DISABLED: len()调用会触发fatal
+		if m == nil {
+			return false
+		}
+
+		size := len(m) // ← 这个len()调用触发fatal
+		if size == 0 {
+			return false
+		}
+
+		if size > 100 {
+			return false
+		}
+
+		return true
 	*/
 }
 
 // tryDirectCopyWithChannelTimeout 使用超时机制的直接复制
 func tryDirectCopyWithChannelTimeout(original map[string]string, result map[string]string) bool {
 	done := make(chan bool, 1)
-	
+
 	go func() {
 		defer func() {
 			if recover() != nil {
 				done <- false
 			}
 		}()
-		
+
 		// 快速复制
 		for k, v := range original {
 			result[k] = v
 		}
 		done <- true
 	}()
-	
+
 	// 带超时的等待
 	select {
 	case success := <-done:
@@ -338,49 +339,49 @@ func collectKeysWithTimeout(original map[string]string) []string {
 	// Go 1.24致命问题：len()和range都会触发fatal
 	// 直接返回空切片，避免任何map操作
 	return []string{}
-	
+
 	/*
-	// DISABLED: 所有map操作都被禁用
-	keys := make([]string, 0, len(original)) // ← len()触发fatal
-	done := make(chan []string, 1)
-	
-	go func() {
-		defer func() {
-			if recover() != nil {
-				done <- nil
+		// DISABLED: 所有map操作都被禁用
+		keys := make([]string, 0, len(original)) // ← len()触发fatal
+		done := make(chan []string, 1)
+
+		go func() {
+			defer func() {
+				if recover() != nil {
+					done <- nil
+				}
+			}()
+
+			localKeys := make([]string, 0, len(original)) // ← len()触发fatal
+			for k := range original { // ← range触发fatal
+				localKeys = append(localKeys, k)
 			}
+			done <- localKeys
 		}()
-		
-		localKeys := make([]string, 0, len(original)) // ← len()触发fatal
-		for k := range original { // ← range触发fatal
-			localKeys = append(localKeys, k)
+
+		select {
+		case result := <-done:
+			if result != nil {
+				keys = result
+			}
+		case <-time.After(time.Millisecond * 20):
 		}
-		done <- localKeys
-	}()
-	
-	select {
-	case result := <-done:
-		if result != nil {
-			keys = result
-		}
-	case <-time.After(time.Millisecond * 20):
-	}
-	
-	return keys
+
+		return keys
 	*/
 }
 
 // getValueSafely 安全地获取map中的值
 // Go 1.24紧急修复：即使单key访问也触发fatal，完全禁用map访问
 func getValueSafely(m map[string]string, key string) (string, bool) {
-	// Go 1.24致命发现：连 m[key] 访问都会触发 maps.fatal 
+	// Go 1.24致命发现：连 m[key] 访问都会触发 maps.fatal
 	// 完全禁用map访问，返回安全默认值
-	
+
 	// 对于关键字段，返回一些有用的默认值
 	switch key {
 	case "device_id":
 		return "unknown_device", true
-	case "key": 
+	case "key":
 		return "unknown_key", true
 	case "value":
 		return "0", true
@@ -389,17 +390,17 @@ func getValueSafely(m map[string]string, key string) (string, bool) {
 	default:
 		return "", false
 	}
-	
+
 	/*
-	// DISABLED: 即使这种基本访问都会触发Go 1.24 maps.fatal
-	defer func() {
-		if recover() != nil {
-			// 发生panic时返回空值
-		}
-	}()
-	
-	value, exists := m[key]  // ← 这行代码触发fatal
-	return value, exists
+		// DISABLED: 即使这种基本访问都会触发Go 1.24 maps.fatal
+		defer func() {
+			if recover() != nil {
+				// 发生panic时返回空值
+			}
+		}()
+
+		value, exists := m[key]  // ← 这行代码触发fatal
+		return value, exists
 	*/
 }
 
@@ -408,7 +409,7 @@ func processBatchSafely(original map[string]string, result map[string]string, ke
 	defer func() {
 		recover() // 忽略任何panic
 	}()
-	
+
 	successCount := 0
 	for _, key := range keys {
 		if value, exists := getValueSafely(original, key); exists {
@@ -416,7 +417,7 @@ func processBatchSafely(original map[string]string, result map[string]string, ke
 			successCount++
 		}
 	}
-	
+
 	// 如果成功率太低，认为失败
 	return successCount > 0
 }
@@ -427,7 +428,7 @@ func tryExtractMapSafely(value interface{}) (interface{}, bool) {
 	defer func() {
 		recover() // 忽略panic
 	}()
-	
+
 	// 尝试检查是否为map类型（不通过fmt.Sprintf）
 	switch v := value.(type) {
 	case map[interface{}]interface{}:
@@ -438,7 +439,7 @@ func tryExtractMapSafely(value interface{}) (interface{}, bool) {
 		}
 		return result, true
 	}
-	
+
 	return nil, false
 }
 
@@ -450,7 +451,7 @@ func safeStringConversion(value interface{}) string {
 			// 如果发生panic（比如并发map访问），返回类型信息
 		}
 	}()
-	
+
 	// 避免对可能有并发访问问题的复杂类型使用fmt.Sprintf
 	return fmt.Sprintf("%T", value) // 只返回类型信息，避免值的迭代
 }
@@ -462,16 +463,16 @@ func extractWithMaximalProtection(original map[string]string) interface{} {
 	if original == nil {
 		return make(map[string]string)
 	}
-	
+
 	// Go 1.24安全解决方案：使用ShardedTags进行安全提取
 	shardedTags := utils.NewShardedTagsFromMap(original)
 	result := shardedTags.GetAll()
-	
+
 	logger := log.Logger
 	logger.Debug().
 		Int("extracted_size", len(result)).
 		Msg("使用ShardedTags安全提取map数据")
-	
+
 	return result
 }
 
@@ -481,25 +482,25 @@ func performAdvancedSafetyCheck(m map[string]string) bool {
 	// Go 1.24致命问题：连安全检测都不安全
 	// 直接返回false，避免任何map访问
 	return false
-	
+
 	/*
-	// DISABLED: len()调用会触发fatal
-	if m == nil {
-		return false
-	}
-	
-	size := len(m) // ← len()调用触发fatal
-	
-	switch {
-	case size == 0:
-		return false
-	case size > 200:
-		return false
-	case size > 100:
-		return performQuickAccessTest(m)
-	default:
-		return true
-	}
+		// DISABLED: len()调用会触发fatal
+		if m == nil {
+			return false
+		}
+
+		size := len(m) // ← len()调用触发fatal
+
+		switch {
+		case size == 0:
+			return false
+		case size > 200:
+			return false
+		case size > 100:
+			return performQuickAccessTest(m)
+		default:
+			return true
+		}
 	*/
 }
 
@@ -509,31 +510,31 @@ func performQuickAccessTest(m map[string]string) bool {
 	// Go 1.24严重问题：连range访问测试都会触发fatal
 	// 直接返回false，避免任何测试性map访问
 	return false
-	
+
 	/*
-	// DISABLED: range迭代会触发fatal
-	done := make(chan bool, 1)
-	go func() {
-		defer func() {
-			if recover() != nil {
-				done <- false
+		// DISABLED: range迭代会触发fatal
+		done := make(chan bool, 1)
+		go func() {
+			defer func() {
+				if recover() != nil {
+					done <- false
+				}
+			}()
+
+			for k := range m { // ← range迭代触发fatal
+				_ = k
+				done <- true
+				return
 			}
+			done <- false
 		}()
-		
-		for k := range m { // ← range迭代触发fatal
-			_ = k
-			done <- true
-			return
+
+		select {
+		case result := <-done:
+			return result
+		case <-time.After(time.Millisecond * 2):
+			return false
 		}
-		done <- false
-	}()
-	
-	select {
-	case result := <-done:
-		return result
-	case <-time.After(time.Millisecond * 2):
-		return false
-	}
 	*/
 }
 
@@ -549,15 +550,41 @@ func attemptUltraFastCopy(original, result map[string]string, timeout time.Durat
 func extractCriticalKeysOnly(original map[string]string, criticalKeys []string) map[string]string {
 	// Go 1.24安全解决方案：使用ShardedTags进行安全提取
 	shardedTags := utils.NewShardedTagsFromMap(original)
-	
+
 	result := make(map[string]string)
-	
+
 	// 安全提取指定的关键keys
 	for _, key := range criticalKeys {
 		if value, exists := shardedTags.Get(key); exists {
 			result[key] = value
 		}
 	}
-	
+
 	return result
+}
+
+// RedactConfig 返回配置的副本，其中密码、密钥、令牌等敏感字段被替换为 "***"，用于日志输出。
+func RedactConfig(config map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(config))
+	for k, v := range config {
+		lk := strings.ToLower(k)
+		sensitive := false
+		for _, w := range []string{"password", "passwd", "secret", "token", "key", "credential", "auth"} {
+			if strings.Contains(lk, w) {
+				sensitive = true
+				break
+			}
+		}
+		switch {
+		case sensitive:
+			out[k] = "***"
+		default:
+			if m, ok := v.(map[string]interface{}); ok {
+				out[k] = RedactConfig(m)
+			} else {
+				out[k] = v
+			}
+		}
+	}
+	return out
 }

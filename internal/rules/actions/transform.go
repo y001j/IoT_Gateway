@@ -17,7 +17,7 @@ import (
 )
 
 // TransformHandler Transform动作处理器
-type TransformHandler struct{
+type TransformHandler struct {
 	natsConn *nats.Conn
 }
 
@@ -38,7 +38,7 @@ func (h *TransformHandler) Execute(ctx context.Context, point model.Point, rule 
 	start := time.Now()
 
 	// 记录transform action被调用
-	log.Info().
+	log.Debug().
 		Str("rule_id", rule.ID).
 		Str("device_id", point.DeviceID).
 		Str("key", point.Key).
@@ -71,7 +71,7 @@ func (h *TransformHandler) Execute(ctx context.Context, point model.Point, rule 
 	// 发布转换后的数据到NATS
 	var publishSubject string
 	var publishError error
-	
+
 	if h.natsConn != nil {
 		// 获取发布主题
 		if subject, ok := config["publish_subject"].(string); ok && subject != "" {
@@ -83,26 +83,26 @@ func (h *TransformHandler) Execute(ctx context.Context, point model.Point, rule 
 
 		// 准备发布数据
 		publishData := map[string]interface{}{
-			"device_id":        transformedPoint.DeviceID,
-			"key":              transformedPoint.Key,
-			"value":            rules.SafeValueForJSON(transformedPoint.Value),
-			"type":             string(transformedPoint.Type),
-			"timestamp":        transformedPoint.Timestamp,
-			"tags":             rules.SafeValueForJSON(transformedPoint.GetTagsCopy()),
+			"device_id": transformedPoint.DeviceID,
+			"key":       transformedPoint.Key,
+			"value":     rules.SafeValueForJSON(transformedPoint.Value),
+			"type":      string(transformedPoint.Type),
+			"timestamp": transformedPoint.Timestamp,
+			"tags":      rules.SafeValueForJSON(transformedPoint.GetTagsCopy()),
 			"transform_info": map[string]interface{}{
-				"rule_id":          rule.ID,
-				"rule_name":        rule.Name,
-				"action":           "transform",
-				"transform_type":   transformConfig.Type,
-				"original_value":   rules.SafeValueForJSON(point.Value),
-				"transformation":   transformConfig.Type,
+				"rule_id":        rule.ID,
+				"rule_name":      rule.Name,
+				"action":         "transform",
+				"transform_type": transformConfig.Type,
+				"original_value": rules.SafeValueForJSON(point.Value),
+				"transformation": transformConfig.Type,
 			},
 			"processed_at": time.Now(),
 		}
 
 		// 序列化并发布
 		if jsonData, err := json.Marshal(publishData); err == nil {
-			if err := h.natsConn.Publish(publishSubject, jsonData); err != nil {
+			if err := rules.PublishRuleOutput(h.natsConn, publishSubject, jsonData); err != nil {
 				publishError = err
 				log.Error().Err(err).Str("subject", publishSubject).Msg("发布转换数据到NATS失败")
 			} else {
@@ -234,7 +234,9 @@ func (h *TransformHandler) parseConfig(config map[string]interface{}) (*Transfor
 // transformPoint 转换数据点
 func (h *TransformHandler) transformPoint(point model.Point, config *TransformConfig) (model.Point, error) {
 	// 创建新的数据点
-	transformedPoint := point
+	// 深拷贝（包括标签容器）：同一个数据点会被多个规则并发处理，
+	// 转换时添加的标签不能影响原数据点
+	transformedPoint := point.Clone()
 
 	// 检查是否为复合数据处理
 	if point.IsComposite() {
@@ -315,26 +317,28 @@ func (h *TransformHandler) transformPoint(point model.Point, config *TransformCo
 	// 添加新标签（保留原有标签）
 	if len(config.AddTags) > 0 {
 		// Go 1.24安全：Tags字段通过AddTag方法自动初始化
-		
+
 		// 记录标签合并过程
 		log.Debug().
 			Interface("original_tags", point.GetTagsCopy()).
 			Interface("add_tags", config.AddTags).
 			Msg("Transform action标签合并过程")
-			
+
 		for k, v := range config.AddTags {
 			// Go 1.24安全：使用AddTag方法替代直接Tags[]访问
 			transformedPoint.AddTag(k, v)
 		}
-		
+
 		// 记录合并后的标签
 		log.Debug().
 			Interface("merged_tags", transformedPoint.GetTagsCopy()).
 			Msg("Transform action标签合并完成")
 	}
 
-	// 更新时间戳
-	transformedPoint.Timestamp = time.Now()
+	// 保留采集时间戳（转换结果会作为后续动作的输入，时间戳必须表示数据的采集时间）
+	if transformedPoint.Timestamp.IsZero() {
+		transformedPoint.Timestamp = time.Now()
+	}
 
 	return transformedPoint, nil
 }
@@ -649,23 +653,23 @@ func (h *TransformHandler) evaluateSimpleExpression(expression string, value int
 func (h *TransformHandler) calculateExpression(expr string) (interface{}, error) {
 	// 移除空格
 	expr = strings.ReplaceAll(expr, " ", "")
-	
+
 	// 尝试直接解析为数字
 	if num, err := strconv.ParseFloat(expr, 64); err == nil {
 		return num, nil
 	}
-	
+
 	// 使用递归下降解析器进行表达式计算
 	parser := &ExpressionParser{expr: expr, pos: 0}
 	result, err := parser.parseExpression()
 	if err != nil {
 		return nil, fmt.Errorf("表达式计算失败: %w", err)
 	}
-	
+
 	if parser.pos < len(parser.expr) {
 		return nil, fmt.Errorf("表达式有未解析的部分: %s", expr[parser.pos:])
 	}
-	
+
 	return result, nil
 }
 
@@ -681,26 +685,26 @@ func (p *ExpressionParser) parseExpression() (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	
+
 	for p.pos < len(p.expr) {
 		op := p.peek()
 		if op != '+' && op != '-' {
 			break
 		}
 		p.advance()
-		
+
 		right, err := p.parseTerm()
 		if err != nil {
 			return 0, err
 		}
-		
+
 		if op == '+' {
 			left += right
 		} else {
 			left -= right
 		}
 	}
-	
+
 	return left, nil
 }
 
@@ -710,19 +714,19 @@ func (p *ExpressionParser) parseTerm() (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	
+
 	for p.pos < len(p.expr) {
 		op := p.peek()
 		if op != '*' && op != '/' && op != '%' {
 			break
 		}
 		p.advance()
-		
+
 		right, err := p.parseFactor()
 		if err != nil {
 			return 0, err
 		}
-		
+
 		switch op {
 		case '*':
 			left *= right
@@ -738,7 +742,7 @@ func (p *ExpressionParser) parseTerm() (float64, error) {
 			left = math.Mod(left, right)
 		}
 	}
-	
+
 	return left, nil
 }
 
@@ -753,13 +757,13 @@ func (p *ExpressionParser) parseFactor() (float64, error) {
 		}
 		return -factor, nil
 	}
-	
+
 	// 处理正号
 	if p.peek() == '+' {
 		p.advance()
 		return p.parseFactor()
 	}
-	
+
 	// 处理括号
 	if p.peek() == '(' {
 		p.advance()
@@ -773,12 +777,12 @@ func (p *ExpressionParser) parseFactor() (float64, error) {
 		p.advance()
 		return result, nil
 	}
-	
+
 	// 处理函数调用
 	if p.isAlpha(p.peek()) {
 		return p.parseFunction()
 	}
-	
+
 	// 处理数字
 	return p.parseNumber()
 }
@@ -789,24 +793,24 @@ func (p *ExpressionParser) parseFunction() (float64, error) {
 	for p.pos < len(p.expr) && (p.isAlpha(p.peek()) || p.isDigit(p.peek())) {
 		p.advance()
 	}
-	
+
 	funcName := p.expr[start:p.pos]
-	
+
 	if p.peek() != '(' {
 		return 0, fmt.Errorf("函数调用缺少左括号: %s", funcName)
 	}
 	p.advance()
-	
+
 	arg, err := p.parseExpression()
 	if err != nil {
 		return 0, err
 	}
-	
+
 	if p.peek() != ')' {
 		return 0, fmt.Errorf("函数调用缺少右括号: %s", funcName)
 	}
 	p.advance()
-	
+
 	// 计算函数值
 	switch strings.ToLower(funcName) {
 	case "abs":
@@ -848,22 +852,22 @@ func (p *ExpressionParser) parseFunction() (float64, error) {
 // parseNumber 解析数字
 func (p *ExpressionParser) parseNumber() (float64, error) {
 	start := p.pos
-	
+
 	// 处理数字部分
 	for p.pos < len(p.expr) && (p.isDigit(p.peek()) || p.peek() == '.') {
 		p.advance()
 	}
-	
+
 	if start == p.pos {
 		return 0, fmt.Errorf("期望数字，位置: %d", p.pos)
 	}
-	
+
 	numStr := p.expr[start:p.pos]
 	num, err := strconv.ParseFloat(numStr, 64)
 	if err != nil {
 		return 0, fmt.Errorf("无效数字: %s", numStr)
 	}
-	
+
 	return num, nil
 }
 
@@ -1087,8 +1091,8 @@ func (h *TransformHandler) transformCompositePoint(point model.Point, config *Tr
 	var transformedPoint model.Point
 	if compositeResult, ok := transformedValue.(model.CompositeData); ok {
 		transformedPoint = model.NewCompositePoint(
-			config.OutputKey, 
-			point.DeviceID, 
+			config.OutputKey,
+			point.DeviceID,
 			compositeResult,
 		)
 	} else {
@@ -1120,7 +1124,11 @@ func (h *TransformHandler) transformCompositePoint(point model.Point, config *Tr
 		}
 	}
 
-	transformedPoint.Timestamp = time.Now()
+	// 复合数据转换生成的新数据点沿用原数据点的采集时间
+	transformedPoint.Timestamp = point.Timestamp
+	if transformedPoint.Timestamp.IsZero() {
+		transformedPoint.Timestamp = time.Now()
+	}
 	return transformedPoint, nil
 }
 
@@ -1772,9 +1780,9 @@ func (h *TransformHandler) matrixOperationTransform(compositeData model.Composit
 		}
 		if matrixData.Rows == 3 {
 			m := matrixData.Values
-			det := m[0][0]*(m[1][1]*m[2][2] - m[1][2]*m[2][1]) -
-				  m[0][1]*(m[1][0]*m[2][2] - m[1][2]*m[2][0]) +
-				  m[0][2]*(m[1][0]*m[2][1] - m[1][1]*m[2][0])
+			det := m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1]) -
+				m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0]) +
+				m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0])
 			return det, nil
 		}
 		return nil, fmt.Errorf("仅支持2x2或3x3矩阵的行列式计算")
@@ -1791,7 +1799,7 @@ func (h *TransformHandler) matrixOperationTransform(compositeData model.Composit
 				} else {
 					return nil, fmt.Errorf("行索引参数无效")
 				}
-				
+
 				if c, ok := colParam.(int); ok {
 					col = c
 				} else if c, ok := colParam.(float64); ok {
@@ -1799,7 +1807,7 @@ func (h *TransformHandler) matrixOperationTransform(compositeData model.Composit
 				} else {
 					return nil, fmt.Errorf("列索引参数无效")
 				}
-				
+
 				if row >= 0 && row < len(matrixData.Values) && col >= 0 && col < len(matrixData.Values[row]) {
 					return matrixData.Values[row][col], nil
 				}
@@ -1919,7 +1927,7 @@ func (h *TransformHandler) timeseriesAnalysisTransform(compositeData model.Compo
 			mean += val
 		}
 		mean /= float64(len(timeseriesData.Values))
-		
+
 		variance := 0.0
 		for _, val := range timeseriesData.Values {
 			diff := val - mean
@@ -1938,7 +1946,7 @@ func (h *TransformHandler) timeseriesAnalysisTransform(compositeData model.Compo
 			mean += val
 		}
 		mean /= float64(len(timeseriesData.Values))
-		
+
 		variance := 0.0
 		for _, val := range timeseriesData.Values {
 			diff := val - mean
@@ -2093,7 +2101,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 			magnitude += val * val
 		}
 		magnitude = math.Sqrt(magnitude)
-		
+
 		if magnitude > 0 {
 			for i := range newValues {
 				newValues[i] /= magnitude
@@ -2111,7 +2119,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 			} else {
 				return nil, fmt.Errorf("缩放参数必须是数值")
 			}
-			
+
 			for i := range newValues {
 				newValues[i] *= scale
 			}
@@ -2128,7 +2136,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 	case "clamp":
 		// 限制值域
 		var minVal, maxVal float64 = -math.MaxFloat64, math.MaxFloat64
-		
+
 		if minParam, exists := parameters["min"]; exists {
 			if m, ok := minParam.(float64); ok {
 				minVal = m
@@ -2136,7 +2144,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 				minVal = float64(m)
 			}
 		}
-		
+
 		if maxParam, exists := parameters["max"]; exists {
 			if m, ok := maxParam.(float64); ok {
 				maxVal = m
@@ -2144,7 +2152,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 				maxVal = float64(m)
 			}
 		}
-		
+
 		for i := range newValues {
 			if newValues[i] < minVal {
 				newValues[i] = minVal
@@ -2165,7 +2173,7 @@ func (h *TransformHandler) vectorTransformTransform(compositeData model.Composit
 			} else {
 				return nil, fmt.Errorf("偏移参数必须是数值")
 			}
-			
+
 			for i := range newValues {
 				newValues[i] += offset
 			}
@@ -2210,16 +2218,16 @@ func (h *TransformHandler) geoGeofenceTransform(compositeData model.CompositeDat
 
 	// 计算距离（使用Haversine公式）
 	distance := h.haversineDistance(locationData.Latitude, locationData.Longitude, centerLat, centerLng)
-	
+
 	// 检查是否在围栏内
 	inFence := distance <= radius
-	
+
 	return map[string]interface{}{
-		"in_fence": inFence,
-		"distance": distance,
+		"in_fence":   inFence,
+		"distance":   distance,
 		"center_lat": centerLat,
 		"center_lng": centerLng,
-		"radius": radius,
+		"radius":     radius,
 	}, nil
 }
 
@@ -2242,7 +2250,7 @@ func (h *TransformHandler) geoCoordinateConvertTransform(compositeData model.Com
 
 	// 简化的坐标系转换实现（实际项目中应使用专业的坐标转换库）
 	var convertedLat, convertedLng float64
-	
+
 	switch sourceSystem + "_to_" + targetSystem {
 	case "WGS84_to_GCJ02":
 		// WGS84 转 GCJ02 (火星坐标系)
@@ -2299,20 +2307,20 @@ func (h *TransformHandler) vectorProjectionTransform(compositeData model.Composi
 
 	// 计算投影: proj = (v·u / |u|²) × u
 	vx, vy, vz := vectorData.Values[0], vectorData.Values[1], vectorData.Values[2]
-	
+
 	// 点积 v·u
 	dotProduct := vx*refX + vy*refY + vz*refZ
-	
+
 	// |u|²
 	refMagnitudeSquared := refX*refX + refY*refY + refZ*refZ
-	
+
 	if refMagnitudeSquared == 0 {
 		return nil, fmt.Errorf("参考向量不能为零向量")
 	}
-	
+
 	// 投影比例
 	projectionScale := dotProduct / refMagnitudeSquared
-	
+
 	// 投影向量
 	projX := projectionScale * refX
 	projY := projectionScale * refY
@@ -2353,7 +2361,7 @@ func (h *TransformHandler) vectorCrossTransform(compositeData model.CompositeDat
 
 	// 计算叉积: v × u = (vy*uz - vz*uy, vz*ux - vx*uz, vx*uy - vy*ux)
 	vx, vy, vz := vectorData.Values[0], vectorData.Values[1], vectorData.Values[2]
-	
+
 	crossX := vy*refZ - vz*refY
 	crossY := vz*refX - vx*refZ
 	crossZ := vx*refY - vy*refX
@@ -2422,8 +2430,8 @@ func (h *TransformHandler) colorSimilarityTransform(compositeData model.Composit
 	// 使用欧几里得距离计算颜色相似度
 	distance := math.Sqrt(
 		math.Pow(float64(colorData.R)-refR, 2) +
-		math.Pow(float64(colorData.G)-refG, 2) +
-		math.Pow(float64(colorData.B)-refB, 2),
+			math.Pow(float64(colorData.G)-refG, 2) +
+			math.Pow(float64(colorData.B)-refB, 2),
 	)
 
 	// 归一化相似度 (0-1)，距离越小相似度越高
@@ -2446,10 +2454,10 @@ func (h *TransformHandler) colorExtractDominantTransform(compositeData model.Com
 
 	// 简化的主色调提取：找到RGB中的最大分量
 	r, g, b := float64(colorData.R), float64(colorData.G), float64(colorData.B)
-	
+
 	var dominantColor string
 	var dominantValue float64
-	
+
 	if r >= g && r >= b {
 		dominantColor = "red"
 		dominantValue = r
@@ -2463,7 +2471,7 @@ func (h *TransformHandler) colorExtractDominantTransform(compositeData model.Com
 
 	// 计算颜色强度
 	intensity := (r + g + b) / 3
-	
+
 	// 计算饱和度
 	maxVal := math.Max(r, math.Max(g, b))
 	minVal := math.Min(r, math.Min(g, b))
@@ -2487,17 +2495,17 @@ func (h *TransformHandler) colorExtractDominantTransform(compositeData model.Com
 func (h *TransformHandler) wgs84ToGcj02(lat, lng float64) (float64, float64) {
 	const a = 6378245.0
 	const ee = 0.00669342162296594323
-	
+
 	dLat := h.transformLat(lng-105.0, lat-35.0)
 	dLng := h.transformLng(lng-105.0, lat-35.0)
-	
+
 	radLat := lat / 180.0 * math.Pi
 	magic := math.Sin(radLat)
 	magic = 1 - ee*magic*magic
 	sqrtMagic := math.Sqrt(magic)
 	dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * math.Pi)
 	dLng = (dLng * 180.0) / (a / sqrtMagic * math.Cos(radLat) * math.Pi)
-	
+
 	return lat + dLat, lng + dLng
 }
 
@@ -2522,7 +2530,7 @@ func (h *TransformHandler) bd09ToGcj02(lat, lng float64) (float64, float64) {
 	y := lat - 0.006
 	z := math.Sqrt(x*x+y*y) - 0.00002*math.Sin(y*x_pi)
 	theta := math.Atan2(y, x) - 0.000003*math.Cos(x*x_pi)
-	return z*math.Sin(theta), z*math.Cos(theta)
+	return z * math.Sin(theta), z * math.Cos(theta)
 }
 
 // transformLat 纬度转换辅助函数
@@ -2568,9 +2576,9 @@ func (h *TransformHandler) performTrendAnalysis(timeseriesData *model.TimeSeries
 		slope, intercept := h.calculateLinearTrend(timeseriesData.Values)
 		return map[string]interface{}{
 			"trend_direction": h.getTrendDirection(slope),
-			"slope":          slope,
-			"intercept":      intercept,
-			"strength":       math.Abs(slope),
+			"slope":           slope,
+			"intercept":       intercept,
+			"strength":        math.Abs(slope),
 		}, nil
 
 	case "polynomial":
@@ -2793,8 +2801,8 @@ func (h *TransformHandler) performCorrelationAnalysis(timeseriesData *model.Time
 
 	return map[string]interface{}{
 		"autocorrelation": autocorrelation,
-		"lag":            lag,
-		"significance":   h.getCorrelationSignificance(autocorrelation),
+		"lag":             lag,
+		"significance":    h.getCorrelationSignificance(autocorrelation),
 	}, nil
 }
 
@@ -2833,15 +2841,15 @@ func (h *TransformHandler) calculatePolynomialTrend(values []float64, window int
 	if window > len(values) {
 		window = len(values)
 	}
-	
+
 	recentValues := values[len(values)-window:]
 	slope, intercept := h.calculateLinearTrend(recentValues)
-	
+
 	return map[string]interface{}{
 		"trend_direction": h.getTrendDirection(slope),
-		"slope":          slope,
-		"intercept":      intercept,
-		"window_size":    window,
+		"slope":           slope,
+		"intercept":       intercept,
+		"window_size":     window,
 	}, nil
 }
 
@@ -2850,10 +2858,10 @@ func (h *TransformHandler) calculateExponentialTrend(values []float64) (interfac
 	if len(values) < 2 {
 		return nil, fmt.Errorf("数据点不足")
 	}
-	
+
 	// 计算指数增长率
 	growthRate := (values[len(values)-1] - values[0]) / values[0]
-	
+
 	return map[string]interface{}{
 		"growth_rate":     growthRate,
 		"trend_direction": h.getTrendDirection(growthRate),
@@ -2865,7 +2873,7 @@ func (h *TransformHandler) calculateSeasonalTrend(values []float64, period int) 
 	if len(values) < period*2 {
 		return nil, fmt.Errorf("数据点不足，需要至少%d个点", period*2)
 	}
-	
+
 	// 简化的季节性趋势分析
 	seasonalMeans := make([]float64, period)
 	for i := 0; i < period; i++ {
@@ -2879,11 +2887,11 @@ func (h *TransformHandler) calculateSeasonalTrend(values []float64, period int) 
 			seasonalMeans[i] = sum / float64(count)
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"seasonal_means": seasonalMeans,
-		"period":        period,
-		"seasonal":      true,
+		"period":         period,
+		"seasonal":       true,
 	}, nil
 }
 
@@ -2896,10 +2904,10 @@ func (h *TransformHandler) performAdditiveDecomposition(values []float64, period
 
 	// 计算趋势分量（使用移动平均）
 	trend := h.calculateMovingAverageForDecomposition(values, period)
-	
+
 	// 计算季节性分量
 	seasonal := h.calculateSeasonalComponent(values, trend, period, "additive")
-	
+
 	// 计算随机分量
 	random := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -2922,10 +2930,10 @@ func (h *TransformHandler) performMultiplicativeDecomposition(values []float64, 
 
 	// 计算趋势分量
 	trend := h.calculateMovingAverageForDecomposition(values, period)
-	
+
 	// 计算季节性分量
 	seasonal := h.calculateSeasonalComponent(values, trend, period, "multiplicative")
-	
+
 	// 计算随机分量
 	random := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -2948,7 +2956,7 @@ func (h *TransformHandler) performMultiplicativeDecomposition(values []float64, 
 func (h *TransformHandler) calculateSlidingAverage(values []float64, window int) (interface{}, error) {
 	n := len(values)
 	result := make([]float64, n-window+1)
-	
+
 	for i := 0; i <= n-window; i++ {
 		sum := 0.0
 		for j := i; j < i+window; j++ {
@@ -2956,7 +2964,7 @@ func (h *TransformHandler) calculateSlidingAverage(values []float64, window int)
 		}
 		result[i] = sum / float64(window)
 	}
-	
+
 	return &model.TimeSeriesData{
 		Values: result,
 	}, nil
@@ -2966,12 +2974,12 @@ func (h *TransformHandler) calculateExpandingAverage(values []float64) (interfac
 	n := len(values)
 	result := make([]float64, n)
 	sum := 0.0
-	
+
 	for i := 0; i < n; i++ {
 		sum += values[i]
 		result[i] = sum / float64(i+1)
 	}
-	
+
 	return &model.TimeSeriesData{
 		Values: result,
 	}, nil
@@ -2980,20 +2988,20 @@ func (h *TransformHandler) calculateExpandingAverage(values []float64) (interfac
 func (h *TransformHandler) calculateFixedWindowAverage(values []float64, window int) (interface{}, error) {
 	n := len(values)
 	result := make([]float64, 0)
-	
+
 	for i := 0; i < n; i += window {
 		end := i + window
 		if end > n {
 			end = n
 		}
-		
+
 		sum := 0.0
 		for j := i; j < end; j++ {
 			sum += values[j]
 		}
 		result = append(result, sum/float64(end-i))
 	}
-	
+
 	return &model.TimeSeriesData{
 		Values: result,
 	}, nil
@@ -3004,7 +3012,7 @@ func (h *TransformHandler) calculateFirstDifference(values []float64) []float64 
 	if len(values) <= 1 {
 		return []float64{}
 	}
-	
+
 	result := make([]float64, len(values)-1)
 	for i := 1; i < len(values); i++ {
 		result[i-1] = values[i] - values[i-1]
@@ -3016,7 +3024,7 @@ func (h *TransformHandler) calculateSeasonalDifference(values []float64, period 
 	if len(values) <= period {
 		return []float64{}
 	}
-	
+
 	result := make([]float64, len(values)-period)
 	for i := period; i < len(values); i++ {
 		result[i-period] = values[i] - values[i-period]
@@ -3029,13 +3037,13 @@ func (h *TransformHandler) resampleToHour(values []float64, method string) (inte
 	// 简化实现：假设原始数据是分钟级别，重采样到小时级别
 	hourlyValues := make([]float64, 0)
 	windowSize := 60 // 60分钟
-	
+
 	for i := 0; i < len(values); i += windowSize {
 		end := i + windowSize
 		if end > len(values) {
 			end = len(values)
 		}
-		
+
 		var aggregated float64
 		switch method {
 		case "mean":
@@ -3071,7 +3079,7 @@ func (h *TransformHandler) resampleToHour(values []float64, method string) (inte
 		}
 		hourlyValues = append(hourlyValues, aggregated)
 	}
-	
+
 	return &model.TimeSeriesData{
 		Values: hourlyValues,
 	}, nil
@@ -3153,14 +3161,14 @@ func (h *TransformHandler) detectAnomaliesLocalOutlier(values []float64, thresho
 // 预测辅助函数
 func (h *TransformHandler) forecastLinear(values []float64, steps int) (interface{}, error) {
 	slope, intercept := h.calculateLinearTrend(values)
-	
+
 	forecast := make([]float64, steps)
 	n := float64(len(values))
-	
+
 	for i := 0; i < steps; i++ {
 		forecast[i] = slope*(n+float64(i)) + intercept
 	}
-	
+
 	return map[string]interface{}{
 		"forecast": forecast,
 		"method":   "linear",
@@ -3172,21 +3180,21 @@ func (h *TransformHandler) forecastExponentialSmoothing(values []float64, steps 
 	if len(values) < 2 {
 		return nil, fmt.Errorf("数据点不足")
 	}
-	
+
 	alpha := 0.3 // 平滑参数
 	forecast := make([]float64, steps)
-	
+
 	// 初始值
 	smoothed := values[0]
 	for i := 1; i < len(values); i++ {
 		smoothed = alpha*values[i] + (1-alpha)*smoothed
 	}
-	
+
 	// 预测
 	for i := 0; i < steps; i++ {
 		forecast[i] = smoothed
 	}
-	
+
 	return map[string]interface{}{
 		"forecast": forecast,
 		"method":   "exponential_smoothing",
@@ -3199,7 +3207,7 @@ func (h *TransformHandler) forecastSeasonalNaive(values []float64, steps int) (i
 	if len(values) < seasonalPeriod {
 		seasonalPeriod = len(values)
 	}
-	
+
 	forecast := make([]float64, steps)
 	for i := 0; i < steps; i++ {
 		idx := len(values) - seasonalPeriod + (i % seasonalPeriod)
@@ -3207,7 +3215,7 @@ func (h *TransformHandler) forecastSeasonalNaive(values []float64, steps int) (i
 			forecast[i] = values[idx]
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"forecast": forecast,
 		"method":   "seasonal_naive",
@@ -3269,26 +3277,26 @@ func (h *TransformHandler) getCorrelationSignificance(correlation float64) strin
 func (h *TransformHandler) calculateMovingAverageForDecomposition(values []float64, period int) []float64 {
 	n := len(values)
 	trend := make([]float64, n)
-	
+
 	for i := 0; i < n; i++ {
 		if i < period/2 || i >= n-period/2 {
 			trend[i] = values[i] // 边界值直接使用原值
 		} else {
 			sum := 0.0
-			for j := i - period/2; j <= i + period/2; j++ {
+			for j := i - period/2; j <= i+period/2; j++ {
 				sum += values[j]
 			}
 			trend[i] = sum / float64(period)
 		}
 	}
-	
+
 	return trend
 }
 
 func (h *TransformHandler) calculateSeasonalComponent(values, trend []float64, period int, model string) []float64 {
 	seasonal := make([]float64, period)
 	counts := make([]int, period)
-	
+
 	for i := 0; i < len(values); i++ {
 		seasonIndex := i % period
 		if model == "additive" {
@@ -3300,14 +3308,14 @@ func (h *TransformHandler) calculateSeasonalComponent(values, trend []float64, p
 		}
 		counts[seasonIndex]++
 	}
-	
+
 	// 平均化季节性分量
 	for i := 0; i < period; i++ {
 		if counts[i] > 0 {
 			seasonal[i] /= float64(counts[i])
 		}
 	}
-	
+
 	// 标准化季节性分量
 	if model == "additive" {
 		// 加法模型：确保季节性分量和为0
@@ -3332,7 +3340,7 @@ func (h *TransformHandler) calculateSeasonalComponent(values, trend []float64, p
 			seasonal[i] *= adjustment
 		}
 	}
-	
+
 	return seasonal
 }
 
@@ -3353,7 +3361,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 		// 数值范围过滤
 		minVal, hasMin := parameters["min_value"]
 		maxVal, hasMax := parameters["max_value"]
-		
+
 		var min, max float64
 		if hasMin {
 			if minFloat, ok := minVal.(float64); ok {
@@ -3385,7 +3393,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 				}
 			}
 		}
-		
+
 		return &model.ArrayData{
 			Values:   filteredValues,
 			DataType: arrayData.DataType,
@@ -3400,7 +3408,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 		if !ok {
 			method = "zscore"
 		}
-		
+
 		threshold := 3.0
 		if t, exists := parameters["outlier_threshold"]; exists {
 			if tFloat, ok := t.(float64); ok {
@@ -3411,7 +3419,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 		// 转换为数值数组
 		numericValues := make([]float64, 0)
 		valueMap := make(map[int]interface{})
-		
+
 		for _, val := range arrayData.Values {
 			if num, err := h.toFloat64(val); err == nil {
 				numericValues = append(numericValues, num)
@@ -3425,7 +3433,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 
 		// 根据方法检测异常值
 		var isOutlier []bool
-		
+
 		switch method {
 		case "zscore":
 			isOutlier = h.detectOutliersZScore(numericValues, threshold)
@@ -3502,8 +3510,8 @@ func (h *TransformHandler) arraySortTransform(compositeData model.CompositeData,
 
 	// 创建索引-值对
 	type IndexValue struct {
-		Index int
-		Value interface{}
+		Index  int
+		Value  interface{}
 		NumVal float64
 		AbsVal float64
 	}
@@ -3513,8 +3521,8 @@ func (h *TransformHandler) arraySortTransform(compositeData model.CompositeData,
 		numVal, _ := h.toFloat64(val)
 		absVal := math.Abs(numVal)
 		pairs[i] = IndexValue{
-			Index: i,
-			Value: val,
+			Index:  i,
+			Value:  val,
 			NumVal: numVal,
 			AbsVal: absVal,
 		}
@@ -3523,7 +3531,7 @@ func (h *TransformHandler) arraySortTransform(compositeData model.CompositeData,
 	// 排序
 	sort.Slice(pairs, func(i, j int) bool {
 		var compareVal bool
-		
+
 		switch sortBy {
 		case "value":
 			compareVal = pairs[i].NumVal < pairs[j].NumVal
@@ -3842,7 +3850,7 @@ func (h *TransformHandler) detectOutliersZScore(values []float64, threshold floa
 	// 检测异常值
 	isOutlier := make([]bool, len(values))
 	for i, v := range values {
-		zscore := math.Abs(v - mean) / stddev
+		zscore := math.Abs(v-mean) / stddev
 		isOutlier[i] = zscore > threshold
 	}
 
@@ -3890,9 +3898,9 @@ func (h *TransformHandler) detectOutliersPercentile(values []float64, threshold 
 
 	// 计算百分位数边界
 	n := len(sorted)
-	lowerIndex := int((100-threshold*100)/200 * float64(n))
-	upperIndex := int((100+threshold*100)/200 * float64(n))
-	
+	lowerIndex := int((100 - threshold*100) / 200 * float64(n))
+	upperIndex := int((100 + threshold*100) / 200 * float64(n))
+
 	if lowerIndex < 0 {
 		lowerIndex = 0
 	}
@@ -3951,7 +3959,7 @@ func (h *TransformHandler) evaluateFilterExpression(expr string, value float64) 
 		parts := strings.Split(expr, "==")
 		if len(parts) == 2 {
 			if threshold, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64); err == nil {
-				return math.Abs(value - threshold) < 1e-10
+				return math.Abs(value-threshold) < 1e-10
 			}
 		}
 	}
@@ -3966,25 +3974,25 @@ func (h *TransformHandler) movingAverage(values []float64, window int) []float64
 	}
 
 	result := make([]float64, len(values))
-	
+
 	for i := range values {
 		start := max(0, i-window/2)
 		end := min(len(values), i+window/2+1)
-		
+
 		sum := 0.0
 		count := 0
 		for j := start; j < end; j++ {
 			sum += values[j]
 			count++
 		}
-		
+
 		if count > 0 {
 			result[i] = sum / float64(count)
 		} else {
 			result[i] = values[i]
 		}
 	}
-	
+
 	return result
 }
 
@@ -3996,25 +4004,25 @@ func (h *TransformHandler) gaussianSmooth(values []float64, window int) []float6
 	// 简化的高斯平滑（使用固定权重）
 	result := make([]float64, len(values))
 	sigma := float64(window) / 6.0 // 标准差
-	
+
 	for i := range values {
 		weightedSum := 0.0
 		totalWeight := 0.0
-		
+
 		for j := max(0, i-window); j < min(len(values), i+window+1); j++ {
 			distance := float64(i - j)
-			weight := math.Exp(-(distance*distance)/(2*sigma*sigma))
+			weight := math.Exp(-(distance * distance) / (2 * sigma * sigma))
 			weightedSum += values[j] * weight
 			totalWeight += weight
 		}
-		
+
 		if totalWeight > 0 {
 			result[i] = weightedSum / totalWeight
 		} else {
 			result[i] = values[i]
 		}
 	}
-	
+
 	return result
 }
 
@@ -4026,11 +4034,11 @@ func (h *TransformHandler) savgolSmooth(values []float64, window int) []float64 
 
 	result := make([]float64, len(values))
 	halfWindow := window / 2
-	
+
 	for i := range values {
 		start := max(0, i-halfWindow)
 		end := min(len(values), i+halfWindow+1)
-		
+
 		// 简化为移动平均（实际Savgol需要多项式拟合）
 		sum := 0.0
 		count := 0
@@ -4038,14 +4046,14 @@ func (h *TransformHandler) savgolSmooth(values []float64, window int) []float64 
 			sum += values[j]
 			count++
 		}
-		
+
 		if count > 0 {
 			result[i] = sum / float64(count)
 		} else {
 			result[i] = values[i]
 		}
 	}
-	
+
 	return result
 }
 
@@ -4057,7 +4065,7 @@ func (h *TransformHandler) minMaxNormalize(values []float64) []float64 {
 
 	min := values[0]
 	max := values[0]
-	
+
 	for _, v := range values {
 		if v < min {
 			min = v
@@ -4164,7 +4172,7 @@ func (h *TransformHandler) calculatePercentile(arrayData *model.ArrayData, perce
 			numericValues = append(numericValues, num)
 		}
 	}
-	
+
 	if len(numericValues) == 0 {
 		return 0.0, nil
 	}
@@ -4175,7 +4183,7 @@ func (h *TransformHandler) calculatePercentile(arrayData *model.ArrayData, perce
 
 	// 计算百分位数位置
 	pos := percentile / 100.0 * float64(n-1)
-	
+
 	if pos == float64(int(pos)) {
 		// 整数位置
 		return numericValues[int(pos)], nil
@@ -4183,11 +4191,11 @@ func (h *TransformHandler) calculatePercentile(arrayData *model.ArrayData, perce
 		// 插值计算
 		lower := int(math.Floor(pos))
 		upper := int(math.Ceil(pos))
-		
+
 		if upper >= n {
 			return numericValues[n-1], nil
 		}
-		
+
 		weight := pos - float64(lower)
 		return numericValues[lower]*(1-weight) + numericValues[upper]*weight, nil
 	}
@@ -4239,22 +4247,22 @@ func (h *TransformHandler) GeoTransformDispatch(compositeData model.CompositeDat
 		// 距离计算
 		result, err := h.geoDistanceTransform(compositeData, convertedParams)
 		return result, model.TypeFloat, err
-		
+
 	case "bearing":
 		// 方位角计算
 		result, err := h.geoBearingTransform(compositeData, convertedParams)
 		return result, model.TypeFloat, err
-		
+
 	case "geofence":
 		// 地理围栏检查
 		result, err := h.geoGeofenceTransform(compositeData, convertedParams)
 		return result, model.TypeFloat, err
-		
+
 	case "coordinate_convert":
 		// 坐标系转换
 		result, err := h.geoCoordinateConvertTransform(compositeData, convertedParams)
 		return result, model.TypeLocation, err
-		
+
 	default:
 		return nil, model.TypeFloat, fmt.Errorf("不支持的GPS操作类型: %s", subType)
 	}
@@ -4312,32 +4320,32 @@ func (h *TransformHandler) VectorTransformDispatch(compositeData model.Composite
 		// 向量模长计算
 		result, err := h.vectorMagnitudeFromVectorData(vectorData, convertedParams)
 		return result, model.TypeFloat, err
-		
+
 	case "normalize":
 		// 向量归一化
 		result, err := h.vectorNormalizeFromVectorData(vectorData, convertedParams)
 		return result, model.TypeVector3D, err
-		
+
 	case "projection":
 		// 向量投影
 		result, err := h.vectorProjectionTransform(vectorData, convertedParams)
 		return result, model.TypeVector3D, err
-		
+
 	case "cross_product":
 		// 向量叉积
 		result, err := h.vectorCrossTransform(vectorData, convertedParams)
 		return result, model.TypeVector3D, err
-		
+
 	case "dot_product":
 		// 向量点积
 		result, err := h.vectorDotTransform(vectorData, convertedParams)
 		return result, model.TypeFloat, err
-		
+
 	case "rotation":
 		// 向量旋转
 		result, err := h.vectorRotationTransform(vectorData, convertedParams)
 		return result, model.TypeVector3D, err
-		
+
 	default:
 		return nil, model.TypeFloat, fmt.Errorf("不支持的向量操作类型: %s", subType)
 	}
@@ -4382,7 +4390,7 @@ func (h *TransformHandler) vectorNormalizeFromVectorData(vectorData *model.Vecto
 
 	x, y, z := vectorData.Values[0], vectorData.Values[1], vectorData.Values[2]
 	magnitude := math.Sqrt(x*x + y*y + z*z)
-	
+
 	if magnitude == 0 {
 		return &model.VectorData{
 			Values:    []float64{0, 0, 0},
@@ -4420,7 +4428,7 @@ func (h *TransformHandler) vectorRotationTransform(vectorData *model.VectorData,
 	if !ok {
 		return nil, fmt.Errorf("缺少旋转角度参数")
 	}
-	
+
 	// 转换为弧度
 	angleRad := angle * math.Pi / 180.0
 
@@ -4500,9 +4508,9 @@ func (h *TransformHandler) parseTemplateString(templateStr string, point model.P
 	if templateStr == "" {
 		return templateStr
 	}
-	
+
 	result := templateStr
-	
+
 	// 替换基本变量
 	replacements := map[string]string{
 		"{{.DeviceID}}":  point.DeviceID,
@@ -4511,17 +4519,17 @@ func (h *TransformHandler) parseTemplateString(templateStr string, point model.P
 		"{{.Type}}":      string(point.Type),
 		"{{.Timestamp}}": point.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
 	}
-	
+
 	for placeholder, value := range replacements {
 		result = strings.ReplaceAll(result, placeholder, value)
 	}
-	
+
 	// 处理标签模板
 	pointTags := point.GetTagsSafe()
 	for key, value := range pointTags {
 		placeholder := fmt.Sprintf("{{.Tags.%s}}", key)
 		result = strings.ReplaceAll(result, placeholder, value)
 	}
-	
+
 	return result
 }

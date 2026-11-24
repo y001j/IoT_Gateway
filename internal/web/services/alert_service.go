@@ -39,8 +39,8 @@ type alertService struct {
 	alerts               map[string]*models.Alert
 	alertRules           map[string]*models.AlertRule
 	notificationChannels map[string]*models.NotificationChannel
-	mu                   sync.RWMutex  // 添加读写锁保护
-	alertSubscriber      *AlertSubscriber  // NATS告警订阅器
+	mu                   sync.RWMutex     // 添加读写锁保护
+	alertSubscriber      *AlertSubscriber // NATS告警订阅器
 	idCounter            int64            // ID计数器，确保唯一性
 }
 
@@ -120,8 +120,8 @@ func (s *alertService) initializeDefaultData() {
 				Value:    80.0,
 			},
 			NotificationChannels: []string{"channel-001", "channel-002"},
-			CreatedAt:           time.Now().Add(-24 * time.Hour),
-			UpdatedAt:           time.Now().Add(-24 * time.Hour),
+			CreatedAt:            time.Now().Add(-24 * time.Hour),
+			UpdatedAt:            time.Now().Add(-24 * time.Hour),
 		},
 		{
 			ID:          "rule-002",
@@ -136,8 +136,8 @@ func (s *alertService) initializeDefaultData() {
 				Value:    "5m",
 			},
 			NotificationChannels: []string{"channel-001"},
-			CreatedAt:           time.Now().Add(-24 * time.Hour),
-			UpdatedAt:           time.Now().Add(-24 * time.Hour),
+			CreatedAt:            time.Now().Add(-24 * time.Hour),
+			UpdatedAt:            time.Now().Add(-24 * time.Hour),
 		},
 	}
 
@@ -148,10 +148,10 @@ func (s *alertService) initializeDefaultData() {
 	// 创建一些示例通知渠道
 	channels := []*models.NotificationChannel{
 		{
-			ID:          "channel-001",
-			Name:        "邮件通知",
-			Type:        "email",
-			Enabled:     true,
+			ID:      "channel-001",
+			Name:    "邮件通知",
+			Type:    "email",
+			Enabled: true,
 			Config: map[string]interface{}{
 				"recipients": []string{"admin@example.com", "ops@example.com"},
 				"smtp_host":  "smtp.example.com",
@@ -161,10 +161,10 @@ func (s *alertService) initializeDefaultData() {
 			UpdatedAt: time.Now().Add(-24 * time.Hour),
 		},
 		{
-			ID:          "channel-002",
-			Name:        "Webhook通知",
-			Type:        "webhook",
-			Enabled:     true,
+			ID:      "channel-002",
+			Name:    "Webhook通知",
+			Type:    "webhook",
+			Enabled: true,
 			Config: map[string]interface{}{
 				"url":    "https://hooks.example.com/alerts",
 				"method": "POST",
@@ -186,17 +186,17 @@ func (s *alertService) initializeDefaultData() {
 func (s *alertService) GetAlerts(req *models.AlertListRequest) ([]models.Alert, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	alerts := make([]models.Alert, 0)
-	
+
 	// 合并本地告警和规则引擎告警
 	allAlerts := make(map[string]*models.Alert)
-	
+
 	// 添加本地告警
 	for id, alert := range s.alerts {
 		allAlerts[id] = alert
 	}
-	
+
 	// 添加规则引擎告警
 	if s.alertSubscriber != nil {
 		ruleAlerts := s.alertSubscriber.GetAlertStore().GetAlerts()
@@ -204,21 +204,21 @@ func (s *alertService) GetAlerts(req *models.AlertListRequest) ([]models.Alert, 
 			allAlerts[alert.ID] = alert
 		}
 	}
-	
+
 	// 应用过滤器
 	for _, alert := range allAlerts {
 		if req.Level != "" && alert.Level != req.Level {
 			continue
 		}
-		
+
 		if req.Status != "" && alert.Status != req.Status {
 			continue
 		}
-		
+
 		if req.Source != "" && alert.Source != req.Source {
 			continue
 		}
-		
+
 		if req.Search != "" {
 			searchTerm := strings.ToLower(req.Search)
 			if !strings.Contains(strings.ToLower(alert.Title), searchTerm) &&
@@ -226,36 +226,36 @@ func (s *alertService) GetAlerts(req *models.AlertListRequest) ([]models.Alert, 
 				continue
 			}
 		}
-		
+
 		// 时间范围过滤
 		if !req.StartTime.IsZero() && alert.CreatedAt.Before(req.StartTime) {
 			continue
 		}
-		
+
 		if !req.EndTime.IsZero() && alert.CreatedAt.After(req.EndTime) {
 			continue
 		}
-		
+
 		alerts = append(alerts, *alert)
 	}
-	
+
 	// 排序
 	sort.Slice(alerts, func(i, j int) bool {
 		return alerts[i].CreatedAt.After(alerts[j].CreatedAt)
 	})
-	
+
 	// 分页
 	total := len(alerts)
 	start := (req.Page - 1) * req.PageSize
 	end := start + req.PageSize
-	
+
 	if start >= total {
 		return []models.Alert{}, total, nil
 	}
 	if end > total {
 		end = total
 	}
-	
+
 	return alerts[start:end], total, nil
 }
 
@@ -263,19 +263,20 @@ func (s *alertService) GetAlerts(req *models.AlertListRequest) ([]models.Alert, 
 func (s *alertService) GetAlert(id string) (*models.Alert, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
-	// 先从本地告警查找
+
+	// 先从本地告警查找。返回副本：以前返回内部指针，调用方在锁外读取时与 Resolve/Update 存在数据竞争
 	if alert, exists := s.alerts[id]; exists {
-		return alert, nil
+		cp := *alert
+		return &cp, nil
 	}
-	
+
 	// 再从规则引擎告警查找
 	if s.alertSubscriber != nil {
 		if alert, exists := s.alertSubscriber.GetAlertStore().GetAlert(id); exists {
 			return alert, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("告警未找到: %s", id)
 }
 
@@ -283,7 +284,7 @@ func (s *alertService) GetAlert(id string) (*models.Alert, error) {
 func (s *alertService) CreateAlert(req *models.AlertCreateRequest) (*models.Alert, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// 使用计数器确保ID唯一性，避免纳秒时间戳冲突
 	s.idCounter++
 	alert := &models.Alert{
@@ -297,7 +298,7 @@ func (s *alertService) CreateAlert(req *models.AlertCreateRequest) (*models.Aler
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-	
+
 	s.alerts[alert.ID] = alert
 	log.Info().
 		Str("alert_id", alert.ID).
@@ -305,20 +306,21 @@ func (s *alertService) CreateAlert(req *models.AlertCreateRequest) (*models.Aler
 		Str("source", alert.Source).
 		Str("title", alert.Title).
 		Msg("Alert created successfully")
-	
-	return alert, nil
+
+	cp := *alert
+	return &cp, nil
 }
 
 // UpdateAlert 更新告警
 func (s *alertService) UpdateAlert(id string, req *models.AlertUpdateRequest) (*models.Alert, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	alert, exists := s.alerts[id]
 	if !exists {
 		return nil, fmt.Errorf("告警未找到: %s", id)
 	}
-	
+
 	if req.Title != "" {
 		alert.Title = req.Title
 	}
@@ -334,16 +336,17 @@ func (s *alertService) UpdateAlert(id string, req *models.AlertUpdateRequest) (*
 	if req.Data != nil {
 		alert.Data = req.Data
 	}
-	
+
 	alert.UpdatedAt = time.Now()
-	return alert, nil
+	cp := *alert
+	return &cp, nil
 }
 
 // DeleteAlert 删除告警
 func (s *alertService) DeleteAlert(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if _, exists := s.alerts[id]; !exists {
 		return fmt.Errorf("告警未找到: %s", id)
 	}
@@ -355,7 +358,7 @@ func (s *alertService) DeleteAlert(id string) error {
 func (s *alertService) AcknowledgeAlert(id string, userID string, comment string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// 先检查本地告警
 	if alert, exists := s.alerts[id]; exists {
 		now := time.Now()
@@ -366,7 +369,7 @@ func (s *alertService) AcknowledgeAlert(id string, userID string, comment string
 		alert.UpdatedAt = now
 		return nil
 	}
-	
+
 	// 检查规则引擎告警
 	if s.alertSubscriber != nil {
 		if alert, exists := s.alertSubscriber.GetAlertStore().GetAlert(id); exists {
@@ -380,7 +383,7 @@ func (s *alertService) AcknowledgeAlert(id string, userID string, comment string
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("告警未找到: %s", id)
 }
 
@@ -388,7 +391,7 @@ func (s *alertService) AcknowledgeAlert(id string, userID string, comment string
 func (s *alertService) ResolveAlert(id string, userID string, comment string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// 先检查本地告警
 	if alert, exists := s.alerts[id]; exists {
 		now := time.Now()
@@ -399,7 +402,7 @@ func (s *alertService) ResolveAlert(id string, userID string, comment string) er
 		alert.UpdatedAt = now
 		return nil
 	}
-	
+
 	// 检查规则引擎告警
 	if s.alertSubscriber != nil {
 		if alert, exists := s.alertSubscriber.GetAlertStore().GetAlert(id); exists {
@@ -413,7 +416,7 @@ func (s *alertService) ResolveAlert(id string, userID string, comment string) er
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("告警未找到: %s", id)
 }
 
@@ -421,7 +424,7 @@ func (s *alertService) ResolveAlert(id string, userID string, comment string) er
 func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	stats := &models.AlertStats{
 		Total:        0,
 		Active:       0,
@@ -434,20 +437,20 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 			"error":    0,
 			"critical": 0,
 		},
-		BySource: make(map[string]int),
+		BySource:     make(map[string]int),
 		RecentTrends: []models.AlertTrend{},
 	}
-	
+
 	// 合并本地告警和规则引擎告警
 	allAlerts := make(map[string]*models.Alert)
-	
+
 	// 添加本地告警（带调试日志）
 	localCount := 0
 	for id, alert := range s.alerts {
 		allAlerts[id] = alert
 		localCount++
 	}
-	
+
 	// 添加规则引擎告警（带调试日志和错误处理）
 	ruleEngineCount := 0
 	if s.alertSubscriber != nil {
@@ -457,7 +460,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 					log.Error().Interface("panic", r).Msg("Panic occurred while getting rule engine alerts")
 				}
 			}()
-			
+
 			ruleAlerts := s.alertSubscriber.GetAlertStore().GetAlerts()
 			for _, alert := range ruleAlerts {
 				// 避免重复ID的告警被覆盖
@@ -474,17 +477,17 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 	} else {
 		log.Debug().Msg("Alert subscriber is nil, rule engine alerts not included in stats")
 	}
-	
+
 	log.Debug().
 		Int("local_alerts", localCount).
 		Int("rule_engine_alerts", ruleEngineCount).
 		Int("total_unique_alerts", len(allAlerts)).
 		Msg("Alert stats data sources")
-	
+
 	// 统计总数和状态
 	for id, alert := range allAlerts {
 		stats.Total++
-		
+
 		// 状态统计
 		switch alert.Status {
 		case "active":
@@ -500,7 +503,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 				Msg("Unknown alert status encountered")
 			stats.Active++ // 默认作为活跃告警处理
 		}
-		
+
 		// 按级别统计（改进处理，支持所有级别）
 		if _, exists := stats.ByLevel[alert.Level]; exists {
 			stats.ByLevel[alert.Level]++
@@ -512,10 +515,10 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 				Str("new_level", alert.Level).
 				Msg("New alert level encountered")
 		}
-		
+
 		// 按来源统计
 		stats.BySource[alert.Source]++
-		
+
 		// 调试日志：记录每个告警的详细信息
 		log.Debug().
 			Str("alert_id", id).
@@ -525,7 +528,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 			Str("title", alert.Title).
 			Msg("Alert included in statistics")
 	}
-	
+
 	// 模拟最近趋势数据（最近7天）
 	for i := 6; i >= 0; i-- {
 		date := time.Now().AddDate(0, 0, -i)
@@ -534,7 +537,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 			Count: 5 + i*2, // 模拟数据
 		})
 	}
-	
+
 	// 记录最终统计结果
 	log.Info().
 		Int("total", stats.Total).
@@ -544,7 +547,7 @@ func (s *alertService) GetAlertStats() (*models.AlertStats, error) {
 		Interface("by_level", stats.ByLevel).
 		Interface("by_source", stats.BySource).
 		Msg("Alert statistics calculated")
-	
+
 	return stats, nil
 }
 
@@ -554,11 +557,11 @@ func (s *alertService) GetAlertRules() ([]models.AlertRule, error) {
 	for _, rule := range s.alertRules {
 		rules = append(rules, *rule)
 	}
-	
+
 	sort.Slice(rules, func(i, j int) bool {
 		return rules[i].CreatedAt.After(rules[j].CreatedAt)
 	})
-	
+
 	return rules, nil
 }
 
@@ -575,7 +578,7 @@ func (s *alertService) CreateAlertRule(req *models.AlertRuleCreateRequest) (*mod
 		CreatedAt:            time.Now(),
 		UpdatedAt:            time.Now(),
 	}
-	
+
 	s.alertRules[rule.ID] = rule
 	return rule, nil
 }
@@ -586,7 +589,7 @@ func (s *alertService) UpdateAlertRule(id string, req *models.AlertRuleUpdateReq
 	if !exists {
 		return nil, fmt.Errorf("告警规则未找到: %s", id)
 	}
-	
+
 	if req.Name != "" {
 		rule.Name = req.Name
 	}
@@ -603,7 +606,7 @@ func (s *alertService) UpdateAlertRule(id string, req *models.AlertRuleUpdateReq
 	if req.NotificationChannels != nil {
 		rule.NotificationChannels = req.NotificationChannels
 	}
-	
+
 	rule.UpdatedAt = time.Now()
 	return rule, nil
 }
@@ -623,14 +626,14 @@ func (s *alertService) TestAlertRule(id string, data map[string]interface{}) (*m
 	if !exists {
 		return nil, fmt.Errorf("告警规则未找到: %s", id)
 	}
-	
+
 	response := &models.AlertRuleTestResponse{
 		RuleID:    id,
 		Triggered: false,
 		Message:   "",
 		TestedAt:  time.Now(),
 	}
-	
+
 	// 简化的规则测试逻辑
 	condition := rule.Condition
 	if fieldValue, exists := data[condition.Field]; exists {
@@ -660,11 +663,11 @@ func (s *alertService) TestAlertRule(id string, data map[string]interface{}) (*m
 			}
 		}
 	}
-	
+
 	if !response.Triggered {
 		response.Message = "规则条件未满足，不会触发告警"
 	}
-	
+
 	return response, nil
 }
 
@@ -674,11 +677,11 @@ func (s *alertService) GetNotificationChannels() ([]models.NotificationChannel, 
 	for _, channel := range s.notificationChannels {
 		channels = append(channels, *channel)
 	}
-	
+
 	sort.Slice(channels, func(i, j int) bool {
 		return channels[i].CreatedAt.After(channels[j].CreatedAt)
 	})
-	
+
 	return channels, nil
 }
 
@@ -693,7 +696,7 @@ func (s *alertService) CreateNotificationChannel(req *models.NotificationChannel
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	s.notificationChannels[channel.ID] = channel
 	return channel, nil
 }
@@ -704,7 +707,7 @@ func (s *alertService) UpdateNotificationChannel(id string, req *models.Notifica
 	if !exists {
 		return nil, fmt.Errorf("通知渠道未找到: %s", id)
 	}
-	
+
 	if req.Name != "" {
 		channel.Name = req.Name
 	}
@@ -715,7 +718,7 @@ func (s *alertService) UpdateNotificationChannel(id string, req *models.Notifica
 	if req.Config != nil {
 		channel.Config = req.Config
 	}
-	
+
 	channel.UpdatedAt = time.Now()
 	return channel, nil
 }
@@ -735,11 +738,11 @@ func (s *alertService) TestNotificationChannel(id string) error {
 	if !exists {
 		return fmt.Errorf("通知渠道未找到: %s", id)
 	}
-	
+
 	if !channel.Enabled {
 		return fmt.Errorf("通知渠道已禁用")
 	}
-	
+
 	// 这里应该实际发送测试通知
 	// 当前只是模拟成功
 	switch channel.Type {
@@ -755,6 +758,6 @@ func (s *alertService) TestNotificationChannel(id string) error {
 	default:
 		return fmt.Errorf("不支持的通知类型: %s", channel.Type)
 	}
-	
+
 	return nil
 }
