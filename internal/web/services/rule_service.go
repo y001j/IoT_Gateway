@@ -2,13 +2,14 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/web/models"
 
 	"github.com/y001j/iot-gateway/internal/rules"
@@ -47,7 +48,7 @@ func NewRuleService(manager rules.RuleManager) (RuleService, error) {
 // convertToWebRule converts a manager rule to a web model rule.
 func convertToWebRule(managerRule *rules.Rule) models.Rule {
 	return models.Rule{
-		ID:          managerRule.ID,    // String ID from rule manager
+		ID:          managerRule.ID, // String ID from rule manager
 		Name:        managerRule.Name,
 		Description: managerRule.Description,
 		Enabled:     managerRule.Enabled,
@@ -67,7 +68,7 @@ func convertCondition(cond *rules.Condition) *models.RuleCondition {
 	if cond == nil {
 		return nil
 	}
-	
+
 	webCond := &models.RuleCondition{
 		Type:       cond.Type,
 		Field:      cond.Field,
@@ -76,7 +77,7 @@ func convertCondition(cond *rules.Condition) *models.RuleCondition {
 		Expression: cond.Expression,
 		Script:     cond.Script,
 	}
-	
+
 	// Convert And conditions
 	if len(cond.And) > 0 {
 		webCond.And = make([]models.RuleCondition, len(cond.And))
@@ -86,7 +87,7 @@ func convertCondition(cond *rules.Condition) *models.RuleCondition {
 			}
 		}
 	}
-	
+
 	// Convert Or conditions
 	if len(cond.Or) > 0 {
 		webCond.Or = make([]models.RuleCondition, len(cond.Or))
@@ -96,12 +97,12 @@ func convertCondition(cond *rules.Condition) *models.RuleCondition {
 			}
 		}
 	}
-	
+
 	// Convert Not condition
 	if cond.Not != nil {
 		webCond.Not = convertCondition(cond.Not)
 	}
-	
+
 	return webCond
 }
 
@@ -110,7 +111,7 @@ func convertActions(actions []rules.Action) []models.RuleAction {
 	if len(actions) == 0 {
 		return []models.RuleAction{}
 	}
-	
+
 	webActions := make([]models.RuleAction, len(actions))
 	for i, action := range actions {
 		webActions[i] = models.RuleAction{
@@ -121,7 +122,7 @@ func convertActions(actions []rules.Action) []models.RuleAction {
 			Retry:   action.Retry,
 		}
 	}
-	
+
 	return webActions
 }
 
@@ -130,10 +131,10 @@ func (s *ruleService) GetRules(req *models.RuleListRequest) ([]models.Rule, int,
 		log.Error().Msg("RuleService: manager为nil")
 		return []models.Rule{}, 0, fmt.Errorf("rule manager is nil")
 	}
-	
+
 	managerRules := s.manager.ListRules()
 	log.Info().Int("rule_count", len(managerRules)).Msg("RuleService: 获取规则列表")
-	
+
 	webRules := make([]models.Rule, 0, len(managerRules))
 	for _, r := range managerRules {
 		log.Info().Str("rule_id", r.ID).Str("rule_name", r.Name).Msg("RuleService: 转换规则")
@@ -173,13 +174,13 @@ func (s *ruleService) CreateRule(req *models.RuleCreateRequest) (*models.Rule, e
 	if err != nil {
 		return nil, fmt.Errorf("invalid conditions: %w", err)
 	}
-	
+
 	// Convert web actions to manager actions
 	managerActions, err := convertToManagerActions(req.Actions)
 	if err != nil {
 		return nil, fmt.Errorf("invalid actions: %w", err)
 	}
-	
+
 	newRule := &rules.Rule{
 		ID:          fmt.Sprintf("rule-%d", time.Now().UnixNano()), // Generate a unique ID
 		Name:        req.Name,
@@ -224,7 +225,7 @@ func (s *ruleService) UpdateRule(id string, req *models.RuleUpdateRequest) (*mod
 	if req.Tags != nil {
 		managerRule.Tags = req.Tags
 	}
-	
+
 	// Update conditions if provided
 	if req.Conditions != nil {
 		// Convert web condition to manager condition
@@ -234,7 +235,7 @@ func (s *ruleService) UpdateRule(id string, req *models.RuleUpdateRequest) (*mod
 		}
 		managerRule.Conditions = managerCondition
 	}
-	
+
 	// Update actions if provided
 	if req.Actions != nil && len(req.Actions) > 0 {
 		// Convert web actions to manager actions
@@ -269,130 +270,88 @@ func (s *ruleService) DisableRule(id string) error {
 	return s.manager.DisableRule(id)
 }
 
-// ValidateRule 验证规则
+// ErrRuleStatsUnavailable 规则级执行统计尚未实现
+var ErrRuleStatsUnavailable = errors.New("规则执行统计和历史暂不支持，请使用网关 /metrics 中的规则引擎指标")
+
+// supportedActionTypes 规则引擎内置的动作类型
+var supportedActionTypes = map[string]bool{"alert": true, "transform": true, "filter": true, "aggregate": true, "forward": true}
+
+// ValidateRule 验证规则：使用规则引擎自身的校验（rules.ValidateRule），保证与加载/求值语义一致。
+// 以前这里另写了一套校验，要求条件必须写明 type，导致通过本接口创建的规则（不带 type）测试时必然失败。
 func (s *ruleService) ValidateRule(rule *models.Rule) (*models.RuleValidationResponseExtended, error) {
 	response := &models.RuleValidationResponseExtended{
 		Valid:    true,
 		Errors:   []string{},
 		Warnings: []string{},
 	}
-
-	// 基本字段验证
-	if rule.Name == "" {
+	fail := func(msg string) {
 		response.Valid = false
-		response.Errors = append(response.Errors, "规则名称不能为空")
+		response.Errors = append(response.Errors, msg)
 	}
 
 	if rule.Priority < 0 || rule.Priority > 100 {
-		response.Valid = false
-		response.Errors = append(response.Errors, "规则优先级必须在0-100之间")
+		fail("规则优先级必须在0-100之间")
 	}
-
-	// 验证条件
-	if rule.Conditions == nil {
-		response.Valid = false
-		response.Errors = append(response.Errors, "规则条件不能为空")
-	} else {
-		if err := s.validateCondition(rule.Conditions); err != nil {
-			response.Valid = false
-			response.Errors = append(response.Errors, "条件验证失败: "+err.Error())
+	cond, err := convertToManagerCondition(rule.Conditions)
+	if err != nil {
+		fail("条件转换失败: " + err.Error())
+	}
+	actions, err := convertToManagerActions(rule.Actions)
+	if err != nil {
+		fail("动作转换失败: " + err.Error())
+	}
+	id := rule.ID
+	if id == "" {
+		id = "validate" // 新建规则尚未分配 ID
+	}
+	if err := rules.ValidateRule(&rules.Rule{ID: id, Name: rule.Name, Conditions: cond, Actions: actions}); err != nil {
+		fail(err.Error())
+	}
+	for i, a := range rule.Actions {
+		if a.Type != "" && !supportedActionTypes[a.Type] {
+			fail(fmt.Sprintf("动作 %d: 不支持的动作类型 %s", i+1, a.Type))
 		}
-	}
-
-	// 验证动作
-	if len(rule.Actions) == 0 {
-		response.Valid = false
-		response.Errors = append(response.Errors, "规则必须至少包含一个动作")
-	} else {
-		for i, action := range rule.Actions {
-			if err := s.validateAction(&action); err != nil {
-				response.Valid = false
-				response.Errors = append(response.Errors, fmt.Sprintf("动作 %d 验证失败: %s", i+1, err.Error()))
+		if a.Type == "alert" {
+			if msg, _ := a.Config["message"].(string); msg == "" {
+				response.Warnings = append(response.Warnings, fmt.Sprintf("动作 %d: 告警未指定 message，将使用默认消息", i+1))
 			}
 		}
 	}
-
-	// 添加一些警告
 	if rule.Priority > 90 {
 		response.Warnings = append(response.Warnings, "高优先级规则可能影响系统性能")
 	}
-
 	return response, nil
 }
 
-// validateCondition 验证条件
-func (s *ruleService) validateCondition(condition *models.RuleCondition) error {
-	if condition.Type == "" {
-		return fmt.Errorf("条件类型不能为空")
+// testPoint 把测试数据转换为数据点：device_id、key、value、type、quality 对应点的字段，
+// tags 对象和其余字段作为标签
+func testPoint(data map[string]interface{}) model.Point {
+	p := model.Point{Timestamp: time.Now()}
+	p.DeviceID, _ = data["device_id"].(string)
+	p.Key, _ = data["key"].(string)
+	p.Value = data["value"]
+	if t, ok := data["type"].(string); ok {
+		p.Type = model.DataType(t)
 	}
-
-	switch condition.Type {
-	case "simple":
-		if condition.Field == "" {
-			return fmt.Errorf("简单条件必须指定字段")
-		}
-		if condition.Operator == "" {
-			return fmt.Errorf("简单条件必须指定操作符")
-		}
-		if condition.Value == nil {
-			return fmt.Errorf("简单条件必须指定值")
-		}
-	case "and", "or":
-		if len(condition.And) < 2 && len(condition.Or) < 2 {
-			return fmt.Errorf("复合条件至少需要2个子条件")
-		}
-		subConditions := condition.And
-		if condition.Type == "or" {
-			subConditions = condition.Or
-		}
-		for i, subCondition := range subConditions {
-			if err := s.validateCondition(&subCondition); err != nil {
-				return fmt.Errorf("子条件 %d: %s", i+1, err.Error())
-			}
-		}
-	case "expression":
-		if condition.Expression == "" {
-			return fmt.Errorf("表达式条件必须指定表达式")
-		}
-		// 这里可以添加表达式语法验证
-	default:
-		return fmt.Errorf("不支持的条件类型: %s", condition.Type)
+	if q, ok := data["quality"].(float64); ok {
+		p.Quality = int(q)
 	}
-
-	return nil
+	if tags, ok := data["tags"].(map[string]interface{}); ok {
+		for k, v := range tags {
+			p.AddTag(k, fmt.Sprint(v))
+		}
+	}
+	for k, v := range data {
+		switch k {
+		case "device_id", "key", "value", "type", "quality", "tags", "timestamp":
+		default:
+			p.AddTag(k, fmt.Sprint(v))
+		}
+	}
+	return p
 }
 
-// validateAction 验证动作
-func (s *ruleService) validateAction(action *models.RuleAction) error {
-	if action.Type == "" {
-		return fmt.Errorf("动作类型不能为空")
-	}
-
-	switch action.Type {
-	case "alert":
-		if action.Config == nil {
-			return fmt.Errorf("告警动作必须指定配置")
-		}
-		// 验证告警配置
-		if message, ok := action.Config["message"]; !ok || message == "" {
-			return fmt.Errorf("告警动作必须指定消息")
-		}
-	case "transform":
-		if action.Config == nil {
-			return fmt.Errorf("转换动作必须指定配置")
-		}
-	case "filter", "aggregate", "forward":
-		if action.Config == nil {
-			return fmt.Errorf("%s动作必须指定配置", action.Type)
-		}
-	default:
-		return fmt.Errorf("不支持的动作类型: %s", action.Type)
-	}
-
-	return nil
-}
-
-// TestRule 测试规则
+// TestRule 用规则引擎的求值器对测试数据求值（以前是另写的简化逻辑，只支持少数操作符和 float64）
 func (s *ruleService) TestRule(req *models.RuleTestRequestExtended) (*models.RuleTestResponseExtended, error) {
 	response := &models.RuleTestResponseExtended{
 		Success:    true,
@@ -400,199 +359,45 @@ func (s *ruleService) TestRule(req *models.RuleTestRequestExtended) (*models.Rul
 		Errors:     []string{},
 		ExecutedAt: time.Now(),
 	}
-
-	// 首先验证规则
-	validation, err := s.ValidateRule(&req.Rule)
-	if err != nil {
-		response.Success = false
-		response.Errors = append(response.Errors, "规则验证失败: "+err.Error())
-		return response, nil
-	}
-
+	validation, _ := s.ValidateRule(&req.Rule)
 	if !validation.Valid {
 		response.Success = false
 		response.Errors = append(response.Errors, validation.Errors...)
 		return response, nil
 	}
-
-	// 模拟测试每个测试数据
+	cond, _ := convertToManagerCondition(req.Rule.Conditions)
+	evaluator := rules.NewEvaluator()
 	for i, testData := range req.TestData {
-		result := models.RuleTestResult{
-			TestCaseIndex: i,
-			Input:         testData,
-			Matched:       false,
-			Actions:       []string{},
-			Error:         "",
-		}
-
-		// 简化的条件匹配逻辑（实际应该使用规则引擎）
-		matched, err := s.evaluateCondition(req.Rule.Conditions, testData)
+		result := models.RuleTestResult{TestCaseIndex: i, Input: testData, Actions: []string{}}
+		matched, err := evaluator.Evaluate(cond, testPoint(testData))
 		if err != nil {
 			result.Error = err.Error()
-		} else {
-			result.Matched = matched
-			if matched {
-				// 如果匹配，记录会执行的动作
-				for _, action := range req.Rule.Actions {
-					result.Actions = append(result.Actions, fmt.Sprintf("%s: %v", action.Type, action.Config))
-				}
+		} else if matched {
+			result.Matched = true
+			for _, action := range req.Rule.Actions {
+				result.Actions = append(result.Actions, fmt.Sprintf("%s: %v", action.Type, action.Config))
 			}
 		}
-
 		response.Results = append(response.Results, result)
 	}
-
 	return response, nil
 }
 
-// evaluateCondition 简化的条件评估
-func (s *ruleService) evaluateCondition(condition *models.RuleCondition, data map[string]interface{}) (bool, error) {
-	switch condition.Type {
-	case "simple":
-		fieldValue, exists := data[condition.Field]
-		if !exists {
-			return false, nil
-		}
-
-		switch condition.Operator {
-		case "eq", "equals":
-			return fmt.Sprintf("%v", fieldValue) == fmt.Sprintf("%v", condition.Value), nil
-		case "gt":
-			if fv, ok := fieldValue.(float64); ok {
-				if cv, ok := condition.Value.(float64); ok {
-					return fv > cv, nil
-				}
-			}
-			return false, fmt.Errorf("gt操作符需要数值类型")
-		case "lt":
-			if fv, ok := fieldValue.(float64); ok {
-				if cv, ok := condition.Value.(float64); ok {
-					return fv < cv, nil
-				}
-			}
-			return false, fmt.Errorf("lt操作符需要数值类型")
-		case "contains":
-			return strings.Contains(fmt.Sprintf("%v", fieldValue), fmt.Sprintf("%v", condition.Value)), nil
-		}
-	case "and":
-		for _, subCondition := range condition.And {
-			matched, err := s.evaluateCondition(&subCondition, data)
-			if err != nil {
-				return false, err
-			}
-			if !matched {
-				return false, nil
-			}
-		}
-		return true, nil
-	case "or":
-		for _, subCondition := range condition.Or {
-			matched, err := s.evaluateCondition(&subCondition, data)
-			if err != nil {
-				return false, err
-			}
-			if matched {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	return false, fmt.Errorf("不支持的条件类型: %s", condition.Type)
-}
-
-// GetRuleStats 获取规则统计信息
+// GetRuleStats 获取规则统计信息。
+// 以前返回 rand 生成的随机数冒充真实统计；规则引擎目前没有逐条规则的执行计数，如实返回不支持。
 func (s *ruleService) GetRuleStats(id string) (*models.RuleStatsExtended, error) {
-	rule, err := s.manager.GetRule(id)
-	if err != nil {
+	if _, err := s.manager.GetRule(id); err != nil {
 		return nil, err
 	}
-
-	// 模拟统计数据（实际应该从规则引擎获取）
-	stats := &models.RuleStatsExtended{
-		RuleID:              id,
-		RuleName:            rule.Name,
-		ExecutionCount:      rand.Intn(1000) + 100,
-		SuccessCount:        rand.Intn(900) + 90,
-		ErrorCount:          rand.Intn(10),
-		AverageExecutionTime: time.Duration(rand.Intn(100)+10) * time.Millisecond,
-		LastExecuted:        time.Now().Add(-time.Duration(rand.Intn(60)) * time.Minute),
-		Status:              "active",
-		TriggerRate:         float64(rand.Intn(50)+10) / 100.0, // 10-60%
-		ActionsTriggered: map[string]int{
-			"alert":     rand.Intn(50),
-			"transform": rand.Intn(30),
-			"forward":   rand.Intn(20),
-		},
-	}
-
-	if !rule.Enabled {
-		stats.Status = "disabled"
-		stats.TriggerRate = 0
-	}
-
-	return stats, nil
+	return nil, ErrRuleStatsUnavailable
 }
 
-// GetRuleExecutionHistory 获取规则执行历史
+// GetRuleExecutionHistory 获取规则执行历史（以前返回随机生成的假数据）
 func (s *ruleService) GetRuleExecutionHistory(id string, req *models.RuleHistoryRequest) ([]models.RuleExecution, int, error) {
-	// 模拟执行历史数据
-	executions := make([]models.RuleExecution, 0)
-	
-	// 生成一些模拟数据
-	for i := 0; i < 50; i++ {
-		execution := models.RuleExecution{
-			ID:          fmt.Sprintf("exec-%d", i),
-			RuleID:      id,
-			ExecutedAt:  time.Now().Add(-time.Duration(i*10) * time.Minute),
-			Success:     rand.Float32() > 0.1, // 90% 成功率
-			Duration:    time.Duration(rand.Intn(100)+10) * time.Millisecond,
-			InputData:   map[string]interface{}{"device_id": "sensor-001", "temperature": rand.Float64()*40 + 10},
-			OutputData:  map[string]interface{}{"processed": true},
-			Error:       "",
-		}
-
-		if !execution.Success {
-			execution.Error = "处理失败: 连接超时"
-		}
-
-		// 应用时间过滤
-		if !req.StartTime.IsZero() && execution.ExecutedAt.Before(req.StartTime) {
-			continue
-		}
-		if !req.EndTime.IsZero() && execution.ExecutedAt.After(req.EndTime) {
-			continue
-		}
-
-		// 应用状态过滤
-		if req.Status != "" {
-			if (req.Status == "success" && !execution.Success) ||
-				(req.Status == "error" && execution.Success) {
-				continue
-			}
-		}
-
-		executions = append(executions, execution)
+	if _, err := s.manager.GetRule(id); err != nil {
+		return nil, 0, err
 	}
-
-	// 排序
-	sort.Slice(executions, func(i, j int) bool {
-		return executions[i].ExecutedAt.After(executions[j].ExecutedAt)
-	})
-
-	// 分页
-	total := len(executions)
-	start := (req.Page - 1) * req.PageSize
-	end := start + req.PageSize
-
-	if start >= total {
-		return []models.RuleExecution{}, total, nil
-	}
-	if end > total {
-		end = total
-	}
-
-	return executions[start:end], total, nil
+	return nil, 0, ErrRuleStatsUnavailable
 }
 
 // GetRuleTemplates 获取规则模板
@@ -756,7 +561,7 @@ func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition,
 	if webCond == nil {
 		return nil, nil
 	}
-	
+
 	managerCond := &rules.Condition{
 		Type:       webCond.Type,
 		Field:      webCond.Field,
@@ -765,7 +570,7 @@ func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition,
 		Expression: webCond.Expression,
 		Script:     webCond.Script,
 	}
-	
+
 	// Convert And conditions
 	if len(webCond.And) > 0 {
 		managerCond.And = make([]*rules.Condition, len(webCond.And))
@@ -777,7 +582,7 @@ func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition,
 			managerCond.And[i] = converted
 		}
 	}
-	
+
 	// Convert Or conditions
 	if len(webCond.Or) > 0 {
 		managerCond.Or = make([]*rules.Condition, len(webCond.Or))
@@ -789,7 +594,7 @@ func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition,
 			managerCond.Or[i] = converted
 		}
 	}
-	
+
 	// Convert Not condition
 	if webCond.Not != nil {
 		converted, err := convertToManagerCondition(webCond.Not)
@@ -798,7 +603,7 @@ func convertToManagerCondition(webCond *models.RuleCondition) (*rules.Condition,
 		}
 		managerCond.Not = converted
 	}
-	
+
 	return managerCond, nil
 }
 
@@ -807,14 +612,14 @@ func convertToManagerActions(webActions []models.RuleAction) ([]rules.Action, er
 	if len(webActions) == 0 {
 		return []rules.Action{}, nil
 	}
-	
+
 	managerActions := make([]rules.Action, len(webActions))
 	for i, webAction := range webActions {
 		timeout, err := time.ParseDuration(webAction.Timeout)
 		if err != nil && webAction.Timeout != "" {
 			return nil, fmt.Errorf("invalid timeout for action %d: %w", i, err)
 		}
-		
+
 		managerActions[i] = rules.Action{
 			Type:    webAction.Type,
 			Config:  webAction.Config,
@@ -823,6 +628,6 @@ func convertToManagerActions(webActions []models.RuleAction) ([]rules.Action, er
 			Retry:   webAction.Retry,
 		}
 	}
-	
+
 	return managerActions, nil
 }

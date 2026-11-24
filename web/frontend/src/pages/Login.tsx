@@ -231,8 +231,7 @@ const Login: React.FC = () => {
           form={form}
           name="login"
           initialValues={{ 
-            username: 'admin', 
-            password: 'admin123' 
+            username: 'admin'
           }}
           onFinish={onFinish}
           size="large"

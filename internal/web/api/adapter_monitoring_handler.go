@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -74,7 +75,7 @@ func (h *AdapterMonitoringHandler) GetDataFlowMetrics(c *gin.Context) {
 	// 获取查询参数
 	timeRange := c.DefaultQuery("time_range", "1h")
 	limitStr := c.DefaultQuery("limit", "100")
-	
+
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.BaseResponse{
@@ -249,13 +250,20 @@ func (h *AdapterMonitoringHandler) RestartAdapter(c *gin.Context) {
 		return
 	}
 
-	// 这里应该调用插件管理器的重启方法
-	// 由于我们的监控服务主要负责监控，实际的重启操作应该委托给插件管理器
+	// 以前这里只记录日志就返回成功，适配器并没有重启
 	log.Info().Str("adapter", adapterName).Msg("请求重启适配器")
+	if err := h.monitoringService.RestartAdapter(adapterName); err != nil {
+		code := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "不存在") {
+			code = http.StatusNotFound
+		}
+		c.JSON(code, models.BaseResponse{Code: code, Message: fmt.Sprintf("重启适配器 %s 失败: %v", adapterName, err)})
+		return
+	}
 
 	c.JSON(http.StatusOK, models.BaseResponse{
 		Code:    200,
-		Message: fmt.Sprintf("适配器 %s 重启请求已提交", adapterName),
+		Message: fmt.Sprintf("适配器 %s 已重启", adapterName),
 	})
 }
 
@@ -263,7 +271,7 @@ func (h *AdapterMonitoringHandler) RestartAdapter(c *gin.Context) {
 func (h *AdapterMonitoringHandler) performAdapterDiagnostics(adapterName string) models.AdapterDiagnostics {
 	// 这是一个简化的诊断实现
 	// 实际应该包含更全面的诊断逻辑
-	
+
 	diagnostics := models.AdapterDiagnostics{
 		AdapterName: adapterName,
 		ConnectionTest: &models.ConnectionTestResult{
@@ -274,11 +282,11 @@ func (h *AdapterMonitoringHandler) performAdapterDiagnostics(adapterName string)
 			Timestamp:    time.Now(),
 		},
 		ConfigValidation: &models.ConfigValidationResult{
-			Valid:      true,
-			Errors:     []string{},
-			Warnings:   []string{},
+			Valid:       true,
+			Errors:      []string{},
+			Warnings:    []string{},
 			Suggestions: []string{},
-			Timestamp:  time.Now(),
+			Timestamp:   time.Now(),
 		},
 		HealthChecks: []models.HealthCheckResult{
 			{
@@ -313,15 +321,15 @@ func (h *AdapterMonitoringHandler) performAdapterDiagnostics(adapterName string)
 func (h *AdapterMonitoringHandler) performConnectionTest(adapterName string) models.ConnectionTestResult {
 	// 简化的连接测试
 	// 实际应该根据适配器类型执行具体的连接测试
-	
+
 	return models.ConnectionTestResult{
 		Success:      true,
 		ResponseTime: time.Millisecond * 15,
 		Error:        "",
 		Details: map[string]interface{}{
 			"adapter_name": adapterName,
-			"test_type":   "basic_connectivity",
-			"status":      "connected",
+			"test_type":    "basic_connectivity",
+			"status":       "connected",
 		},
 		Timestamp: time.Now(),
 	}
@@ -331,16 +339,16 @@ func (h *AdapterMonitoringHandler) performConnectionTest(adapterName string) mod
 func (h *AdapterMonitoringHandler) getAdapterPerformance(adapterName, period string) map[string]interface{} {
 	// 简化的性能数据
 	// 实际应该从监控服务获取真实的性能数据
-	
+
 	return map[string]interface{}{
-		"adapter_name":     adapterName,
-		"period":          period,
-		"data_points_per_sec": 50.5,
-		"avg_latency_ms":  12.3,
-		"error_rate":      0.02,
-		"uptime_percent":  99.8,
-		"memory_usage_mb": 25.6,
-		"cpu_usage_percent": 15.2,
+		"adapter_name":          adapterName,
+		"period":                period,
+		"data_points_per_sec":   50.5,
+		"avg_latency_ms":        12.3,
+		"error_rate":            0.02,
+		"uptime_percent":        99.8,
+		"memory_usage_mb":       25.6,
+		"cpu_usage_percent":     15.2,
 		"network_bytes_per_sec": 2048,
 		"timestamps": []string{
 			"2024-01-01T00:00:00Z",

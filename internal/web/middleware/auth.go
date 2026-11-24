@@ -11,68 +11,60 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// JWTMiddleware JWT认证中间件
-func JWTMiddleware(secretKey string) gin.HandlerFunc {
+// TokenValidator 在 JWT 签名校验通过后执行的额外校验（例如检查会话是否已被登出/吊销）
+type TokenValidator func(token string) error
+
+// JWTMiddleware JWT认证中间件。
+// 以前会把 Authorization 头、令牌前缀和全部 claims 打印到标准输出，已移除。
+// validators 用于检查会话状态：JWT 本身是无状态的，不检查会话时登出或修改密码后旧令牌在过期前仍然有效。
+func JWTMiddleware(secretKey string, validators ...TokenValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var token string
 
-		// 首先尝试从 Authorization header 获取令牌
-		authHeader := c.GetHeader("Authorization")
-		fmt.Printf("收到认证请求 URL: %s\n", c.Request.URL.Path)
-		fmt.Printf("Authorization header: %s\n", authHeader)
-
-		if authHeader != "" {
+		if authHeader := c.GetHeader("Authorization"); authHeader != "" {
 			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) == 2 && parts[0] == "Bearer" {
-				token = parts[1]
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				token = strings.TrimSpace(parts[1])
 			}
 		}
 
-		// 如果 header 中没有令牌，尝试从查询参数获取（用于 WebSocket）
-		if token == "" {
+		// 浏览器的 WebSocket API 无法设置请求头，只有 WebSocket 升级请求允许通过查询参数传递令牌
+		if token == "" && strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
 			token = c.Query("token")
-			if token != "" {
-				fmt.Printf("从查询参数获取到令牌: %s...\n", token[:min(20, len(token))])
-			}
 		}
 
-		// 如果仍然没有令牌，返回认证失败
 		if token == "" {
-			fmt.Printf("认证失败：未提供认证令牌\n")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未提供认证令牌"})
 			return
 		}
 
-		fmt.Printf("开始验证JWT token: %s...\n", token[:min(20, len(token))])
 		claims, err := utils.ValidateJWT(token, secretKey)
 		if err != nil {
-			fmt.Printf("认证失败：JWT验证错误 - %v\n", err)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的认证令牌"})
 			return
 		}
+		for _, v := range validators {
+			if v == nil {
+				continue
+			}
+			if err := v(token); err != nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "会话已失效，请重新登录"})
+				return
+			}
+		}
 
-		fmt.Printf("JWT验证成功，claims: %+v\n", claims)
-
-		// 设置用户信息到上下文
 		c.Set("user_id", claims["user_id"])
 		c.Set("username", claims["username"])
 		c.Set("role", claims["role"])
-		
-		// 调试信息：打印设置的role
-		fmt.Printf("设置到context的role: %v\n", claims["role"])
 
-		// 创建完整的用户对象并设置到上下文（为 WebSocket 处理器使用）
 		userID := 0
 		if uid, ok := claims["user_id"].(float64); ok {
 			userID = int(uid)
 		}
-
 		user := &models.User{
-			BaseModel: models.BaseModel{
-				ID: userID,
-			},
-			Username: fmt.Sprintf("%v", claims["username"]),
-			Role:     fmt.Sprintf("%v", claims["role"]),
+			BaseModel: models.BaseModel{ID: userID},
+			Username:  fmt.Sprintf("%v", claims["username"]),
+			Role:      fmt.Sprintf("%v", claims["role"]),
 		}
 		c.Set("user", user)
 
@@ -80,44 +72,30 @@ func JWTMiddleware(secretKey string) gin.HandlerFunc {
 	}
 }
 
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+// isAdminRole 管理员角色（支持 admin 和 administrator 两种名称）
+func isAdminRole(role string) bool {
+	return role == "admin" || role == "administrator"
 }
 
-// RequireRole 角色验证中间件
-func RequireRole(role string) gin.HandlerFunc {
+// RequireRole 角色验证中间件：管理员总是允许，其他用户必须具有列出的某个角色
+func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fmt.Printf("RequireRole中间件 - 需要角色: %s\n", role)
-		
 		userRole, exists := c.Get("role")
 		if !exists {
-			fmt.Printf("RequireRole中间件 - 未找到role信息\n")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未认证"})
 			return
 		}
-
-		userRoleStr := fmt.Sprintf("%v", userRole)
-		fmt.Printf("RequireRole中间件 - 用户角色: %s\n", userRoleStr)
-		
-		// 管理员拥有所有权限 (支持admin和administrator两种角色名)
-		if userRoleStr == "admin" || userRoleStr == "administrator" {
-			fmt.Printf("RequireRole中间件 - 用户是管理员(%s)，允许访问\n", userRoleStr)
+		role := fmt.Sprintf("%v", userRole)
+		if isAdminRole(role) {
 			c.Next()
 			return
 		}
-
-		// 检查是否匹配指定角色
-		if userRoleStr != role {
-			fmt.Printf("RequireRole中间件 - 角色不匹配: %s != %s\n", userRoleStr, role)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "权限不足"})
-			return
+		for _, r := range roles {
+			if role == r {
+				c.Next()
+				return
+			}
 		}
-
-		fmt.Printf("RequireRole中间件 - 角色匹配，允许访问\n")
-		c.Next()
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "权限不足"})
 	}
 }

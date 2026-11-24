@@ -3,7 +3,6 @@ package actions
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
@@ -39,7 +38,7 @@ func (h *OptimizedAggregateHandler) Execute(ctx context.Context, point model.Poi
 	}
 
 	start := time.Now()
-	
+
 	// 验证配置
 	if err := h.Validate(config); err != nil {
 		return &rules.ActionResult{
@@ -49,7 +48,7 @@ func (h *OptimizedAggregateHandler) Execute(ctx context.Context, point model.Poi
 			Duration: time.Since(start),
 		}, err
 	}
-	
+
 	// 解析配置
 	aggregateConfig, err := h.parseOptimizedConfig(config)
 	if err != nil {
@@ -102,17 +101,17 @@ func (h *OptimizedAggregateHandler) parseWindowSize(config map[string]interface{
 	if windowSizeVal, ok := config["window_size"]; ok {
 		return h.convertToInt(windowSizeVal)
 	}
-	
+
 	// 兼容UI配置中的size字段
 	if sizeVal, ok := config["size"]; ok {
 		return h.convertToInt(sizeVal)
 	}
-	
+
 	// 兼容旧配置中的count字段
 	if countVal, ok := config["count"]; ok {
 		return h.convertToInt(countVal)
 	}
-	
+
 	// 默认值：滑动窗口模式
 	return 10
 }
@@ -134,7 +133,7 @@ func (h *OptimizedAggregateHandler) parseFunctions(config map[string]interface{}
 			return []string{functionStr}
 		}
 	}
-	
+
 	// 默认使用平均值
 	return []string{"avg"}
 }
@@ -166,13 +165,13 @@ func (h *OptimizedAggregateHandler) parseThresholds(config map[string]interface{
 			aggregateConfig.UpperLimit = &upper
 		}
 	}
-	
+
 	if lowerVal, ok := config["lower_limit"]; ok {
 		if lower, ok := lowerVal.(float64); ok {
 			aggregateConfig.LowerLimit = &lower
 		}
 	}
-	
+
 	if thresholdVal, ok := config["outlier_threshold"]; ok {
 		if threshold, ok := thresholdVal.(float64); ok && threshold > 0 {
 			aggregateConfig.OutlierThreshold = &threshold
@@ -226,13 +225,13 @@ func (h *OptimizedAggregateHandler) validateFunctions(config map[string]interfac
 		"count": true, "sum": true, "avg": true, "mean": true, "average": true,
 		"min": true, "max": true, "stddev": true, "std": true, "variance": true,
 		"first": true, "last": true, "median": true,
-		
+
 		// Phase 1 增强函数
 		"p90": true, "p95": true, "p99": true,
 		"null_rate": true, "completeness": true,
 		"change": true, "change_rate": true, "outlier_count": true,
-		
-		// Phase 2 高级函数  
+
+		// Phase 2 高级函数
 		"p25": true, "p50": true, "p75": true,
 		"volatility": true, "cv": true,
 		"above_count": true, "below_count": true, "in_range_count": true,
@@ -251,15 +250,15 @@ func (h *OptimizedAggregateHandler) validateFunctions(config map[string]interfac
 // validateWindowSize 验证窗口大小
 func (h *OptimizedAggregateHandler) validateWindowSize(config map[string]interface{}) error {
 	windowSize := h.parseWindowSize(config)
-	
+
 	if windowSize < 0 {
 		return fmt.Errorf("窗口大小不能为负数: %d", windowSize)
 	}
-	
+
 	if windowSize > 1000000 {
 		return fmt.Errorf("窗口大小过大: %d，最大允许1000000", windowSize)
 	}
-	
+
 	return nil
 }
 
@@ -270,19 +269,19 @@ func (h *OptimizedAggregateHandler) validateThresholds(config map[string]interfa
 			return fmt.Errorf("上限阈值必须是数字")
 		}
 	}
-	
+
 	if lowerVal, ok := config["lower_limit"]; ok {
 		if _, ok := lowerVal.(float64); !ok {
 			return fmt.Errorf("下限阈值必须是数字")
 		}
 	}
-	
+
 	if thresholdVal, ok := config["outlier_threshold"]; ok {
 		if threshold, ok := thresholdVal.(float64); !ok || threshold <= 0 {
 			return fmt.Errorf("异常值阈值必须是正数")
 		}
 	}
-	
+
 	return nil
 }
 
@@ -311,7 +310,7 @@ func (h *OptimizedAggregateHandler) GetMetrics() map[string]interface{} {
 // EnableOptimization 启用优化
 func (h *OptimizedAggregateHandler) EnableOptimization(enable bool) {
 	h.enabled = enable
-	
+
 	if enable {
 		log.Info().Msg("已启用高性能聚合引擎")
 	} else {
@@ -329,18 +328,18 @@ func (h *OptimizedAggregateHandler) IsOptimizationEnabled() bool {
 // 性能配置选项
 type PerformanceConfig struct {
 	EnableBatchProcessing bool          `json:"enable_batch_processing"`
-	BatchSize            int           `json:"batch_size"`
-	FlushInterval        time.Duration `json:"flush_interval"`
-	NumShards            int           `json:"num_shards"`
+	BatchSize             int           `json:"batch_size"`
+	FlushInterval         time.Duration `json:"flush_interval"`
+	NumShards             int           `json:"num_shards"`
 }
 
 // GetPerformanceConfig 获取性能配置
 func (h *OptimizedAggregateHandler) GetPerformanceConfig() *PerformanceConfig {
 	return &PerformanceConfig{
 		EnableBatchProcessing: true,
-		BatchSize:            500,
-		FlushInterval:        10 * time.Millisecond,
-		NumShards:            int(h.shardedManager.numShards),
+		BatchSize:             500,
+		FlushInterval:         10 * time.Millisecond,
+		NumShards:             int(h.shardedManager.numShards),
 	}
 }
 
@@ -349,11 +348,11 @@ func (h *OptimizedAggregateHandler) UpdatePerformanceConfig(config *PerformanceC
 	if config.BatchSize > 0 {
 		h.shardedManager.batchProcessor.batchSize = int32(config.BatchSize)
 	}
-	
+
 	if config.FlushInterval > 0 {
 		h.shardedManager.batchProcessor.flushInterval = config.FlushInterval
 	}
-	
+
 	log.Info().
 		Interface("config", config).
 		Msg("已更新聚合引擎性能配置")
@@ -363,28 +362,15 @@ func (h *OptimizedAggregateHandler) UpdatePerformanceConfig(config *PerformanceC
 func (h *OptimizedAggregateHandler) GetSupportedFunctions() []string {
 	return []string{
 		// 基础统计函数 (13个)
-		"count", "sum", "avg", "mean", "average", "min", "max", 
+		"count", "sum", "avg", "mean", "average", "min", "max",
 		"stddev", "std", "variance", "first", "last", "median",
-		
+
 		// Phase 1 增强函数 (8个)
 		"p90", "p95", "p99", "null_rate", "completeness",
 		"change", "change_rate", "outlier_count",
-		
+
 		// Phase 2 高级函数 (7个)
 		"p25", "p50", "p75", "volatility", "cv",
 		"above_count", "below_count", "in_range_count",
-	}
-}
-
-// 初始化函数 - 注册优化聚合处理器工厂
-func init() {
-	// 导入rules包并设置工厂函数
-	rules.SetOptimizedAggregateHandlerFactory(func() rules.OptimizedAggregateHandler {
-		return NewOptimizedAggregateHandler()
-	})
-	
-	// 检查环境变量来决定是否启用优化
-	if enableOpt := os.Getenv("IOT_GATEWAY_ENABLE_OPTIMIZED_AGGREGATE"); enableOpt == "true" {
-		log.Info().Msg("环境变量检测：启用高性能聚合引擎工厂已注册")
 	}
 }

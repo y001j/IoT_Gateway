@@ -14,13 +14,13 @@ import (
 
 // AlertSubscriber NATS告警订阅器
 type AlertSubscriber struct {
-	natsConn    *nats.Conn
-	alertStore  *AlertStore
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.RWMutex
-	running     bool
-	subs        []*nats.Subscription
+	natsConn   *nats.Conn
+	alertStore *AlertStore
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.RWMutex
+	running    bool
+	subs       []*nats.Subscription
 }
 
 // AlertStore 内存告警存储
@@ -55,7 +55,7 @@ func (s *AlertStore) GetAlert(id string) (*models.Alert, bool) {
 func (s *AlertStore) GetAlerts() []*models.Alert {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	alerts := make([]*models.Alert, 0, len(s.alerts))
 	for _, alert := range s.alerts {
 		alerts = append(alerts, alert)
@@ -99,16 +99,16 @@ func NewAlertSubscriber(natsConn *nats.Conn) *AlertSubscriber {
 func (s *AlertSubscriber) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if s.running {
 		return fmt.Errorf("alert subscriber is already running")
 	}
-	
+
 	// 订阅规则引擎告警
 	if err := s.subscribeToAlerts(); err != nil {
 		return fmt.Errorf("failed to subscribe to alerts: %w", err)
 	}
-	
+
 	s.running = true
 	log.Info().Msg("Alert subscriber started")
 	return nil
@@ -118,11 +118,11 @@ func (s *AlertSubscriber) Start() error {
 func (s *AlertSubscriber) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if !s.running {
 		return nil
 	}
-	
+
 	// 取消订阅
 	for _, sub := range s.subs {
 		if err := sub.Unsubscribe(); err != nil {
@@ -130,7 +130,7 @@ func (s *AlertSubscriber) Stop() error {
 		}
 	}
 	s.subs = nil
-	
+
 	s.cancel()
 	s.running = false
 	log.Info().Msg("Alert subscriber stopped")
@@ -149,7 +149,7 @@ func (s *AlertSubscriber) subscribeToAlerts() error {
 		// "iot.alerts.triggered.error",
 		// "iot.alerts.triggered.critical",
 	}
-	
+
 	for _, subject := range subjects {
 		sub, err := s.natsConn.Subscribe(subject, s.handleAlertMessage)
 		if err != nil {
@@ -158,7 +158,7 @@ func (s *AlertSubscriber) subscribeToAlerts() error {
 		s.subs = append(s.subs, sub)
 		log.Debug().Str("subject", subject).Msg("Subscribed to alert subject")
 	}
-	
+
 	return nil
 }
 
@@ -170,17 +170,17 @@ func (s *AlertSubscriber) handleAlertMessage(msg *nats.Msg) {
 		log.Error().Err(err).Str("subject", msg.Subject).Msg("Failed to parse alert message")
 		return
 	}
-	
+
 	// 转换为web模型
 	alert := s.convertToWebAlert(alertData)
 	if alert == nil {
 		log.Error().Str("subject", msg.Subject).Msg("Failed to convert alert to web model")
 		return
 	}
-	
+
 	// 存储告警
 	s.alertStore.AddAlert(alert)
-	
+
 	log.Info().
 		Str("alert_id", alert.ID).
 		Str("rule_id", alert.RuleID).
@@ -199,7 +199,7 @@ func (s *AlertSubscriber) convertToWebAlert(data map[string]interface{}) *models
 		UpdatedAt: time.Now(),
 		Data:      make(map[string]interface{}),
 	}
-	
+
 	// 基本字段
 	if id, ok := data["id"].(string); ok {
 		alert.ID = id
@@ -231,7 +231,7 @@ func (s *AlertSubscriber) convertToWebAlert(data map[string]interface{}) *models
 	if value := data["value"]; value != nil {
 		alert.Value = value
 	}
-	
+
 	// 时间戳
 	if timestampStr, ok := data["timestamp"].(string); ok {
 		if timestamp, err := time.Parse(time.RFC3339, timestampStr); err == nil {
@@ -239,7 +239,7 @@ func (s *AlertSubscriber) convertToWebAlert(data map[string]interface{}) *models
 			alert.UpdatedAt = timestamp
 		}
 	}
-	
+
 	// 标签
 	if tags, ok := data["tags"].(map[string]interface{}); ok {
 		alert.Tags = make(map[string]string)
@@ -249,7 +249,7 @@ func (s *AlertSubscriber) convertToWebAlert(data map[string]interface{}) *models
 			}
 		}
 	}
-	
+
 	// 通知渠道
 	if channels, ok := data["notification_channels"].([]interface{}); ok {
 		channelList := make([]string, 0, len(channels))
@@ -260,21 +260,21 @@ func (s *AlertSubscriber) convertToWebAlert(data map[string]interface{}) *models
 		}
 		alert.NotificationChannels = channelList
 	}
-	
+
 	// 优先级
 	if priority, ok := data["priority"].(float64); ok {
 		alert.Priority = int(priority)
 	}
-	
+
 	// 自动解决
 	if autoResolve, ok := data["auto_resolve"].(bool); ok {
 		alert.AutoResolve = autoResolve
 	}
-	
+
 	// 存储原始数据
 	alert.Data["original_rule_data"] = data
 	alert.Data["source_type"] = "rule_engine"
-	
+
 	return alert
 }
 

@@ -51,11 +51,11 @@ type PointConfig struct {
 
 // RedisConfig 是Redis连接器的特定参数配置
 type RedisConfig struct {
-	Address       string                 `json:"address"`      // Redis服务器地址
-	Password      string                 `json:"password"`     // Redis密码
-	Database      int                    `json:"database"`     // Redis数据库
+	Address       string                 `json:"address"`            // Redis服务器地址
+	Password      string                 `json:"password"`           // Redis密码
+	Database      int                    `json:"database"`           // Redis数据库
 	DefaultExpiry int                    `json:"default_expiry_sec"` // 默认过期时间（秒）
-	Points        map[string]PointConfig `json:"points"`       // 数据点配置
+	Points        map[string]PointConfig `json:"points"`             // 数据点配置
 }
 
 // Init 初始化连接器
@@ -73,7 +73,7 @@ func (s *RedisSink) Init(cfg json.RawMessage) error {
 	}
 
 	s.pointsConfig = redisConfig.Points
-	
+
 	// 设置默认过期时间
 	if redisConfig.DefaultExpiry > 0 {
 		s.defaultExpiry = time.Duration(redisConfig.DefaultExpiry) * time.Second
@@ -89,9 +89,11 @@ func (s *RedisSink) Init(cfg json.RawMessage) error {
 	// 测试连接
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
+	// Redis 暂时不可达时不让初始化失败（客户端会自动重连）：
+	// 以前这里返回错误，启动时 Redis 未就绪会导致该连接器被永久跳过
 	if err := s.client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("连接Redis失败: %w", err)
+		log.Warn().Err(err).Str("name", s.Name()).Str("address", redisConfig.Address).Msg("Redis暂时不可达，将在写入时自动重连")
 	}
 
 	log.Info().
@@ -147,67 +149,66 @@ func (s *RedisSink) Publish(batch []model.Point) error {
 		// 使用基础方法添加标签
 		s.AddTags(batch)
 
-		// 创建上下文
-		ctx := context.Background()
-
-		// 处理每个数据点
-		for _, point := range batch {
-			// 查找数据点配置
-			config, found := s.pointsConfig[point.Key]
-			if !found {
-				// 如果没有特定配置，使用默认值
-				config = PointConfig{
-					KeyFormat: "{device_id}:{key}",
-					Format:    "json",
-				}
-			}
-
-			// 确定Redis键
-			redisKey := s.formatKey(config, point)
-
-			// 确定过期时间
-			var expiry time.Duration
-			if config.Expiry > 0 {
-				expiry = time.Duration(config.Expiry) * time.Second
-			} else {
-				expiry = s.defaultExpiry
-			}
-
-			// 根据配置的格式存储数据
-			format := config.Format
-			if format == "" {
-				format = "json"
-			}
-
-			var err error
-			switch format {
-			case "json":
-				err = s.storeAsJSON(ctx, redisKey, point, expiry)
-			case "string":
-				err = s.storeAsString(ctx, redisKey, point, expiry)
-			case "hash":
-				err = s.storeAsHash(ctx, redisKey, point, config.HashFields, expiry)
-			default:
-				err = fmt.Errorf("不支持的存储格式: %s", format)
-			}
-
-			if err != nil {
-				return fmt.Errorf("存储数据点到Redis失败: %w", err)
-			}
-
-			log.Debug().
-				Str("name", s.Name()).
-				Str("key", point.Key).
-				Str("device_id", point.DeviceID).
-				Interface("value", point.Value).
-				Str("type", string(point.Type)).
-				Str("redis_key", redisKey).
-				Str("format", format).
-				Msg("发布数据点到Redis")
-		}
-
-		return nil
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return s.writePipeline(ctx, batch)
 	}, publishStart)
+}
+
+// WriteBatch 同步写入（实现 northbound.BatchWriter）：Pipeline 执行成功即表示 Redis 已确认
+func (s *RedisSink) WriteBatch(ctx context.Context, batch []model.Point) error {
+	if s.client == nil {
+		return fmt.Errorf("Redis客户端未初始化")
+	}
+	s.AddTags(batch)
+	return s.writePipeline(ctx, batch)
+}
+
+// writePipeline 整批使用 Pipeline，一次网络往返完成所有写入
+// （以前每个点单独 SET，一次往返一个点，是整个网关的吞吐瓶颈）
+func (s *RedisSink) writePipeline(ctx context.Context, batch []model.Point) error {
+	pipe := s.client.Pipeline()
+	for _, point := range batch {
+		if err := s.queuePoint(ctx, pipe, point); err != nil {
+			return fmt.Errorf("%w: 存储数据点到Redis失败: %v", northbound.ErrPermanent, err)
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("Redis批量写入失败: %w", err)
+	}
+	return nil
+}
+
+// queuePoint 把单个数据点的写入命令加入 Pipeline
+func (s *RedisSink) queuePoint(ctx context.Context, pipe redis.Pipeliner, point model.Point) error {
+	config, found := s.pointsConfig[point.Key]
+	if !found {
+		config = PointConfig{
+			KeyFormat: "{device_id}:{key}",
+			Format:    "json",
+		}
+	}
+	redisKey := s.formatKey(config, point)
+
+	expiry := s.defaultExpiry
+	if config.Expiry > 0 {
+		expiry = time.Duration(config.Expiry) * time.Second
+	}
+
+	format := config.Format
+	if format == "" {
+		format = "json"
+	}
+	switch format {
+	case "json":
+		return s.storeAsJSON(ctx, pipe, redisKey, point, expiry)
+	case "string":
+		return s.storeAsString(ctx, pipe, redisKey, point, expiry)
+	case "hash":
+		return s.storeAsHash(ctx, pipe, redisKey, point, config.HashFields, expiry)
+	default:
+		return fmt.Errorf("不支持的存储格式: %s", format)
+	}
 }
 
 // formatKey 格式化Redis键
@@ -231,7 +232,7 @@ func (s *RedisSink) formatKey(config PointConfig, point model.Point) string {
 }
 
 // storeAsJSON 将数据点作为JSON存储
-func (s *RedisSink) storeAsJSON(ctx context.Context, key string, point model.Point, expiry time.Duration) error {
+func (s *RedisSink) storeAsJSON(ctx context.Context, c redis.Cmdable, key string, point model.Point, expiry time.Duration) error {
 	// 创建安全的Tags副本 - 使用GetTagsCopy()
 	safeTags := point.GetTagsCopy()
 
@@ -241,7 +242,7 @@ func (s *RedisSink) storeAsJSON(ctx context.Context, key string, point model.Poi
 		"device_id": point.DeviceID,
 		"value":     s.convertValue(point),
 		"type":      string(point.Type),
-		"timestamp": time.Now().UnixNano() / int64(time.Millisecond),
+		"timestamp": northbound.PointTime(point).UnixMilli(),
 		"tags":      safeTags,
 	}
 
@@ -251,32 +252,26 @@ func (s *RedisSink) storeAsJSON(ctx context.Context, key string, point model.Poi
 		return err
 	}
 
-	// 存储到Redis
-	if expiry > 0 {
-		return s.client.Set(ctx, key, jsonData, expiry).Err()
-	}
-	return s.client.Set(ctx, key, jsonData, 0).Err()
+	c.Set(ctx, key, jsonData, expiry)
+	return nil
 }
 
 // storeAsString 将数据点作为字符串存储
-func (s *RedisSink) storeAsString(ctx context.Context, key string, point model.Point, expiry time.Duration) error {
+func (s *RedisSink) storeAsString(ctx context.Context, c redis.Cmdable, key string, point model.Point, expiry time.Duration) error {
 	// 将值转换为字符串
 	value := fmt.Sprintf("%v", s.convertValue(point))
 
-	// 存储到Redis
-	if expiry > 0 {
-		return s.client.Set(ctx, key, value, expiry).Err()
-	}
-	return s.client.Set(ctx, key, value, 0).Err()
+	c.Set(ctx, key, value, expiry)
+	return nil
 }
 
 // storeAsHash 将数据点作为哈希表存储
-func (s *RedisSink) storeAsHash(ctx context.Context, key string, point model.Point, fields []string, expiry time.Duration) error {
+func (s *RedisSink) storeAsHash(ctx context.Context, c redis.Cmdable, key string, point model.Point, fields []string, expiry time.Duration) error {
 	// 创建哈希表字段
 	hash := map[string]interface{}{
 		"value":     s.convertValue(point),
 		"type":      string(point.Type),
-		"timestamp": time.Now().UnixNano() / int64(time.Millisecond),
+		"timestamp": northbound.PointTime(point).UnixMilli(),
 	}
 
 	// 添加设备ID和键
@@ -299,58 +294,16 @@ func (s *RedisSink) storeAsHash(ctx context.Context, key string, point model.Poi
 		}
 	}
 
-	// 存储到Redis
-	if err := s.client.HSet(ctx, key, hash).Err(); err != nil {
-		return err
-	}
-
-	// 设置过期时间（如果指定）
+	c.HSet(ctx, key, hash)
 	if expiry > 0 {
-		return s.client.Expire(ctx, key, expiry).Err()
+		c.Expire(ctx, key, expiry)
 	}
-
 	return nil
 }
 
 // convertValue 根据数据类型转换值
 func (s *RedisSink) convertValue(point model.Point) interface{} {
-	switch point.Type {
-	case model.TypeInt:
-		// 确保整数类型正确
-		switch v := point.Value.(type) {
-		case int:
-			return v
-		case float64:
-			return int(v)
-		default:
-			return 0
-		}
-	case model.TypeFloat:
-		// 确保浮点类型正确
-		switch v := point.Value.(type) {
-		case float64:
-			return v
-		case int:
-			return float64(v)
-		default:
-			return 0.0
-		}
-	case model.TypeBool:
-		// 确保布尔类型正确
-		if v, ok := point.Value.(bool); ok {
-			return v
-		}
-		return false
-	case model.TypeString:
-		// 确保字符串类型正确
-		if v, ok := point.Value.(string); ok {
-			return v
-		}
-		return fmt.Sprintf("%v", point.Value)
-	default:
-		// 默认作为字符串处理
-		return fmt.Sprintf("%v", point.Value)
-	}
+	return northbound.NormalizeValueOrZero(point)
 }
 
 // Stop 停止连接器

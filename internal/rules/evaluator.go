@@ -13,8 +13,8 @@ import (
 
 // Evaluator 条件评估器
 type Evaluator struct {
-	functions    map[string]Function
-	regexCache   sync.Map // 使用sync.Map替代带锁的map
+	functions  map[string]Function
+	regexCache sync.Map // 使用sync.Map替代带锁的map
 }
 
 // Function 内置函数接口
@@ -88,7 +88,7 @@ func (e *Evaluator) Evaluate(condition *Condition, point model.Point) (bool, err
 func (e *Evaluator) evaluateSimpleCondition(condition *Condition, point model.Point) (bool, error) {
 	// 注意：在新的Evaluate方法中，复合条件已经在上层处理了
 	// 这里只处理具体的字段比较条件
-	
+
 	// 处理字段比较 - 包括空字段名的验证
 	return e.evaluateFieldCondition(condition, point)
 }
@@ -152,7 +152,7 @@ func (e *Evaluator) evaluateFieldCondition(condition *Condition, point model.Poi
 		return false, NewConditionError(ErrCodeConditionField, "字段名不能为空", nil).
 			WithContext("condition", condition)
 	}
-	
+
 	// 验证字段名不能只包含空格
 	if strings.TrimSpace(condition.Field) == "" {
 		return false, NewConditionError(ErrCodeConditionField, "字段名不能只包含空格", nil).
@@ -180,7 +180,7 @@ func (e *Evaluator) evaluateFieldCondition(condition *Condition, point model.Poi
 			WithContext("operator", operator).
 			WithContext("supported_operators", []string{"eq", "ne", "gt", "gte", "lt", "lte", "contains", "startswith", "endswith", "regex"})
 	}
-	
+
 	// 特殊处理：预验证特定操作符的类型兼容性
 	if operator == "regex" {
 		if patternStr, ok := condition.Value.(string); ok {
@@ -189,7 +189,7 @@ func (e *Evaluator) evaluateFieldCondition(condition *Condition, point model.Poi
 				return false, NewConditionError(ErrCodeConditionOperator, "正则表达式模式不能为空", nil).
 					WithContext("pattern", patternStr)
 			}
-			
+
 			// 验证正则表达式语法
 			if _, err := GetCompiledRegex(patternStr); err != nil {
 				return false, NewConditionError(ErrCodeConditionOperator, "无效的正则表达式", err).
@@ -200,7 +200,7 @@ func (e *Evaluator) evaluateFieldCondition(condition *Condition, point model.Poi
 				WithContext("value_type", fmt.Sprintf("%T", condition.Value))
 		}
 	}
-	
+
 	// 验证字符串操作符只能用于字符串字段
 	stringOperators := map[string]bool{
 		"contains":   true,
@@ -208,10 +208,10 @@ func (e *Evaluator) evaluateFieldCondition(condition *Condition, point model.Poi
 		"endswith":   true,
 		"regex":      true,
 	}
-	
+
 	if stringOperators[operator] {
 		if _, ok := fieldValue.(string); !ok {
-			return false, NewConditionError(ErrCodeConditionOperator, 
+			return false, NewConditionError(ErrCodeConditionOperator,
 				fmt.Sprintf("操作符'%s'只能用于字符串类型字段", operator), nil).
 				WithContext("field_type", fmt.Sprintf("%T", fieldValue)).
 				WithContext("field_value", fieldValue).
@@ -256,13 +256,13 @@ func (e *Evaluator) getFieldValue(field string, point model.Point) (interface{},
 		if len(parts) > 1 && point.IsComposite() {
 			return e.getCompositeFieldValue(field, parts, point)
 		}
-		
+
 		// Go 1.24安全：使用GetTag方法替代直接Tags[]访问
 		if tagValue, exists := point.GetTag(parts[0]); exists {
 			current = tagValue
 			break
 		}
-		return nil, NewConditionError(ErrCodeConditionField, 
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("未知字段: %s", parts[0]), nil).
 			WithContext("field", field).
 			WithContext("available_fields", []string{"device_id", "key", "value", "type", "timestamp", "tags", "或任何tags中的字段", "复合数据字段如location.latitude"})
@@ -295,7 +295,7 @@ func (e *Evaluator) getFieldValue(field string, point model.Point) (interface{},
 func (e *Evaluator) getCompositeFieldValue(field string, parts []string, point model.Point) (interface{}, error) {
 	compositeData, err := point.GetCompositeData()
 	if err != nil {
-		return nil, NewConditionError(ErrCodeConditionField, 
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("无法获取复合数据: %s", err.Error()), err).
 			WithContext("field", field)
 	}
@@ -318,7 +318,7 @@ func (e *Evaluator) getCompositeFieldValue(field string, parts []string, point m
 	case model.TypeTimeSeries:
 		return e.getTimeSeriesFieldValue(field, parts, compositeData)
 	default:
-		return nil, NewConditionError(ErrCodeConditionField, 
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("不支持的复合数据类型: %s", point.Type), nil).
 			WithContext("field", field).
 			WithContext("data_type", string(point.Type))
@@ -353,13 +353,13 @@ func (e *Evaluator) getLocationFieldValue(field string, parts []string, composit
 				return value, nil
 			}
 		}
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("LocationData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", []string{
 				"latitude", "longitude", "altitude", "accuracy", "speed", "heading",
-				"coordinate_system", "has_altitude", "has_speed", "has_heading", 
+				"coordinate_system", "has_altitude", "has_speed", "has_heading",
 				"elevation_category", "speed_category",
 			})
 	}
@@ -387,8 +387,8 @@ func (e *Evaluator) getVector3DFieldValue(field string, parts []string, composit
 				return value, nil
 			}
 		}
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("Vector3D中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", []string{
@@ -422,8 +422,8 @@ func (e *Evaluator) getColorFieldValue(field string, parts []string, compositeDa
 				return value, nil
 			}
 		}
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("ColorData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", []string{
@@ -449,15 +449,16 @@ func (e *Evaluator) evaluateExpression(condition *Condition, point model.Point) 
 	}
 
 	// 使用增强的表达式引擎
-	engine := NewExpressionEngine()
+	engine := AcquireExpressionEngine()
 	result, err := engine.Evaluate(expression, point)
+	ReleaseExpressionEngine(engine)
 	if err != nil {
 		// 检查是否是语法错误，如果是则直接报告
 		if strings.Contains(err.Error(), "表达式语法错误") {
 			return false, NewConditionError(ErrCodeConditionParse, "表达式语法错误", err).
 				WithContext("expression", expression)
 		}
-		
+
 		// 只有在非语法错误时才回退到简单表达式解析
 		fallbackResult, fallbackErr := e.parseSimpleExpression(expression, point)
 		if fallbackErr != nil {
@@ -601,7 +602,7 @@ func (e *Evaluator) compareValues(left, right interface{}, operator string) (boo
 	case "<=":
 		return compareValues(left, right) <= 0, nil
 	default:
-		return false, NewConditionError(ErrCodeConditionOperator, 
+		return false, NewConditionError(ErrCodeConditionOperator,
 			fmt.Sprintf("不支持的比较操作符: %s", operator), nil).
 			WithContext("operator", operator).
 			WithContext("supported_operators", []string{"==", "!=", ">", ">=", "<", "<="})
@@ -626,13 +627,13 @@ func (e *Evaluator) GetCompiledRegex(pattern string) (*regexp.Regexp, error) {
 	if compiled, ok := e.regexCache.Load(pattern); ok {
 		return compiled.(*regexp.Regexp), nil
 	}
-	
+
 	// 编译正则表达式
 	compiled, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("正则表达式编译失败: %w", err)
 	}
-	
+
 	// 原子存储，处理并发编译
 	actual, _ := e.regexCache.LoadOrStore(pattern, compiled)
 	return actual.(*regexp.Regexp), nil
@@ -914,7 +915,7 @@ func (e *Evaluator) getVectorFieldValue(field string, parts []string, compositeD
 			}
 			return nil, fmt.Errorf("向量索引超出范围: %d", idx)
 		}
-		
+
 		// 检查是否为标签访问
 		if len(vectorData.Labels) > 0 {
 			for i, label := range vectorData.Labels {
@@ -925,14 +926,14 @@ func (e *Evaluator) getVectorFieldValue(field string, parts []string, compositeD
 				}
 			}
 		}
-		
+
 		// 检查衍生值
 		if derivedValues := vectorData.GetDerivedValues(); derivedValues != nil {
 			if value, exists := derivedValues[fieldName]; exists {
 				return value, nil
 			}
 		}
-		
+
 		availableFields := []string{"dimension", "length", "unit", "magnitude", "norm", "min", "max", "sum", "mean", "range", "dominant_dimension", "dominant_value"}
 		if len(vectorData.Labels) > 0 {
 			availableFields = append(availableFields, vectorData.Labels...)
@@ -941,8 +942,8 @@ func (e *Evaluator) getVectorFieldValue(field string, parts []string, compositeD
 		for i := 0; i < vectorData.Dimension; i++ {
 			availableFields = append(availableFields, strconv.Itoa(i))
 		}
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("VectorData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", availableFields)
@@ -976,7 +977,7 @@ func (e *Evaluator) getArrayFieldValue(field string, parts []string, compositeDa
 			}
 			return nil, fmt.Errorf("数组索引超出范围: %d", idx)
 		}
-		
+
 		// 检查是否为标签访问
 		if len(arrayData.Labels) > 0 {
 			for i, label := range arrayData.Labels {
@@ -987,14 +988,14 @@ func (e *Evaluator) getArrayFieldValue(field string, parts []string, compositeDa
 				}
 			}
 		}
-		
+
 		// 检查衍生值
 		if derivedValues := arrayData.GetDerivedValues(); derivedValues != nil {
 			if value, exists := derivedValues[fieldName]; exists {
 				return value, nil
 			}
 		}
-		
+
 		availableFields := []string{"size", "length", "data_type", "unit", "type_distribution", "numeric_count", "null_count"}
 		if arrayData.DataType == "mixed" || arrayData.DataType == "float" || arrayData.DataType == "int" {
 			availableFields = append(availableFields, "numeric_min", "numeric_max", "numeric_sum", "numeric_mean", "numeric_range")
@@ -1006,8 +1007,8 @@ func (e *Evaluator) getArrayFieldValue(field string, parts []string, compositeDa
 		for i := 0; i < arrayData.Size; i++ {
 			availableFields = append(availableFields, strconv.Itoa(i))
 		}
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("ArrayData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", availableFields)
@@ -1048,22 +1049,22 @@ func (e *Evaluator) getMatrixFieldValue(field string, parts []string, compositeD
 				}
 			}
 		}
-		
+
 		// 检查衍生值
 		if derivedValues := matrixData.GetDerivedValues(); derivedValues != nil {
 			if value, exists := derivedValues[fieldName]; exists {
 				return value, nil
 			}
 		}
-		
+
 		availableFields := []string{"rows", "cols", "unit", "size", "is_square", "min", "max", "sum", "mean", "range"}
 		if matrixData.Rows == matrixData.Cols {
 			availableFields = append(availableFields, "trace", "is_diagonal", "is_identity")
 		}
 		// 添加矩阵元素访问说明
 		availableFields = append(availableFields, "使用格式: row_col (如: 0_1 表示 [0][1] 元素)")
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("MatrixData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", availableFields)
@@ -1121,23 +1122,23 @@ func (e *Evaluator) getTimeSeriesFieldValue(field string, parts []string, compos
 			}
 			return nil, fmt.Errorf("时间序列索引超出范围: %d", idx)
 		}
-		
+
 		// 检查衍生值
 		if derivedValues := timeSeriesData.GetDerivedValues(); derivedValues != nil {
 			if value, exists := derivedValues[fieldName]; exists {
 				return value, nil
 			}
 		}
-		
+
 		availableFields := []string{
-			"length", "unit", "interval", "first_timestamp", "last_timestamp", 
-			"first_value", "last_value", "duration", "avg_interval", 
+			"length", "unit", "interval", "first_timestamp", "last_timestamp",
+			"first_value", "last_value", "duration", "avg_interval",
 			"min", "max", "sum", "mean", "range", "trend_slope", "trend",
 		}
 		// 添加索引访问说明
 		availableFields = append(availableFields, "支持数字索引访问 (如: 0, 1, -1)")
-		
-		return nil, NewConditionError(ErrCodeConditionField, 
+
+		return nil, NewConditionError(ErrCodeConditionField,
 			fmt.Sprintf("TimeSeriesData中未知字段: %s", fieldName), nil).
 			WithContext("field", field).
 			WithContext("available_fields", availableFields)

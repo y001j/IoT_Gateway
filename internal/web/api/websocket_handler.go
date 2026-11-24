@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/y001j/iot-gateway/internal/utils"
 	"math"
 	"net/http"
 	"strconv"
@@ -22,16 +23,16 @@ import (
 // SmartThrottler 智能限流器
 type SmartThrottler struct {
 	// 64-bit fields first for ARM32 alignment
-	enabled          int64              // 是否启用推送 (0=暂停, 1=启用)
-	pushCount       int64                    // 推送计数
-	droppedCount    int64                    // 丢弃计数
+	enabled      int64 // 是否启用推送 (0=暂停, 1=启用)
+	pushCount    int64 // 推送计数
+	droppedCount int64 // 丢弃计数
 	// Other fields
-	globalRate       time.Duration      // 全局推送间隔
-	sensorRates      map[string]time.Duration // 每个传感器的推送间隔
-	lastPushTimes    map[string]time.Time     // 每个传感器的最后推送时间
-	mutex           sync.RWMutex
-	messageBuffer   chan ThrottledMessage    // 消息缓冲区
-	statsMutex      sync.RWMutex
+	globalRate    time.Duration            // 全局推送间隔
+	sensorRates   map[string]time.Duration // 每个传感器的推送间隔
+	lastPushTimes map[string]time.Time     // 每个传感器的最后推送时间
+	mutex         sync.RWMutex
+	messageBuffer chan ThrottledMessage // 消息缓冲区
+	statsMutex    sync.RWMutex
 }
 
 // ThrottledMessage 限流消息
@@ -45,13 +46,15 @@ type ThrottledMessage struct {
 
 // WebSocketHandler handles WebSocket connections for real-time communication
 type WebSocketHandler struct {
-	services     *services.Services
-	upgrader     websocket.Upgrader
-	clients      map[string]*WebSocketClient
-	mutex        sync.RWMutex
-	natsConn     *nats.Conn
+	// allowedOrigins 允许跨域连接的 Origin 白名单（web_ui.cors.allowed_origins）
+	allowedOrigins []string
+	services       *services.Services
+	upgrader       websocket.Upgrader
+	clients        map[string]*WebSocketClient
+	mutex          sync.RWMutex
+	natsConn       *nats.Conn
 	// 智能限流器
-	throttler    *SmartThrottler
+	throttler *SmartThrottler
 	// 配置参数
 	config          *models.WebSocketConfig
 	connectionStats map[string]int // 连接统计
@@ -60,8 +63,8 @@ type WebSocketHandler struct {
 // WebSocketClient represents a connected WebSocket client
 type WebSocketClient struct {
 	// 64-bit fields first for ARM32 alignment
-	messageCount    int64     // 消息计数（改为int64支持原子操作）
-	pushEnabled     int64     // 是否启用推送 (0=暂停, 1=启用)
+	messageCount int64 // 消息计数（改为int64支持原子操作）
+	pushEnabled  int64 // 是否启用推送 (0=暂停, 1=启用)
 	// Other fields
 	ID       string
 	Conn     *websocket.Conn
@@ -71,11 +74,11 @@ type WebSocketClient struct {
 	Send     chan []byte
 	Hub      *WebSocketHandler
 	// 客户端管理字段
-	lastActivity    time.Time // 最后活动时间
-	createdAt       time.Time // 创建时间
+	lastActivity atomic.Int64 // 最后活动时间（UnixNano）。读写协程和广播协程会同时更新，必须用原子操作
+	createdAt    time.Time    // 创建时间
 	// 客户端推送控制
-	subscriptions   map[string]bool // 订阅的数据类型
-	subsMutex       sync.RWMutex    // 订阅锁
+	subscriptions map[string]bool // 订阅的数据类型
+	subsMutex     sync.RWMutex    // 订阅锁
 }
 
 // WebSocketMessage represents a WebSocket message
@@ -97,7 +100,7 @@ type RealtimeSystemData struct {
 // NewSmartThrottler 创建智能限流器
 func NewSmartThrottler() *SmartThrottler {
 	return &SmartThrottler{
-		enabled:       1, // 默认启用
+		enabled:       1,                     // 默认启用
 		globalRate:    50 * time.Millisecond, // 全局最小间隔50ms（每秒20条）
 		sensorRates:   make(map[string]time.Duration),
 		lastPushTimes: make(map[string]time.Time),
@@ -135,19 +138,19 @@ func (t *SmartThrottler) ShouldPush(sensorID string, priority int) bool {
 		atomic.AddInt64(&t.droppedCount, 1)
 		return false
 	}
-	
+
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-	
+
 	now := time.Now()
-	
+
 	// 高优先级消息总是通过
 	if priority >= 2 {
 		t.lastPushTimes[sensorID] = now
 		atomic.AddInt64(&t.pushCount, 1)
 		return true
 	}
-	
+
 	// 检查传感器特定频率限制
 	if rate, exists := t.sensorRates[sensorID]; exists {
 		if lastTime, hasLast := t.lastPushTimes[sensorID]; hasLast {
@@ -166,7 +169,7 @@ func (t *SmartThrottler) ShouldPush(sensorID string, priority int) bool {
 		}
 		t.lastPushTimes["_global"] = now
 	}
-	
+
 	t.lastPushTimes[sensorID] = now
 	atomic.AddInt64(&t.pushCount, 1)
 	return true
@@ -187,17 +190,14 @@ func (t *SmartThrottler) GetStats() map[string]interface{} {
 func NewWebSocketHandler(services *services.Services, natsConn *nats.Conn) *WebSocketHandler {
 	// 获取WebSocket配置
 	config := getWebSocketConfig(services)
-	
+
 	// 创建智能限流器（不配置传感器特定频率，使用通用策略）
 	throttler := NewSmartThrottler()
-	
+
 	handler := &WebSocketHandler{
 		services: services,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// 在生产环境中，应该检查 Origin
-				return true
-			},
+			// CheckOrigin 在下方设置：默认只允许同源和非浏览器客户端
 			ReadBufferSize:  config.ReadBufferSize,
 			WriteBufferSize: config.WriteBufferSize,
 		},
@@ -207,8 +207,10 @@ func NewWebSocketHandler(services *services.Services, natsConn *nats.Conn) *WebS
 		config:          config,
 		connectionStats: make(map[string]int),
 	}
+	handler.upgrader.CheckOrigin = func(r *http.Request) bool {
+		return utils.CheckOrigin(r, handler.allowedOrigins)
+	}
 
-	
 	// 启动 NATS 数据订阅
 	go func() {
 		defer func() {
@@ -233,7 +235,7 @@ func getWebSocketConfig(services *services.Services) *models.WebSocketConfig {
 	// 尝试从系统配置获取WebSocket配置
 	if systemConfig, err := services.System.GetConfig(); err == nil {
 		wsConfig := &systemConfig.WebUI.WebSocket
-		
+
 		// 设置默认值
 		if wsConfig.MaxClients <= 0 {
 			wsConfig.MaxClients = 50
@@ -259,28 +261,28 @@ func getWebSocketConfig(services *services.Services) *models.WebSocketConfig {
 		if wsConfig.PongTimeout <= 0 {
 			wsConfig.PongTimeout = 60
 		}
-		
+
 		log.Info().
 			Int("max_clients", wsConfig.MaxClients).
 			Int("message_rate", wsConfig.MessageRate).
 			Int("read_buffer_size", wsConfig.ReadBufferSize).
 			Int("write_buffer_size", wsConfig.WriteBufferSize).
 			Msg("WebSocket配置已加载")
-		
+
 		return wsConfig
 	}
-	
+
 	// 使用默认配置
 	log.Warn().Msg("无法获取WebSocket配置，使用默认值")
 	return &models.WebSocketConfig{
-		MaxClients:         50,
-		MessageRate:        10,
-		ReadBufferSize:     2048,
-		WriteBufferSize:    2048,
-		CleanupInterval:    30,
-		InactivityTimeout:  300,
-		PingInterval:       54,
-		PongTimeout:        60,
+		MaxClients:        50,
+		MessageRate:       10,
+		ReadBufferSize:    2048,
+		WriteBufferSize:   2048,
+		CleanupInterval:   30,
+		InactivityTimeout: 300,
+		PingInterval:      54,
+		PongTimeout:       60,
 	}
 }
 
@@ -320,7 +322,7 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 		pushEnabled:   1, // 默认启用推送
 		subscriptions: make(map[string]bool),
 	}
-	
+
 	// 默认订阅所有数据类型
 	client.subscriptions["iot_data"] = true
 	client.subscriptions["rule_event"] = true
@@ -359,7 +361,7 @@ func (h *WebSocketHandler) registerClient(client *WebSocketClient) {
 	}
 
 	client.createdAt = time.Now()
-	client.lastActivity = time.Now()
+	client.touch()
 	h.clients[client.ID] = client
 
 	// 更新连接统计
@@ -433,7 +435,7 @@ func (h *WebSocketHandler) broadcastMessage(messageType string, data interface{}
 			select {
 			case client.Send <- messageBytes:
 				atomic.AddInt64(&client.messageCount, 1)
-				client.lastActivity = time.Now()
+				client.touch()
 			default:
 				// 发送缓冲区已满，记录警告但不立即断开连接
 				log.Warn().Str("client_id", client.ID).Msg("客户端发送缓冲区已满，跳过消息")
@@ -520,13 +522,11 @@ func (h *WebSocketHandler) subscribeToNATSData() {
 		return
 	}
 
-	
 	// 检查NATS连接状态
 	if h.natsConn.Status() != nats.CONNECTED {
 		log.Error().Str("status", h.natsConn.Status().String()).Msg("NATS连接状态异常")
 		return
 	}
-	
 
 	// 订阅IoT数据流，使用智能限流器
 	_, err := h.natsConn.Subscribe("iot.data.>", func(msg *nats.Msg) {
@@ -565,12 +565,11 @@ func (h *WebSocketHandler) subscribeToNATSData() {
 			}
 		}
 	})
-	
+
 	if err != nil {
 		log.Error().Err(err).Msg("订阅IoT数据流失败")
 		return
 	}
-	
 
 	// 订阅规则引擎事件
 	h.natsConn.Subscribe("iot.rules.>", func(msg *nats.Msg) {
@@ -659,7 +658,7 @@ func (h *WebSocketHandler) smartBroadcastMessage(messageType string, data interf
 			}
 		}
 		client.subsMutex.RUnlock()
-		
+
 		if !shouldSend {
 			continue
 		}
@@ -669,7 +668,7 @@ func (h *WebSocketHandler) smartBroadcastMessage(messageType string, data interf
 		case client.Send <- messageBytes:
 			// 更新客户端统计
 			atomic.AddInt64(&client.messageCount, 1)
-			client.lastActivity = time.Now()
+			client.touch()
 		default:
 			// 客户端缓冲区满，记录并跳过
 			log.Warn().
@@ -730,7 +729,7 @@ func (h *WebSocketHandler) cleanupInactiveClients() {
 
 	for _, client := range h.clients {
 		// 检查客户端是否超时
-		if now.Sub(client.lastActivity) > time.Duration(h.config.InactivityTimeout)*time.Second {
+		if now.Sub(client.lastActive()) > time.Duration(h.config.InactivityTimeout)*time.Second {
 			inactiveClients = append(inactiveClients, client)
 		}
 	}
@@ -774,7 +773,7 @@ func (c *WebSocketClient) readPump() {
 	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.Conn.SetPongHandler(func(string) error {
 		c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		c.lastActivity = time.Now() // 更新活动时间
+		c.touch() // 更新活动时间
 		return nil
 	})
 
@@ -787,7 +786,7 @@ func (c *WebSocketClient) readPump() {
 			break
 		}
 
-		c.lastActivity = time.Now() // 更新活动时间
+		c.touch() // 更新活动时间
 
 		// 处理客户端消息
 		c.handleClientMessage(message)
@@ -817,7 +816,7 @@ func (c *WebSocketClient) writePump() {
 				return
 			}
 
-			c.lastActivity = time.Now() // 更新活动时间
+			c.touch() // 更新活动时间
 
 		case <-ticker.C:
 			c.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
@@ -874,20 +873,20 @@ func (c *WebSocketClient) handleSubscribeRequest(msg map[string]interface{}) {
 		Str("client_id", c.ID).
 		Interface("request", msg).
 		Msg("处理订阅请求")
-	
+
 	// 解析订阅请求
 	data, ok := msg["data"].(map[string]interface{})
 	if !ok {
 		log.Warn().Str("client_id", c.ID).Msg("订阅请求格式错误")
 		return
 	}
-	
+
 	channel, ok := data["channel"].(string)
 	if !ok {
 		log.Warn().Str("client_id", c.ID).Msg("订阅请求缺少channel字段")
 		return
 	}
-	
+
 	// 添加到客户端订阅列表
 	c.subsMutex.Lock()
 	if c.subscriptions == nil {
@@ -895,19 +894,19 @@ func (c *WebSocketClient) handleSubscribeRequest(msg map[string]interface{}) {
 	}
 	c.subscriptions[channel] = true
 	c.subsMutex.Unlock()
-	
+
 	// 启用客户端推送
 	atomic.StoreInt64(&c.pushEnabled, 1)
-	
+
 	log.Info().
 		Str("client_id", c.ID).
 		Str("channel", channel).
 		Msg("成功添加订阅")
-	
+
 	// 发送订阅确认
 	c.Hub.sendToClient(c.ID, "subscription_confirmed", map[string]interface{}{
-		"channel": channel,
-		"status":  "active",
+		"channel":   channel,
+		"status":    "active",
 		"timestamp": time.Now(),
 	})
 }
@@ -920,6 +919,12 @@ func (c *WebSocketClient) handleUnsubscribeRequest(msg map[string]interface{}) {
 		Interface("request", msg).
 		Msg("处理取消订阅请求")
 }
+
+// touch 更新最后活动时间
+func (c *WebSocketClient) touch() { c.lastActivity.Store(time.Now().UnixNano()) }
+
+// lastActive 返回最后活动时间
+func (c *WebSocketClient) lastActive() time.Time { return time.Unix(0, c.lastActivity.Load()) }
 
 // generateClientID generates a unique client ID
 func generateClientID() string {
@@ -939,16 +944,16 @@ func randomString(length int) string {
 // enhanceIoTData 增强IoT数据，添加类型信息和派生值
 func (h *WebSocketHandler) enhanceIoTData(data map[string]interface{}) map[string]interface{} {
 	enhanced := make(map[string]interface{})
-	
+
 	// 复制原始数据
 	for k, v := range data {
 		enhanced[k] = v
 	}
-	
+
 	// 确定数据类型并计算派生值
 	dataType := h.detectDataType(data)
 	enhanced["data_type"] = dataType
-	
+
 	// 根据数据类型计算派生值
 	switch dataType {
 	case "location":
@@ -988,7 +993,7 @@ func (h *WebSocketHandler) enhanceIoTData(data map[string]interface{}) map[strin
 			}
 		}
 	}
-	
+
 	return enhanced
 }
 
@@ -998,13 +1003,13 @@ func (h *WebSocketHandler) detectDataType(data map[string]interface{}) string {
 	if dataType, ok := data["type"].(string); ok {
 		return dataType
 	}
-	
+
 	// 根据value结构推断类型
 	value, ok := data["value"]
 	if !ok {
 		return "unknown"
 	}
-	
+
 	switch v := value.(type) {
 	case map[string]interface{}:
 		// 检查复合数据类型的特征字段
@@ -1060,25 +1065,25 @@ func (h *WebSocketHandler) calculateLocationDerivedValues(data map[string]interf
 	if !ok {
 		return nil
 	}
-	
+
 	lat := toFloat64(value["latitude"])
 	lng := toFloat64(value["longitude"])
-	
+
 	derived := map[string]interface{}{
 		"display_value": fmt.Sprintf("%.6f,%.6f", lat, lng),
-		"summary":      fmt.Sprintf("GPS (%.4f, %.4f)", lat, lng),
-		"coordinate":   fmt.Sprintf("%.6f,%.6f", lat, lng),
+		"summary":       fmt.Sprintf("GPS (%.4f, %.4f)", lat, lng),
+		"coordinate":    fmt.Sprintf("%.6f,%.6f", lat, lng),
 	}
-	
+
 	if speed := toFloat64(value["speed"]); speed > 0 {
 		derived["speed_kmh"] = speed
 		derived["moving"] = speed > 1.0
 	}
-	
+
 	if altitude := toFloat64(value["altitude"]); altitude != 0 {
 		derived["altitude_m"] = altitude
 	}
-	
+
 	return derived
 }
 
@@ -1088,18 +1093,18 @@ func (h *WebSocketHandler) calculateVector3DDerivedValues(data map[string]interf
 	if !ok {
 		return nil
 	}
-	
+
 	x := toFloat64(value["x"])
 	y := toFloat64(value["y"])
 	z := toFloat64(value["z"])
-	
+
 	magnitude := math.Sqrt(x*x + y*y + z*z)
-	
+
 	return map[string]interface{}{
 		"display_value": magnitude,
-		"summary":      fmt.Sprintf("Vector3D (|%.2f|)", magnitude),
-		"magnitude":    magnitude,
-		"components":   fmt.Sprintf("(%.2f, %.2f, %.2f)", x, y, z),
+		"summary":       fmt.Sprintf("Vector3D (|%.2f|)", magnitude),
+		"magnitude":     magnitude,
+		"components":    fmt.Sprintf("(%.2f, %.2f, %.2f)", x, y, z),
 	}
 }
 
@@ -1109,18 +1114,18 @@ func (h *WebSocketHandler) calculateColorDerivedValues(data map[string]interface
 	if !ok {
 		return nil
 	}
-	
+
 	r := int(toFloat64(value["r"]))
 	g := int(toFloat64(value["g"]))
 	b := int(toFloat64(value["b"]))
-	
+
 	hexColor := fmt.Sprintf("#%02X%02X%02X", r, g, b)
-	
+
 	return map[string]interface{}{
 		"display_value": hexColor,
-		"summary":      fmt.Sprintf("Color %s", hexColor),
-		"hex":          hexColor,
-		"rgb":          fmt.Sprintf("rgb(%d, %d, %d)", r, g, b),
+		"summary":       fmt.Sprintf("Color %s", hexColor),
+		"hex":           hexColor,
+		"rgb":           fmt.Sprintf("rgb(%d, %d, %d)", r, g, b),
 	}
 }
 
@@ -1130,31 +1135,31 @@ func (h *WebSocketHandler) calculateVectorDerivedValues(data map[string]interfac
 	if !ok {
 		return nil
 	}
-	
+
 	valuesInterface, ok := value["values"].([]interface{})
 	if !ok {
 		return nil
 	}
-	
+
 	values := make([]float64, len(valuesInterface))
 	for i, v := range valuesInterface {
 		values[i] = toFloat64(v)
 	}
-	
+
 	// 计算模长
 	sumSquares := 0.0
 	for _, v := range values {
 		sumSquares += v * v
 	}
 	magnitude := math.Sqrt(sumSquares)
-	
+
 	dimension := len(values)
-	
+
 	return map[string]interface{}{
 		"display_value": magnitude,
-		"summary":      fmt.Sprintf("Vector%dD (|%.2f|)", dimension, magnitude),
-		"magnitude":    magnitude,
-		"dimension":    dimension,
+		"summary":       fmt.Sprintf("Vector%dD (|%.2f|)", dimension, magnitude),
+		"magnitude":     magnitude,
+		"dimension":     dimension,
 	}
 }
 
@@ -1164,17 +1169,17 @@ func (h *WebSocketHandler) calculateArrayDerivedValues(data map[string]interface
 	if !ok {
 		return nil
 	}
-	
+
 	valuesInterface, ok := value["values"].([]interface{})
 	if !ok {
 		return nil
 	}
-	
+
 	size := len(valuesInterface)
 	nullCount := 0
 	numericCount := 0
 	var sum float64
-	
+
 	for _, v := range valuesInterface {
 		if v == nil {
 			nullCount++
@@ -1186,19 +1191,19 @@ func (h *WebSocketHandler) calculateArrayDerivedValues(data map[string]interface
 			sum += toFloat64(v)
 		}
 	}
-	
+
 	derived := map[string]interface{}{
 		"display_value": size,
-		"summary":      fmt.Sprintf("Array[%d]", size),
-		"size":         size,
-		"null_count":   nullCount,
+		"summary":       fmt.Sprintf("Array[%d]", size),
+		"size":          size,
+		"null_count":    nullCount,
 	}
-	
+
 	if numericCount > 0 {
 		derived["numeric_count"] = numericCount
 		derived["average"] = sum / float64(numericCount)
 	}
-	
+
 	return derived
 }
 
@@ -1208,17 +1213,17 @@ func (h *WebSocketHandler) calculateMatrixDerivedValues(data map[string]interfac
 	if !ok {
 		return nil
 	}
-	
+
 	rows := int(toFloat64(value["rows"]))
 	cols := int(toFloat64(value["cols"]))
-	
+
 	return map[string]interface{}{
 		"display_value": fmt.Sprintf("%dx%d", rows, cols),
-		"summary":      fmt.Sprintf("Matrix %dx%d", rows, cols),
-		"rows":         rows,
-		"cols":         cols,
-		"size":         rows * cols,
-		"is_square":    rows == cols,
+		"summary":       fmt.Sprintf("Matrix %dx%d", rows, cols),
+		"rows":          rows,
+		"cols":          cols,
+		"size":          rows * cols,
+		"is_square":     rows == cols,
 	}
 }
 
@@ -1228,31 +1233,31 @@ func (h *WebSocketHandler) calculateTimeSeriesDerivedValues(data map[string]inte
 	if !ok {
 		return nil
 	}
-	
+
 	valuesInterface, ok := value["values"].([]interface{})
 	if !ok {
 		return nil
 	}
-	
+
 	length := len(valuesInterface)
 	if length == 0 {
 		return map[string]interface{}{
 			"display_value": 0,
-			"summary":      "TimeSeries (empty)",
-			"length":       0,
+			"summary":       "TimeSeries (empty)",
+			"length":        0,
 		}
 	}
-	
+
 	// 计算最新值
 	latestValue := toFloat64(valuesInterface[length-1])
-	
+
 	derived := map[string]interface{}{
 		"display_value": latestValue,
-		"summary":      fmt.Sprintf("TimeSeries[%d] (%.2f)", length, latestValue),
-		"length":       length,
-		"latest_value": latestValue,
+		"summary":       fmt.Sprintf("TimeSeries[%d] (%.2f)", length, latestValue),
+		"length":        length,
+		"latest_value":  latestValue,
 	}
-	
+
 	// 计算简单统计
 	if length > 1 {
 		firstValue := toFloat64(valuesInterface[0])
@@ -1265,7 +1270,7 @@ func (h *WebSocketHandler) calculateTimeSeriesDerivedValues(data map[string]inte
 			derived["trend"] = "decreasing"
 		}
 	}
-	
+
 	return derived
 }
 
@@ -1295,14 +1300,14 @@ func (h *WebSocketHandler) SetGlobalPushEnabled(c *gin.Context) {
 	var request struct {
 		Enabled bool `json:"enabled"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
 		return
 	}
-	
+
 	h.throttler.SetGlobalEnabled(request.Enabled)
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": fmt.Sprintf("全局推送已%s", map[bool]string{true: "启用", false: "暂停"}[request.Enabled]),
 		"enabled": request.Enabled,
@@ -1316,27 +1321,27 @@ func (h *WebSocketHandler) SetClientPushEnabled(c *gin.Context) {
 	var request struct {
 		Enabled bool `json:"enabled"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
 		return
 	}
-	
+
 	h.mutex.RLock()
 	client, exists := h.clients[clientID]
 	h.mutex.RUnlock()
-	
+
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "客户端不存在"})
 		return
 	}
-	
+
 	if request.Enabled {
 		atomic.StoreInt64(&client.pushEnabled, 1)
 	} else {
 		atomic.StoreInt64(&client.pushEnabled, 0)
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":   fmt.Sprintf("客户端%s推送已%s", clientID, map[bool]string{true: "启用", false: "暂停"}[request.Enabled]),
 		"client_id": clientID,
@@ -1350,28 +1355,28 @@ func (h *WebSocketHandler) SetClientSubscriptions(c *gin.Context) {
 	var request struct {
 		Subscriptions []string `json:"subscriptions"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
 		return
 	}
-	
+
 	h.mutex.RLock()
 	client, exists := h.clients[clientID]
 	h.mutex.RUnlock()
-	
+
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "客户端不存在"})
 		return
 	}
-	
+
 	client.subsMutex.Lock()
 	client.subscriptions = make(map[string]bool)
 	for _, sub := range request.Subscriptions {
 		client.subscriptions[sub] = true
 	}
 	client.subsMutex.Unlock()
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":       fmt.Sprintf("客户端%s订阅已更新", clientID),
 		"client_id":     clientID,
@@ -1390,33 +1395,33 @@ func (h *WebSocketHandler) GetWebSocketStats(c *gin.Context) {
 			subscriptions = append(subscriptions, sub)
 		}
 		client.subsMutex.RUnlock()
-		
+
 		clientStats = append(clientStats, map[string]interface{}{
-			"client_id":      client.ID,
-			"username":       client.Username,
-			"role":           client.Role,
-			"push_enabled":   atomic.LoadInt64(&client.pushEnabled) == 1,
-			"message_count":  atomic.LoadInt64(&client.messageCount),
-			"last_activity":  client.lastActivity,
-			"created_at":     client.createdAt,
-			"subscriptions":  subscriptions,
+			"client_id":     client.ID,
+			"username":      client.Username,
+			"role":          client.Role,
+			"push_enabled":  atomic.LoadInt64(&client.pushEnabled) == 1,
+			"message_count": atomic.LoadInt64(&client.messageCount),
+			"last_activity": client.lastActive(),
+			"created_at":    client.createdAt,
+			"subscriptions": subscriptions,
 		})
 	}
 	h.mutex.RUnlock()
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"throttler_stats": h.throttler.GetStats(),
 		"client_count":    len(clientStats),
 		"clients":         clientStats,
 		"config": map[string]interface{}{
-			"max_clients":         h.config.MaxClients,
-			"message_rate":        h.config.MessageRate,
-			"read_buffer_size":    h.config.ReadBufferSize,
-			"write_buffer_size":   h.config.WriteBufferSize,
-			"cleanup_interval":    h.config.CleanupInterval,
-			"inactivity_timeout":  h.config.InactivityTimeout,
-			"ping_interval":       h.config.PingInterval,
-			"pong_timeout":        h.config.PongTimeout,
+			"max_clients":        h.config.MaxClients,
+			"message_rate":       h.config.MessageRate,
+			"read_buffer_size":   h.config.ReadBufferSize,
+			"write_buffer_size":  h.config.WriteBufferSize,
+			"cleanup_interval":   h.config.CleanupInterval,
+			"inactivity_timeout": h.config.InactivityTimeout,
+			"ping_interval":      h.config.PingInterval,
+			"pong_timeout":       h.config.PongTimeout,
 		},
 	})
 }

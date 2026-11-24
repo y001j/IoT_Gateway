@@ -39,14 +39,14 @@ func (h *RuleHandler) GetRules(c *gin.Context) {
 	page, pageSize := h.GetPaginationParams(c)
 	req := &models.RuleListRequest{Page: page, PageSize: pageSize}
 	log.Info().Int("page", page).Int("page_size", pageSize).Msg("API: 分页参数")
-	
+
 	rules, total, err := h.ruleService.GetRules(req)
 	if err != nil {
 		log.Error().Err(err).Msg("API: GetRules 失败")
 		h.ErrorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	
+
 	log.Info().Int("rules_count", len(rules)).Int("total", total).Msg("API: GetRules 成功")
 	h.SuccessResponse(c, &models.PagedResponse{
 		Data:       rules,

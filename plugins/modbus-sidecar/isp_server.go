@@ -39,7 +39,7 @@ type ISPServer struct {
 	dataTimer      *time.Timer
 	heartbeatTimer *time.Timer           // 心跳定时器
 	longConn       *ModbusLongConnection // 改为单一长连接
-	
+
 	// 指标收集
 	startTime           time.Time
 	dataPointsCollected int64
@@ -765,10 +765,10 @@ func (c *ISPClientConn) handleHeartbeatMessage(msg *plugin.ISPMessage) {
 func (c *ISPClientConn) handleMetricsMessage(msg *plugin.ISPMessage) {
 	// 获取服务器指标
 	metrics := c.server.getMetrics()
-	
+
 	// 发送指标响应
 	c.sendSuccessResponse(msg.ID, metrics)
-	
+
 	log.Debug().
 		Str("client_id", c.id).
 		Int64("data_points", metrics.DataPointsCollected).
@@ -855,15 +855,15 @@ func (s *ISPServer) setLastError(errMsg string) {
 func (s *ISPServer) addResponseTime(responseTimeMs float64) {
 	s.metricsMu.Lock()
 	defer s.metricsMu.Unlock()
-	
+
 	// 添加新的响应时间
 	s.responseTimes = append(s.responseTimes, responseTimeMs)
-	
+
 	// 如果超过最大记录数，移除最旧的记录
 	if len(s.responseTimes) > s.maxResponseTimes {
 		s.responseTimes = s.responseTimes[1:]
 	}
-	
+
 	// 重新计算平均响应时间
 	if len(s.responseTimes) > 0 {
 		var sum float64
@@ -877,9 +877,9 @@ func (s *ISPServer) addResponseTime(responseTimeMs float64) {
 func (s *ISPServer) getMetrics() plugin.MetricsPayload {
 	s.metricsMu.RLock()
 	defer s.metricsMu.RUnlock()
-	
+
 	uptime := int64(time.Since(s.startTime).Seconds())
-	
+
 	return plugin.MetricsPayload{
 		DataPointsCollected: s.dataPointsCollected,
 		ErrorsCount:         s.errorsCount,

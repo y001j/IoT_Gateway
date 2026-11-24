@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -80,7 +81,7 @@ func (s *notificationService) sendEmailNotification(channel *models.Notification
 	username, _ := config["username"].(string)
 	password, _ := config["password"].(string)
 	from, _ := config["from"].(string)
-	
+
 	recipients, ok := config["recipients"].([]interface{})
 	if !ok {
 		return fmt.Errorf("邮件收件人配置错误")
@@ -218,7 +219,7 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 	apiKey, _ := config["api_key"].(string)
 	apiSecret, _ := config["api_secret"].(string)
 	serviceURL, _ := config["service_url"].(string)
-	
+
 	phoneNumbers, ok := config["phone_numbers"].([]interface{})
 	if !ok {
 		return fmt.Errorf("短信收件人配置错误")
@@ -248,7 +249,7 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 			}
 
 			req.Header.Set("Content-Type", "application/json")
-			
+
 			resp, err := s.httpClient.Do(req)
 			if err != nil {
 				log.Error().Err(err).Str("phone", phone).Msg("发送短信失败")
@@ -284,9 +285,9 @@ func (s *notificationService) sendSlackNotification(channel *models.Notification
 		"text": fmt.Sprintf("告警: %s", alert.Title),
 		"attachments": []map[string]interface{}{
 			{
-				"color":      color,
-				"title":      alert.Title,
-				"text":       alert.Description,
+				"color": color,
+				"title": alert.Title,
+				"text":  alert.Description,
 				"fields": []map[string]interface{}{
 					{"title": "级别", "value": strings.ToUpper(alert.Level), "short": true},
 					{"title": "来源", "value": alert.Source, "short": true},
@@ -469,13 +470,14 @@ func (s *notificationService) buildEmailBody(alert *models.Alert) string {
 </body>
 </html>`,
 		s.getAlertColor(alert.Level),
-		alert.Title,
-		strings.ToUpper(alert.Level),
-		alert.Description,
-		alert.Source,
-		alert.Status,
+		// 告警内容可能来自设备数据，必须转义，防止邮件 HTML 注入
+		html.EscapeString(alert.Title),
+		html.EscapeString(strings.ToUpper(alert.Level)),
+		html.EscapeString(alert.Description),
+		html.EscapeString(alert.Source),
+		html.EscapeString(alert.Status),
 		alert.CreatedAt.Format("2006-01-02 15:04:05"),
-		alert.ID,
+		html.EscapeString(alert.ID),
 	)
 }
 

@@ -40,7 +40,7 @@ func (h *AggregateHandler) Execute(ctx context.Context, point model.Point, rule 
 			Duration: 0,
 		}, err
 	}
-	
+
 	// 解析配置
 	aggregateConfig, err := h.parseConfig(config)
 	if err != nil {
@@ -103,7 +103,7 @@ func (h *AggregateHandler) parseConfig(config map[string]interface{}) (*Aggregat
 	if windowTypeVal, ok := config["window_type"]; ok {
 		if windowType, ok := windowTypeVal.(string); ok {
 			aggregateConfig.WindowType = windowType
-			
+
 			// 如果是时间窗口，解析时间参数
 			if windowType == "time" {
 				if windowVal, ok := config["window"]; ok {
@@ -228,13 +228,13 @@ func (h *AggregateHandler) parseConfig(config map[string]interface{}) (*Aggregat
 			aggregateConfig.UpperLimit = &upperLimit
 		}
 	}
-	
+
 	if lowerLimitVal, ok := config["lower_limit"]; ok {
 		if lowerLimit, ok := lowerLimitVal.(float64); ok {
 			aggregateConfig.LowerLimit = &lowerLimit
 		}
 	}
-	
+
 	if outlierThresholdVal, ok := config["outlier_threshold"]; ok {
 		if outlierThreshold, ok := outlierThresholdVal.(float64); ok && outlierThreshold > 0 {
 			aggregateConfig.OutlierThreshold = &outlierThreshold
@@ -366,15 +366,15 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			"sum": true, "count": true, "min": true, "max": true,
 			"stddev": true, "std": true, "variance": true,
 			"median": true, "first": true, "last": true,
-			
+
 			// Phase 1: 高价值新增函数
 			"p90": true, "p95": true, "p99": true,
 			"null_rate": true, "completeness": true,
 			"change": true, "change_rate": true,
 			"outlier_count": true,
-			
+
 			// Phase 2: 扩展函数
-			"p25": true, "p50": true, "p75": true,  // 添加p50支持
+			"p25": true, "p50": true, "p75": true, // 添加p50支持
 			"volatility": true, "cv": true,
 			"above_count": true, "below_count": true, "in_range_count": true,
 		}
@@ -406,12 +406,12 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			if len(v) > 20 { // 防止超长TTL字符串攻击
 				return fmt.Errorf("TTL字符串长度不能超过20个字符")
 			}
-			
+
 			duration, err := time.ParseDuration(v)
 			if err != nil {
 				return fmt.Errorf("TTL格式错误: %v", err)
 			}
-			
+
 			// 限制TTL的合理范围：1秒 - 24小时
 			if duration < time.Second {
 				return fmt.Errorf("TTL不能小于1秒")
@@ -419,7 +419,7 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			if duration > 24*time.Hour {
 				return fmt.Errorf("TTL不能超过24小时")
 			}
-			
+
 		case float64:
 			if v <= 0 {
 				return fmt.Errorf("TTL必须大于0")
@@ -430,7 +430,7 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				return fmt.Errorf("TTL不能为NaN或无穷大")
 			}
-			
+
 		default:
 			return fmt.Errorf("TTL类型错误，应为字符串或数字")
 		}
@@ -447,7 +447,7 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			return fmt.Errorf("上限阈值类型错误，应为数字")
 		}
 	}
-	
+
 	if lowerLimitVal, ok := config["lower_limit"]; ok {
 		switch v := lowerLimitVal.(type) {
 		case float64:
@@ -458,7 +458,7 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			return fmt.Errorf("下限阈值类型错误，应为数字")
 		}
 	}
-	
+
 	if outlierThresholdVal, ok := config["outlier_threshold"]; ok {
 		switch v := outlierThresholdVal.(type) {
 		case float64:
@@ -472,7 +472,7 @@ func (h *AggregateHandler) Validate(config map[string]interface{}) error {
 			return fmt.Errorf("异常值阈值类型错误，应为数字")
 		}
 	}
-	
+
 	// 验证阈值逻辑合理性
 	if upperLimitVal, ok1 := config["upper_limit"]; ok1 {
 		if lowerLimitVal, ok2 := config["lower_limit"]; ok2 {

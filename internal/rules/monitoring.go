@@ -15,70 +15,70 @@ import (
 // MonitoringRuleError 扩展规则错误（用于监控）
 type MonitoringRuleError struct {
 	*RuleError
-	ID          string            `json:"id"`
-	RuleID      string            `json:"rule_id,omitempty"`
-	ActionType  string            `json:"action_type,omitempty"`
-	StackTrace  string            `json:"stack_trace,omitempty"`
-	Retry       bool              `json:"retry"`
-	RetryCount  int               `json:"retry_count,omitempty"`
-	LastRetryAt time.Time         `json:"last_retry_at,omitempty"`
+	ID          string    `json:"id"`
+	RuleID      string    `json:"rule_id,omitempty"`
+	ActionType  string    `json:"action_type,omitempty"`
+	StackTrace  string    `json:"stack_trace,omitempty"`
+	Retry       bool      `json:"retry"`
+	RetryCount  int       `json:"retry_count,omitempty"`
+	LastRetryAt time.Time `json:"last_retry_at,omitempty"`
 }
 
 // RuleMonitor 规则引擎监控器
 type RuleMonitor struct {
 	// 64-bit map fields first for ARM32 alignment
-	errorsByType      map[ErrorType]int64
-	errorsByLevel     map[ErrorLevel]int64
+	errorsByType  map[ErrorType]int64
+	errorsByLevel map[ErrorLevel]int64
 	// Other fields
-	mu                sync.RWMutex
-	metrics           *EngineMetrics
-	errors            []*MonitoringRuleError
-	maxErrors         int
-	actionStats       map[string]*ActionStats
-	ruleStats         map[string]*RuleStats
-	performanceStats  *PerformanceStats
-	healthStatus      HealthStatus
-	healthChecks      map[string]HealthChecker
-	alertThresholds   *AlertThresholds
-	notificationChan  chan *MonitoringRuleError
-	ctx               context.Context
-	cancel            context.CancelFunc
-	logger            zerolog.Logger
+	mu               sync.RWMutex
+	metrics          *EngineMetrics
+	errors           []*MonitoringRuleError
+	maxErrors        int
+	actionStats      map[string]*ActionStats
+	ruleStats        map[string]*RuleStats
+	performanceStats *PerformanceStats
+	healthStatus     HealthStatus
+	healthChecks     map[string]HealthChecker
+	alertThresholds  *AlertThresholds
+	notificationChan chan *MonitoringRuleError
+	ctx              context.Context
+	cancel           context.CancelFunc
+	logger           zerolog.Logger
 }
 
 // ActionStats 动作统计
 type ActionStats struct {
 	// 64-bit fields first for ARM32 alignment
-	TotalExecutions int64         `json:"total_executions"`
-	SuccessCount    int64         `json:"success_count"`
-	ErrorCount      int64         `json:"error_count"`
+	TotalExecutions int64 `json:"total_executions"`
+	SuccessCount    int64 `json:"success_count"`
+	ErrorCount      int64 `json:"error_count"`
 	// Other fields
-	TotalDuration   time.Duration `json:"total_duration"`
-	AvgDuration     time.Duration `json:"avg_duration"`
-	MaxDuration     time.Duration `json:"max_duration"`
-	MinDuration     time.Duration `json:"min_duration"`
-	LastExecuted    time.Time     `json:"last_executed"`
-	LastError       string        `json:"last_error,omitempty"`
+	TotalDuration time.Duration `json:"total_duration"`
+	AvgDuration   time.Duration `json:"avg_duration"`
+	MaxDuration   time.Duration `json:"max_duration"`
+	MinDuration   time.Duration `json:"min_duration"`
+	LastExecuted  time.Time     `json:"last_executed"`
+	LastError     string        `json:"last_error,omitempty"`
 }
 
 // RuleStats 规则统计
 type RuleStats struct {
 	// 64-bit fields first for ARM32 alignment
-	TotalEvaluations int64         `json:"total_evaluations"`
-	MatchCount       int64         `json:"match_count"`
-	ErrorCount       int64         `json:"error_count"`
+	TotalEvaluations int64 `json:"total_evaluations"`
+	MatchCount       int64 `json:"match_count"`
+	ErrorCount       int64 `json:"error_count"`
 	// Other fields
-	TotalDuration    time.Duration `json:"total_duration"`
-	AvgDuration      time.Duration `json:"avg_duration"`
-	LastEvaluated    time.Time     `json:"last_evaluated"`
-	LastMatched      time.Time     `json:"last_matched"`
-	LastError        string        `json:"last_error,omitempty"`
+	TotalDuration time.Duration `json:"total_duration"`
+	AvgDuration   time.Duration `json:"avg_duration"`
+	LastEvaluated time.Time     `json:"last_evaluated"`
+	LastMatched   time.Time     `json:"last_matched"`
+	LastError     string        `json:"last_error,omitempty"`
 }
 
 // PerformanceStats 性能统计
 type PerformanceStats struct {
 	// 64-bit fields first for ARM32 alignment
-	MemoryUsage         int64         `json:"memory_usage"`
+	MemoryUsage int64 `json:"memory_usage"`
 	// Other fields
 	ThroughputPerSecond float64       `json:"throughput_per_second"`
 	P50Duration         time.Duration `json:"p50_duration"`
@@ -106,20 +106,20 @@ type HealthChecker interface {
 // AlertThresholds 报警阈值
 type AlertThresholds struct {
 	// 64-bit fields first for ARM32 alignment
-	MemoryThreshold       int64         `json:"memory_threshold"`
+	MemoryThreshold int64 `json:"memory_threshold"`
 	// Other fields
-	ErrorRateThreshold    float64       `json:"error_rate_threshold"`
-	LatencyThreshold      time.Duration `json:"latency_threshold"`
-	ThroughputThreshold   float64       `json:"throughput_threshold"`
-	QueueLengthThreshold  int           `json:"queue_length_threshold"`
-	ConsecutiveErrors     int           `json:"consecutive_errors"`
-	CheckInterval         time.Duration `json:"check_interval"`
+	ErrorRateThreshold   float64       `json:"error_rate_threshold"`
+	LatencyThreshold     time.Duration `json:"latency_threshold"`
+	ThroughputThreshold  float64       `json:"throughput_threshold"`
+	QueueLengthThreshold int           `json:"queue_length_threshold"`
+	ConsecutiveErrors    int           `json:"consecutive_errors"`
+	CheckInterval        time.Duration `json:"check_interval"`
 }
 
 // NewRuleMonitor 创建规则监控器
 func NewRuleMonitor(maxErrors int) *RuleMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	monitor := &RuleMonitor{
 		metrics:          &EngineMetrics{},
 		errors:           make([]*MonitoringRuleError, 0, maxErrors),
@@ -134,17 +134,17 @@ func NewRuleMonitor(maxErrors int) *RuleMonitor {
 			Message:      "系统正常运行",
 			CheckResults: make(map[string]string),
 		},
-		healthChecks:    make(map[string]HealthChecker),
-		alertThresholds: getDefaultAlertThresholds(),
+		healthChecks:     make(map[string]HealthChecker),
+		alertThresholds:  getDefaultAlertThresholds(),
 		notificationChan: make(chan *MonitoringRuleError, 100),
-		ctx:             ctx,
-		cancel:          cancel,
-		logger:          log.With().Str("component", "rule_monitor").Logger(),
+		ctx:              ctx,
+		cancel:           cancel,
+		logger:           log.With().Str("component", "rule_monitor").Logger(),
 	}
-	
+
 	// 启动监控协程
 	go monitor.run()
-	
+
 	return monitor
 }
 
@@ -153,35 +153,35 @@ func (m *RuleMonitor) RecordError(errType ErrorType, level ErrorLevel, message, 
 	baseError := NewRuleError(errType, level, "", message).
 		WithDetails(details).
 		SetRetryable(shouldRetry(errType, level))
-	
+
 	// 添加上下文信息
 	for k, v := range context {
 		baseError.WithContext(k, v)
 	}
-	
+
 	monitoringError := &MonitoringRuleError{
 		RuleError: baseError,
 		ID:        generateErrorID(),
 		Retry:     shouldRetry(errType, level),
 	}
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// 添加到错误列表（保持最大数量限制）
 	if len(m.errors) >= m.maxErrors {
 		// 移除最旧的错误
 		m.errors = m.errors[1:]
 	}
 	m.errors = append(m.errors, monitoringError)
-	
+
 	// 更新统计
 	m.errorsByType[errType]++
 	m.errorsByLevel[level]++
-	
+
 	// 记录日志
 	m.logError(monitoringError)
-	
+
 	// 发送通知（非阻塞）
 	select {
 	case m.notificationChan <- monitoringError:
@@ -197,32 +197,32 @@ func (m *RuleMonitor) RecordRuleExecution(ruleID string, duration time.Duration,
 		Bool("matched", matched).
 		Err(err).
 		Msg("📊 RuleMonitor.RecordRuleExecution被调用")
-	
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// 增加调试：记录原子操作前后的值
 	oldValue := atomic.LoadInt64(&m.metrics.PointsProcessed)
 	atomic.AddInt64(&m.metrics.PointsProcessed, 1)
 	newValue := atomic.LoadInt64(&m.metrics.PointsProcessed)
-	
+
 	log.Debug().
 		Int64("points_processed_before", oldValue).
 		Int64("points_processed_after", newValue).
 		Msg("🔢 PointsProcessed原子计数器更新")
-	
+
 	if stats, exists := m.ruleStats[ruleID]; exists {
 		stats.TotalEvaluations++
 		stats.TotalDuration += duration
 		stats.AvgDuration = stats.TotalDuration / time.Duration(stats.TotalEvaluations)
 		stats.LastEvaluated = time.Now()
-		
+
 		if matched {
 			stats.MatchCount++
 			stats.LastMatched = time.Now()
 			atomic.AddInt64(&m.metrics.RulesMatched, 1)
 		}
-		
+
 		if err != nil {
 			stats.ErrorCount++
 			stats.LastError = err.Error()
@@ -234,21 +234,21 @@ func (m *RuleMonitor) RecordRuleExecution(ruleID string, duration time.Duration,
 			AvgDuration:      duration,
 			LastEvaluated:    time.Now(),
 		}
-		
+
 		if matched {
 			stats.MatchCount = 1
 			stats.LastMatched = time.Now()
 			atomic.AddInt64(&m.metrics.RulesMatched, 1)
 		}
-		
+
 		if err != nil {
 			stats.ErrorCount = 1
 			stats.LastError = err.Error()
 		}
-		
+
 		m.ruleStats[ruleID] = stats
 	}
-	
+
 	m.metrics.LastProcessedAt = time.Now()
 }
 
@@ -256,22 +256,22 @@ func (m *RuleMonitor) RecordRuleExecution(ruleID string, duration time.Duration,
 func (m *RuleMonitor) RecordActionExecution(actionType string, duration time.Duration, success bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	atomic.AddInt64(&m.metrics.ActionsExecuted, 1)
-	
+
 	if stats, exists := m.actionStats[actionType]; exists {
 		stats.TotalExecutions++
 		stats.TotalDuration += duration
 		stats.AvgDuration = stats.TotalDuration / time.Duration(stats.TotalExecutions)
 		stats.LastExecuted = time.Now()
-		
+
 		if duration > stats.MaxDuration {
 			stats.MaxDuration = duration
 		}
 		if stats.MinDuration == 0 || duration < stats.MinDuration {
 			stats.MinDuration = duration
 		}
-		
+
 		if success {
 			stats.SuccessCount++
 			atomic.AddInt64(&m.metrics.ActionsSucceeded, 1)
@@ -291,7 +291,7 @@ func (m *RuleMonitor) RecordActionExecution(actionType string, duration time.Dur
 			MinDuration:     duration,
 			LastExecuted:    time.Now(),
 		}
-		
+
 		if success {
 			stats.SuccessCount = 1
 			atomic.AddInt64(&m.metrics.ActionsSucceeded, 1)
@@ -302,7 +302,7 @@ func (m *RuleMonitor) RecordActionExecution(actionType string, duration time.Dur
 				stats.LastError = err.Error()
 			}
 		}
-		
+
 		m.actionStats[actionType] = stats
 	}
 }
@@ -311,7 +311,7 @@ func (m *RuleMonitor) RecordActionExecution(actionType string, duration time.Dur
 func (m *RuleMonitor) GetMetrics() *EngineMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// 创建副本以避免并发访问问题
 	metrics := &EngineMetrics{
 		RulesTotal:         m.metrics.RulesTotal,
@@ -324,7 +324,7 @@ func (m *RuleMonitor) GetMetrics() *EngineMetrics {
 		ProcessingDuration: m.metrics.ProcessingDuration,
 		LastProcessedAt:    m.metrics.LastProcessedAt,
 	}
-	
+
 	return metrics
 }
 
@@ -332,18 +332,18 @@ func (m *RuleMonitor) GetMetrics() *EngineMetrics {
 func (m *RuleMonitor) GetErrors(limit int) []*MonitoringRuleError {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if limit <= 0 || limit > len(m.errors) {
 		limit = len(m.errors)
 	}
-	
+
 	// 返回最新的错误（倒序）
 	result := make([]*MonitoringRuleError, limit)
 	start := len(m.errors) - limit
 	for i := 0; i < limit; i++ {
 		result[i] = m.errors[start+i]
 	}
-	
+
 	return result
 }
 
@@ -365,7 +365,7 @@ func (m *RuleMonitor) RegisterHealthChecker(checker HealthChecker) {
 func (m *RuleMonitor) run() {
 	ticker := time.NewTicker(m.alertThresholds.CheckInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -384,16 +384,16 @@ func (m *RuleMonitor) run() {
 func (m *RuleMonitor) performHealthChecks() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	checkResults := make(map[string]string)
 	overallStatus := "healthy"
 	var messages []string
-	
+
 	for name, checker := range m.healthChecks {
 		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 		err := checker.Check(ctx)
 		cancel()
-		
+
 		if err != nil {
 			checkResults[name] = fmt.Sprintf("FAIL: %s", err.Error())
 			overallStatus = "unhealthy"
@@ -402,10 +402,10 @@ func (m *RuleMonitor) performHealthChecks() {
 			checkResults[name] = "PASS"
 		}
 	}
-	
+
 	m.healthStatus.CheckResults = checkResults
 	m.healthStatus.LastChecked = time.Now()
-	
+
 	if overallStatus == "unhealthy" {
 		m.healthStatus.Status = "unhealthy"
 		m.healthStatus.Message = fmt.Sprintf("健康检查失败: %v", messages)
@@ -421,7 +421,7 @@ func (m *RuleMonitor) updatePerformanceStats() {
 	// 例如：计算吞吐量、延迟百分位数等
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	m.performanceStats.LastUpdated = time.Now()
 	// TODO: 实现详细的性能统计计算
 }
@@ -430,11 +430,11 @@ func (m *RuleMonitor) updatePerformanceStats() {
 func (m *RuleMonitor) checkAlerts() {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// 检查错误率
 	totalActions := atomic.LoadInt64(&m.metrics.ActionsExecuted)
 	failedActions := atomic.LoadInt64(&m.metrics.ActionsFailed)
-	
+
 	if totalActions > 0 {
 		errorRate := float64(failedActions) / float64(totalActions)
 		if errorRate > m.alertThresholds.ErrorRateThreshold {
@@ -444,7 +444,7 @@ func (m *RuleMonitor) checkAlerts() {
 				Msg("动作错误率超过阈值")
 		}
 	}
-	
+
 	// 检查队列长度
 	if m.performanceStats.QueueLength > m.alertThresholds.QueueLengthThreshold {
 		m.logger.Warn().
@@ -458,7 +458,7 @@ func (m *RuleMonitor) checkAlerts() {
 func (m *RuleMonitor) handleErrorNotification(ruleError *MonitoringRuleError) {
 	// 这里可以添加错误通知的处理逻辑
 	// 例如：发送到外部监控系统、触发报警等
-	
+
 	if ruleError.Level == ErrorLevelCritical || ruleError.Level == ErrorLevelError {
 		m.logger.Error().
 			Str("error_id", ruleError.ID).
@@ -476,21 +476,21 @@ func (m *RuleMonitor) logError(ruleError *MonitoringRuleError) {
 		Str("level", string(ruleError.Level)).
 		Str("message", ruleError.Message).
 		Time("timestamp", ruleError.Timestamp)
-	
+
 	if ruleError.RuleID != "" {
 		logEvent = logEvent.Str("rule_id", ruleError.RuleID)
 	}
-	
+
 	if ruleError.ActionType != "" {
 		logEvent = logEvent.Str("action_type", ruleError.ActionType)
 	}
-	
+
 	if ruleError.Details != "" {
 		logEvent = logEvent.Str("details", ruleError.Details)
 	}
-	
+
 	logger := logEvent.Logger()
-	
+
 	switch ruleError.Level {
 	case ErrorLevelInfo:
 		logger.Info().Msg("规则引擎信息")
@@ -525,13 +525,13 @@ func shouldRetry(errType ErrorType, level ErrorLevel) bool {
 
 func getDefaultAlertThresholds() *AlertThresholds {
 	return &AlertThresholds{
-		ErrorRateThreshold:    0.05, // 5%
-		LatencyThreshold:      1 * time.Second,
-		ThroughputThreshold:   100, // 每秒处理数量
-		MemoryThreshold:       1024 * 1024 * 1024, // 1GB
-		QueueLengthThreshold:  1000,
-		ConsecutiveErrors:     5,
-		CheckInterval:         30 * time.Second,
+		ErrorRateThreshold:   0.05, // 5%
+		LatencyThreshold:     1 * time.Second,
+		ThroughputThreshold:  100,                // 每秒处理数量
+		MemoryThreshold:      1024 * 1024 * 1024, // 1GB
+		QueueLengthThreshold: 1000,
+		ConsecutiveErrors:    5,
+		CheckInterval:        30 * time.Second,
 	}
 }
 
@@ -539,7 +539,7 @@ func getDefaultAlertThresholds() *AlertThresholds {
 func (m *RuleMonitor) ToJSON() ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	data := map[string]interface{}{
 		"metrics":           m.GetMetrics(),
 		"health_status":     m.healthStatus,
@@ -548,10 +548,10 @@ func (m *RuleMonitor) ToJSON() ([]byte, error) {
 			"by_type":  m.errorsByType,
 			"by_level": m.errorsByLevel,
 		},
-		"action_stats": m.actionStats,
-		"rule_stats":   m.ruleStats,
+		"action_stats":  m.actionStats,
+		"rule_stats":    m.ruleStats,
 		"recent_errors": m.GetErrors(10),
 	}
-	
+
 	return json.Marshal(data)
 }

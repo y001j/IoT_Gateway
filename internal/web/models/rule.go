@@ -6,7 +6,7 @@ import (
 
 // Rule 规则定义
 type Rule struct {
-	ID          string            `json:"id"`           // String ID from rule manager
+	ID          string            `json:"id"` // String ID from rule manager
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
 	Enabled     bool              `json:"enabled"`
@@ -127,7 +127,7 @@ type RuleActionTestResult struct {
 // Condition is an alias for RuleCondition for backwards compatibility
 type Condition = RuleCondition
 
-// Action is an alias for RuleAction for backwards compatibility  
+// Action is an alias for RuleAction for backwards compatibility
 type Action = RuleAction
 
 // RuleHistoryRequest 规则执行历史请求
@@ -171,16 +171,16 @@ type RuleFromTemplateRequest struct {
 
 // Updated RuleStats to match service usage
 type RuleStatsExtended struct {
-	RuleID                string                 `json:"rule_id"`
-	RuleName              string                 `json:"rule_name"`
-	ExecutionCount        int                    `json:"execution_count"`
-	SuccessCount          int                    `json:"success_count"`
-	ErrorCount            int                    `json:"error_count"`
-	AverageExecutionTime  time.Duration          `json:"average_execution_time"`
-	LastExecuted          time.Time              `json:"last_executed"`
-	Status                string                 `json:"status"`
-	TriggerRate           float64                `json:"trigger_rate"`
-	ActionsTriggered      map[string]int         `json:"actions_triggered"`
+	RuleID               string         `json:"rule_id"`
+	RuleName             string         `json:"rule_name"`
+	ExecutionCount       int            `json:"execution_count"`
+	SuccessCount         int            `json:"success_count"`
+	ErrorCount           int            `json:"error_count"`
+	AverageExecutionTime time.Duration  `json:"average_execution_time"`
+	LastExecuted         time.Time      `json:"last_executed"`
+	Status               string         `json:"status"`
+	TriggerRate          float64        `json:"trigger_rate"`
+	ActionsTriggered     map[string]int `json:"actions_triggered"`
 }
 
 // Updated RuleTestRequest to match service usage

@@ -3,10 +3,10 @@ package services
 import (
 	"fmt"
 
-	"github.com/rs/zerolog/log"
 	"github.com/nats-io/nats.go"
-	"github.com/y001j/iot-gateway/internal/web/models"
+	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/metrics"
+	"github.com/y001j/iot-gateway/internal/web/models"
 
 	"github.com/y001j/iot-gateway/internal/plugin"
 	"github.com/y001j/iot-gateway/internal/rules"
@@ -14,19 +14,19 @@ import (
 
 // Services 服务容器
 type Services struct {
-	System              SystemService
-	Auth                AuthService
-	Plugin              PluginService
-	Rule                RuleService
-	Log                 LogService
-	Alert               AlertService
-	Notification        NotificationService
-	AlertIntegration    *AlertIntegrationService
-	AdapterMonitoring   *AdapterMonitoringService
-	SystemAlert         *SystemAlertService
-	store               models.UserStore
-	PluginManager       plugin.PluginManager
-	RuleManager         rules.RuleManager
+	System            SystemService
+	Auth              AuthService
+	Plugin            PluginService
+	Rule              RuleService
+	Log               LogService
+	Alert             AlertService
+	Notification      NotificationService
+	AlertIntegration  *AlertIntegrationService
+	AdapterMonitoring *AdapterMonitoringService
+	SystemAlert       *SystemAlertService
+	store             models.UserStore
+	PluginManager     plugin.PluginManager
+	RuleManager       rules.RuleManager
 }
 
 // ServiceConfig 服务配置
@@ -60,7 +60,7 @@ func NewServices(config *ServiceConfig) (*Services, error) {
 	// 创建存储 - 优先使用SQLite，失败时使用内存存储
 	var store models.UserStore
 	var err error
-	
+
 	if config.DBPath != "" {
 		// 如果有配置服务，尝试从配置中获取数据库配置
 		if configService != nil {
@@ -121,22 +121,22 @@ func NewServices(config *ServiceConfig) (*Services, error) {
 	} else {
 		alertService = NewAlertService()
 	}
-	
+
 	// 创建通知服务
 	notificationService := NewNotificationService(alertService)
-	
+
 	// 创建告警集成服务（如果有NATS连接）
 	var alertIntegration *AlertIntegrationService
 	if config.NATSConn != nil {
 		alertIntegration = NewAlertIntegrationService(alertService, notificationService, config.NATSConn, config.RuleManager)
 	}
-	
+
 	// 创建适配器监控服务（如果有NATS连接和插件管理器）
 	var adapterMonitoring *AdapterMonitoringService
 	if config.NATSConn != nil && config.PluginManager != nil {
 		adapterMonitoring = NewAdapterMonitoringService(config.PluginManager, config.NATSConn)
 	}
-	
+
 	// 创建系统告警服务（如果有指标服务）
 	var systemAlert *SystemAlertService
 	if config.Metrics != nil {
@@ -173,7 +173,7 @@ func NewServices(config *ServiceConfig) (*Services, error) {
 // Start 启动服务
 func (s *Services) Start() error {
 	log.Info().Msg("启动Web服务")
-	
+
 	// 启动告警集成服务
 	if s.AlertIntegration != nil {
 		log.Info().Msg("启动告警集成服务")
@@ -191,7 +191,7 @@ func (s *Services) Start() error {
 	} else {
 		log.Warn().Msg("适配器监控服务未配置，跳过启动")
 	}
-	
+
 	// 启动系统告警服务
 	if s.SystemAlert != nil {
 		log.Info().Msg("启动系统告警服务")
@@ -210,7 +210,7 @@ func (s *Services) Start() error {
 // Stop 停止服务
 func (s *Services) Stop() error {
 	log.Info().Msg("停止Web服务")
-	
+
 	// 停止告警集成服务
 	if s.AlertIntegration != nil {
 		log.Info().Msg("停止告警集成服务")
@@ -224,7 +224,7 @@ func (s *Services) Stop() error {
 		log.Info().Msg("停止适配器监控服务")
 		s.AdapterMonitoring.Stop()
 	}
-	
+
 	// 停止系统告警服务
 	if s.SystemAlert != nil {
 		log.Info().Msg("停止系统告警服务")
@@ -241,7 +241,7 @@ func (s *Services) Stop() error {
 func (s *Services) Close() error {
 	// 先停止服务
 	s.Stop()
-	
+
 	// 关闭数据库连接
 	if store, ok := s.store.(*SQLiteStore); ok {
 		return store.Close()

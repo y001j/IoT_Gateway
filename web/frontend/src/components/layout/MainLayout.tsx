@@ -9,6 +9,7 @@ import {
   MonitorOutlined,
   SettingOutlined,
   LogoutOutlined,
+  LineChartOutlined,
 } from '@ant-design/icons';
 import { authService } from '../../services/authService';
 
@@ -34,6 +35,7 @@ const MainLayout: React.FC = () => {
     if (path.startsWith('/alerts')) return ['4'];
     if (path.startsWith('/monitoring')) return ['5'];
     if (path.startsWith('/system')) return ['6'];
+    if (path.startsWith('/history')) return ['7'];
     return ['1'];
   };
 
@@ -63,6 +65,11 @@ const MainLayout: React.FC = () => {
       key: '5',
       icon: <MonitorOutlined />,
       label: <Link to="/monitoring">连接监控</Link>,
+    },
+    {
+      key: '7',
+      icon: <LineChartOutlined />,
+      label: <Link to="/history">历史数据</Link>,
     },
     {
       key: '6',

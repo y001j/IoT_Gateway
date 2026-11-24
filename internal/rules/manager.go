@@ -12,8 +12,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v3"
 	"github.com/y001j/iot-gateway/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // HotReloadConfig 热加载配置
@@ -49,9 +49,9 @@ type Manager struct {
 	ruleIndex        *Index
 	watcher          *fsnotify.Watcher
 	changesChan      chan RuleChangeEvent
-	hotReloadConfig  *HotReloadConfig  // 热加载配置
-	hotReloadEnabled bool              // 热加载状态
-	retryCount       int               // 重试计数
+	hotReloadConfig  *HotReloadConfig // 热加载配置
+	hotReloadEnabled bool             // 热加载状态
+	retryCount       int              // 重试计数
 	mu               sync.RWMutex
 }
 
@@ -177,32 +177,46 @@ func (m *Manager) loadRuleFile(filePath string) ([]*Rule, error) {
 		var ruleData struct {
 			Rules []*Rule `yaml:"rules"`
 		}
-		if err := yaml.Unmarshal(data, &ruleData); err != nil {
-			// 尝试解析单个规则
-			var singleRule Rule
-			if err2 := yaml.Unmarshal(data, &singleRule); err2 != nil {
-				return nil, fmt.Errorf("解析YAML规则失败: %w", err)
-			}
-			rules = []*Rule{&singleRule}
-		} else {
+		// 以前先按 {rules: [...]} 解析：单规则文件也能"解析成功"但列表为空，导致单规则 YAML 文件被静默忽略
+		if err := yaml.Unmarshal(data, &ruleData); err == nil && len(ruleData.Rules) > 0 {
 			rules = ruleData.Rules
+		} else {
+			var ruleArray []*Rule
+			if errArr := yaml.Unmarshal(data, &ruleArray); errArr == nil && len(ruleArray) > 0 {
+				rules = ruleArray
+			} else {
+				var singleRule Rule
+				if err2 := yaml.Unmarshal(data, &singleRule); err2 != nil {
+					return nil, fmt.Errorf("解析YAML规则失败: %w", err2)
+				}
+				rules = []*Rule{&singleRule}
+			}
 		}
 	}
 
-	// 验证和初始化规则
+	// 验证和初始化规则：验证失败的规则不加载
+	// （以前只是跳过初始化，不合法的规则仍然会被返回并加载）
+	valid := make([]*Rule, 0, len(rules))
 	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
 		if err := m.validateRule(rule); err != nil {
-			log.Error().Err(err).Str("rule_id", rule.ID).Msg("规则验证失败")
+			log.Error().Err(err).Str("rule_id", rule.ID).Str("file", filePath).Msg("规则验证失败，已跳过")
 			continue
 		}
 		m.initializeRule(rule)
+		valid = append(valid, rule)
 	}
 
-	return rules, nil
+	return valid, nil
 }
 
 // validateRule 验证规则
-func (m *Manager) validateRule(rule *Rule) error {
+func (m *Manager) validateRule(rule *Rule) error { return ValidateRule(rule) }
+
+// ValidateRule 校验规则。规则加载和 Web 接口共用这一个实现，保证与求值器的语义一致。
+func ValidateRule(rule *Rule) error {
 	if rule.ID == "" {
 		return fmt.Errorf("规则ID不能为空")
 	}
@@ -217,7 +231,7 @@ func (m *Manager) validateRule(rule *Rule) error {
 	}
 
 	// 验证条件
-	if err := m.validateCondition(rule.Conditions); err != nil {
+	if err := ValidateCondition(rule.Conditions); err != nil {
 		return fmt.Errorf("条件验证失败: %w", err)
 	}
 
@@ -232,7 +246,10 @@ func (m *Manager) validateRule(rule *Rule) error {
 }
 
 // validateCondition 验证条件
-func (m *Manager) validateCondition(condition *Condition) error {
+func (m *Manager) validateCondition(condition *Condition) error { return ValidateCondition(condition) }
+
+// ValidateCondition 校验条件（与 Evaluator 语义一致：类型为空即简单条件，操作符为空即 eq）
+func ValidateCondition(condition *Condition) error {
 	if condition == nil {
 		return fmt.Errorf("条件不能为空")
 	}
@@ -244,16 +261,19 @@ func (m *Manager) validateCondition(condition *Condition) error {
 		if condition.Field == "" && len(condition.And) == 0 && len(condition.Or) == 0 && condition.Not == nil {
 			return fmt.Errorf("简单条件必须指定字段或逻辑操作")
 		}
-		if condition.Field != "" && condition.Operator == "" {
-			return fmt.Errorf("指定字段时必须指定操作符")
+		// 与求值器保持一致：操作符为空时按 eq 处理；指定了操作符则必须是支持的操作符
+		if condition.Field != "" && condition.Operator != "" {
+			if _, ok := Operators[condition.Operator]; !ok {
+				return fmt.Errorf("不支持的操作符: %s", condition.Operator)
+			}
 		}
 	case "and":
-		if len(condition.And) < 2 {
-			return fmt.Errorf("AND条件必须至少包含2个子条件")
+		if len(condition.And) == 0 {
+			return fmt.Errorf("AND条件必须至少包含1个子条件")
 		}
 	case "or":
-		if len(condition.Or) < 2 {
-			return fmt.Errorf("OR条件必须至少包含2个子条件")
+		if len(condition.Or) == 0 {
+			return fmt.Errorf("OR条件必须至少包含1个子条件")
 		}
 	case "expression":
 		if condition.Expression == "" {
@@ -269,17 +289,17 @@ func (m *Manager) validateCondition(condition *Condition) error {
 
 	// 递归验证嵌套条件
 	for _, subCondition := range condition.And {
-		if err := m.validateCondition(subCondition); err != nil {
+		if err := ValidateCondition(subCondition); err != nil {
 			return err
 		}
 	}
 	for _, subCondition := range condition.Or {
-		if err := m.validateCondition(subCondition); err != nil {
+		if err := ValidateCondition(subCondition); err != nil {
 			return err
 		}
 	}
 	if condition.Not != nil {
-		if err := m.validateCondition(condition.Not); err != nil {
+		if err := ValidateCondition(condition.Not); err != nil {
 			return err
 		}
 	}
@@ -459,11 +479,15 @@ func (m *Manager) DeleteRule(id string) error {
 	delete(m.rules, id)
 	m.ruleIndex.RemoveRule(rule)
 
-	// 删除文件
+	// 删除独立文件，并从多规则文件中移除（以前多规则文件中定义的规则重启后会"复活"）
 	filePath := filepath.Join(m.rulesDir, fmt.Sprintf("%s.json", id))
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		log.Error().Err(err).Str("file", filePath).Msg("删除规则文件失败")
 	}
+	if err := m.cleanupDuplicateInArrayFiles(id); err != nil {
+		log.Warn().Err(err).Str("rule_id", id).Msg("从数组文件中删除规则失败")
+	}
+	m.removeSingleRuleFiles(id)
 
 	// 发送变更事件
 	select {
@@ -494,7 +518,11 @@ func (m *Manager) EnableRule(id string) error {
 		// 更新索引
 		m.ruleIndex.AddRule(rule)
 
-		// 保存到文件
+		// 保存到独立文件，并从多规则文件中移除旧副本
+		// （以前只写独立文件，重启后多规则文件中的旧状态可能覆盖新状态）
+		if err := m.cleanupDuplicateInArrayFiles(rule.ID); err != nil {
+			log.Warn().Err(err).Str("rule_id", rule.ID).Msg("清理数组文件中的重复规则失败")
+		}
 		filePath := filepath.Join(m.rulesDir, fmt.Sprintf("%s.json", rule.ID))
 		if err := m.saveRuleToFile(rule, filePath); err != nil {
 			return fmt.Errorf("保存规则文件失败: %w", err)
@@ -531,7 +559,11 @@ func (m *Manager) DisableRule(id string) error {
 		// 更新索引
 		m.ruleIndex.AddRule(rule)
 
-		// 保存到文件
+		// 保存到独立文件，并从多规则文件中移除旧副本
+		// （以前只写独立文件，重启后多规则文件中的旧状态可能覆盖新状态）
+		if err := m.cleanupDuplicateInArrayFiles(rule.ID); err != nil {
+			log.Warn().Err(err).Str("rule_id", rule.ID).Msg("清理数组文件中的重复规则失败")
+		}
 		filePath := filepath.Join(m.rulesDir, fmt.Sprintf("%s.json", rule.ID))
 		if err := m.saveRuleToFile(rule, filePath); err != nil {
 			return fmt.Errorf("保存规则文件失败: %w", err)
@@ -665,7 +697,7 @@ func (m *Manager) watchFileChanges() {
 				return
 			}
 			log.Error().Err(err).Msg("文件监控错误")
-			
+
 			// 如果错误太多，可能是系统不支持，尝试优雅关闭
 			if m.hotReloadConfig != nil && m.hotReloadConfig.GracefulFallback {
 				log.Warn().Msg("文件监控错误较多，考虑禁用热加载")
@@ -858,7 +890,7 @@ func (m *Manager) removeRuleFromArrayFile(data []byte, ruleID string) (bool, []b
 	if err := json.Unmarshal(data, &ruleArray); err == nil {
 		originalCount := len(ruleArray)
 		filteredRules := []*Rule{}
-		
+
 		for _, rule := range ruleArray {
 			if rule != nil && rule.ID != ruleID {
 				filteredRules = append(filteredRules, rule)
@@ -883,7 +915,7 @@ func (m *Manager) removeRuleFromArrayFile(data []byte, ruleID string) (bool, []b
 	if err := json.Unmarshal(data, &ruleData); err == nil {
 		originalCount := len(ruleData.Rules)
 		filteredRules := []*Rule{}
-		
+
 		for _, rule := range ruleData.Rules {
 			if rule != nil && rule.ID != ruleID {
 				filteredRules = append(filteredRules, rule)
@@ -910,26 +942,65 @@ func (m *Manager) EvaluateEnabledRules(point model.Point) (map[string]bool, map[
 	m.mu.RLock()
 	enabledRules := m.GetEnabledRules()
 	m.mu.RUnlock()
-	
+
 	if len(enabledRules) == 0 {
 		return make(map[string]bool), make(map[string]error), nil
 	}
-	
+
 	resultMap := make(map[string]bool)
 	errorMap := make(map[string]error)
 	evaluator := NewEvaluator()
-	
+
 	for _, rule := range enabledRules {
 		if rule == nil {
 			continue
 		}
-		
+
 		result, err := evaluator.Evaluate(rule.Conditions, point)
 		resultMap[rule.ID] = result
 		if err != nil {
 			errorMap[rule.ID] = err
 		}
 	}
-	
+
 	return resultMap, errorMap, nil
+}
+
+// removeSingleRuleFiles 删除只包含该规则的单规则文件（任意文件名的 .json/.yaml/.yml）
+func (m *Manager) removeSingleRuleFiles(ruleID string) {
+	_ = filepath.Walk(m.rulesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if ext != ".json" && ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		var single Rule
+		var perr error
+		if ext == ".json" {
+			if m.isArrayFile(data) {
+				return nil
+			}
+			perr = json.Unmarshal(data, &single)
+		} else {
+			var wrapped struct {
+				Rules []*Rule `yaml:"rules"`
+			}
+			if yaml.Unmarshal(data, &wrapped) == nil && len(wrapped.Rules) > 0 {
+				return nil // 多规则 YAML 文件不自动改写
+			}
+			perr = yaml.Unmarshal(data, &single)
+		}
+		if perr == nil && single.ID == ruleID {
+			if rmErr := os.Remove(path); rmErr != nil {
+				log.Error().Err(rmErr).Str("file", path).Msg("删除规则文件失败")
+			}
+		}
+		return nil
+	})
 }

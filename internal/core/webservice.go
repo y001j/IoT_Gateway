@@ -22,17 +22,20 @@ import (
 
 // WebService provides HTTP API and web interface
 type WebService struct {
-	server             *http.Server
-	services           *services.Services
-	config             *WebConfig
-	ruleEngineService  *rules.RuleEngineService
-	natsConn           *nats.Conn
+	server            *http.Server
+	services          *services.Services
+	config            *WebConfig
+	ruleEngineService *rules.RuleEngineService
+	natsConn          *nats.Conn
 }
 
 type WebConfig struct {
 	Enabled bool              `mapstructure:"enabled"`
 	Port    int               `mapstructure:"port"`
 	Auth    models.AuthConfig `mapstructure:"auth"`
+	CORS    struct {
+		AllowedOrigins []string `mapstructure:"allowed_origins"`
+	} `mapstructure:"cors"`
 }
 
 // NewWebService creates a new web service instance
@@ -139,8 +142,8 @@ func (ws *WebService) Start(ctx context.Context) error {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
-	api.SetupRoutes(router, ws.services, ws.natsConn)
-	
+	api.SetupRoutes(router, ws.services, ws.natsConn, api.RouteOptions{AllowedOrigins: ws.config.CORS.AllowedOrigins})
+
 	// 设置路由到服务器
 	ws.server.Handler = router
 

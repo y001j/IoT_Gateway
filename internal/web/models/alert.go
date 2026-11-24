@@ -4,22 +4,22 @@ import "time"
 
 // Alert 告警信息
 type Alert struct {
-	ID                   string                 `json:"id"`
-	Title                string                 `json:"title"`
-	Description          string                 `json:"description"`
-	Level                string                 `json:"level"`        // info, warning, error, critical
-	Status               string                 `json:"status"`       // active, acknowledged, resolved
-	Source               string                 `json:"source"`       // 告警来源
-	Data                 map[string]interface{} `json:"data"`         // 告警相关数据
-	CreatedAt            time.Time              `json:"created_at"`
-	UpdatedAt            time.Time              `json:"updated_at"`
-	AcknowledgedAt       *time.Time             `json:"acknowledged_at,omitempty"`
-	AcknowledgedBy       string                 `json:"acknowledged_by,omitempty"`
-	AcknowledgedComment  string                 `json:"acknowledged_comment,omitempty"`
-	ResolvedAt           *time.Time             `json:"resolved_at,omitempty"`
-	ResolvedBy           string                 `json:"resolved_by,omitempty"`
-	ResolvedComment      string                 `json:"resolved_comment,omitempty"`
-	
+	ID                  string                 `json:"id"`
+	Title               string                 `json:"title"`
+	Description         string                 `json:"description"`
+	Level               string                 `json:"level"`  // info, warning, error, critical
+	Status              string                 `json:"status"` // active, acknowledged, resolved
+	Source              string                 `json:"source"` // 告警来源
+	Data                map[string]interface{} `json:"data"`   // 告警相关数据
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	AcknowledgedAt      *time.Time             `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy      string                 `json:"acknowledged_by,omitempty"`
+	AcknowledgedComment string                 `json:"acknowledged_comment,omitempty"`
+	ResolvedAt          *time.Time             `json:"resolved_at,omitempty"`
+	ResolvedBy          string                 `json:"resolved_by,omitempty"`
+	ResolvedComment     string                 `json:"resolved_comment,omitempty"`
+
 	// 规则引擎相关字段
 	RuleID               string            `json:"rule_id,omitempty"`
 	RuleName             string            `json:"rule_name,omitempty"`
@@ -64,13 +64,13 @@ type AlertUpdateRequest struct {
 
 // AlertStats 告警统计
 type AlertStats struct {
-	Total        int                 `json:"total"`
-	Active       int                 `json:"active"`
-	Acknowledged int                 `json:"acknowledged"`
-	Resolved     int                 `json:"resolved"`
-	ByLevel      map[string]int      `json:"by_level"`
-	BySource     map[string]int      `json:"by_source"`
-	RecentTrends []AlertTrend        `json:"recent_trends"`
+	Total        int            `json:"total"`
+	Active       int            `json:"active"`
+	Acknowledged int            `json:"acknowledged"`
+	Resolved     int            `json:"resolved"`
+	ByLevel      map[string]int `json:"by_level"`
+	BySource     map[string]int `json:"by_source"`
+	RecentTrends []AlertTrend   `json:"recent_trends"`
 }
 
 // AlertTrend 告警趋势
@@ -81,15 +81,15 @@ type AlertTrend struct {
 
 // AlertRule 告警规则
 type AlertRule struct {
-	ID                   string           `json:"id"`
-	Name                 string           `json:"name"`
-	Description          string           `json:"description"`
-	Enabled              bool             `json:"enabled"`
-	Level                string           `json:"level"`
-	Condition            *AlertCondition  `json:"condition"`
-	NotificationChannels []string         `json:"notification_channels"`
-	CreatedAt            time.Time        `json:"created_at"`
-	UpdatedAt            time.Time        `json:"updated_at"`
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description"`
+	Enabled              bool            `json:"enabled"`
+	Level                string          `json:"level"`
+	Condition            *AlertCondition `json:"condition"`
+	NotificationChannels []string        `json:"notification_channels"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 // AlertCondition 告警条件
@@ -102,22 +102,22 @@ type AlertCondition struct {
 
 // AlertRuleCreateRequest 创建告警规则请求
 type AlertRuleCreateRequest struct {
-	Name                 string           `json:"name" binding:"required"`
-	Description          string           `json:"description"`
-	Enabled              bool             `json:"enabled"`
-	Level                string           `json:"level" binding:"required"`
-	Condition            *AlertCondition  `json:"condition" binding:"required"`
-	NotificationChannels []string         `json:"notification_channels"`
+	Name                 string          `json:"name" binding:"required"`
+	Description          string          `json:"description"`
+	Enabled              bool            `json:"enabled"`
+	Level                string          `json:"level" binding:"required"`
+	Condition            *AlertCondition `json:"condition" binding:"required"`
+	NotificationChannels []string        `json:"notification_channels"`
 }
 
 // AlertRuleUpdateRequest 更新告警规则请求
 type AlertRuleUpdateRequest struct {
-	Name                 string           `json:"name"`
-	Description          string           `json:"description"`
-	Enabled              bool             `json:"enabled"`
-	Level                string           `json:"level"`
-	Condition            *AlertCondition  `json:"condition"`
-	NotificationChannels []string         `json:"notification_channels"`
+	Name                 string          `json:"name"`
+	Description          string          `json:"description"`
+	Enabled              bool            `json:"enabled"`
+	Level                string          `json:"level"`
+	Condition            *AlertCondition `json:"condition"`
+	NotificationChannels []string        `json:"notification_channels"`
 }
 
 // AlertRuleTestResponse 告警规则测试响应
@@ -132,7 +132,7 @@ type AlertRuleTestResponse struct {
 type NotificationChannel struct {
 	ID        string                 `json:"id"`
 	Name      string                 `json:"name"`
-	Type      string                 `json:"type"`    // email, webhook, sms, slack, etc.
+	Type      string                 `json:"type"` // email, webhook, sms, slack, etc.
 	Enabled   bool                   `json:"enabled"`
 	Config    map[string]interface{} `json:"config"`
 	CreatedAt time.Time              `json:"created_at"`

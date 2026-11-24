@@ -2,8 +2,41 @@ package middleware
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	gwutils "github.com/y001j/iot-gateway/internal/utils"
 )
+
+// GinCORS 基于白名单的 CORS 中间件。
+//   - origin 在白名单中：回显该 origin，并允许携带凭证；
+//   - 白名单包含 "*"：返回 "*"，不允许携带凭证（浏览器规范不允许 * 与凭证同时使用）；
+//   - 其他情况：不返回 CORS 头（同源请求不受影响）。
+func GinCORS(allowed []string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" {
+			if ok, wildcard := gwutils.OriginAllowed(origin, allowed); ok {
+				if wildcard {
+					c.Header("Access-Control-Allow-Origin", "*")
+				} else {
+					c.Header("Access-Control-Allow-Origin", origin)
+					c.Header("Access-Control-Allow-Credentials", "true")
+					c.Writer.Header().Add("Vary", "Origin")
+				}
+				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+				c.Header("Access-Control-Max-Age", "86400")
+			}
+		}
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
 
 // CORSConfig CORS配置
 type CORSConfig struct {
@@ -69,7 +102,7 @@ func CORSWithConfig(config *CORSConfig) func(http.Handler) http.Handler {
 
 			// 设置Access-Control-Max-Age
 			if config.MaxAge > 0 {
-				w.Header().Set("Access-Control-Max-Age", string(rune(config.MaxAge)))
+				w.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
 			}
 
 			// 处理预检请求

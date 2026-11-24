@@ -10,553 +10,304 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// OptimizedWorkerPool 优化的工作池
-// 特性：负载均衡、批量处理、自适应调度、NUMA感知
+// OptimizedWorkerPool 规则任务工作池。
+//
+// 设计要点：
+//   - 按 hash(device_id, key) 把任务固定分配到某个 worker，同一数据序列的点
+//     总是由同一个 worker 按到达顺序处理。以前按轮询/最空闲分发，同一设备的
+//     连续点会被并行处理而乱序，影响滑动窗口、变化率、连续计数等依赖顺序的逻辑。
+//   - 任务到达后立即处理，不再攒批等待（以前最多额外等待 10ms）。
+//   - 队列满时在 SubmitTimeout 内阻塞等待（对上游形成背压），超时仍满才丢弃，
+//     丢弃数量计入 DroppedTasks 并可通过 GetStats 观测；不再出现
+//     "提交成功但随后在分发器里被静默丢弃" 的情况。
 type OptimizedWorkerPool struct {
 	// 64-bit fields first for ARM32 alignment
-	nextWorker    uint64 // 原子计数器，轮询分发
-	// 性能监控
 	totalTasks     int64
 	completedTasks int64
 	failedTasks    int64
+	droppedTasks   int64
 	avgLatency     int64 // 纳秒
-	// Other fields
-	// 基础配置
+	lastDropLog    int64
+
 	numWorkers    int
 	maxQueueSize  int
-	batchSize     int
-	batchTimeout  time.Duration
-	// 工作队列 - 每个worker独立队列减少竞争
+	submitTimeout time.Duration
+
 	workerQueues []chan RuleTask
-	// 任务分发器
-	dispatcherChan chan RuleTask
-	dispatcherStop chan struct{}
-	// Worker状态跟踪
-	workerStats   []WorkerStats
-	statsLock     sync.RWMutex
-	// 负载均衡
-	busyWorkers   []int32 // 每个worker的繁忙度
-	// 生命周期管理
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	// 服务引用
-	service *RuleEngineService
+
+	workerStats []WorkerStats
+	statsLock   sync.RWMutex
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once
+	stopped  atomic.Bool
+
+	// process 处理单个任务；默认调用 service.processRuleTaskInternal，测试时可替换
+	process func(task RuleTask) error
 }
 
 // WorkerStats Worker统计信息
 type WorkerStats struct {
 	// 64-bit fields first for ARM32 alignment
-	TasksProcessed int64         `json:"tasks_processed"`
-	TasksFailed    int64         `json:"tasks_failed"`
+	TasksProcessed int64 `json:"tasks_processed"`
+	TasksFailed    int64 `json:"tasks_failed"`
 	// Other fields
-	WorkerID       int           `json:"worker_id"`
-	AvgLatency     time.Duration `json:"avg_latency"`
-	QueueLength    int           `json:"queue_length"`
-	IsIdle         bool          `json:"is_idle"`
-	LastTaskTime   time.Time     `json:"last_task_time"`
+	WorkerID     int           `json:"worker_id"`
+	AvgLatency   time.Duration `json:"avg_latency"`
+	QueueLength  int           `json:"queue_length"`
+	IsIdle       bool          `json:"is_idle"`
+	LastTaskTime time.Time     `json:"last_task_time"`
 }
 
-// BatchTask 批量任务
-type BatchTask struct {
-	Tasks     []RuleTask
-	StartTime time.Time
+// WorkerPoolConfig 工作池配置
+type WorkerPoolConfig struct {
+	NumWorkers int `json:"num_workers"`
+	QueueSize  int `json:"queue_size"`
+	// SubmitTimeout 队列满时最多等待多久（默认 100ms）；<0 表示不等待
+	SubmitTimeout time.Duration `json:"submit_timeout"`
+
+	// 以下字段为兼容旧配置保留，已不再使用（任务不再攒批）
+	BatchSize    int           `json:"batch_size"`
+	BatchTimeout time.Duration `json:"batch_timeout"`
 }
 
-// NewOptimizedWorkerPool 创建优化的工作池
+// NewOptimizedWorkerPool 创建工作池
 func NewOptimizedWorkerPool(config WorkerPoolConfig, service *RuleEngineService) *OptimizedWorkerPool {
-	// 默认配置
 	if config.NumWorkers <= 0 {
 		config.NumWorkers = runtime.NumCPU() * 2
 	}
 	if config.QueueSize <= 0 {
 		config.QueueSize = 1000
 	}
-	if config.BatchSize <= 0 {
-		config.BatchSize = 10
+	if config.SubmitTimeout == 0 {
+		config.SubmitTimeout = 100 * time.Millisecond
 	}
-	if config.BatchTimeout <= 0 {
-		config.BatchTimeout = 5 * time.Millisecond
+	perWorker := config.QueueSize / config.NumWorkers
+	if perWorker < 16 {
+		perWorker = 16
 	}
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
-	
-	// 创建worker队列
-	workerQueues := make([]chan RuleTask, config.NumWorkers)
-	for i := 0; i < config.NumWorkers; i++ {
-		workerQueues[i] = make(chan RuleTask, config.QueueSize/config.NumWorkers)
-	}
-	
 	pool := &OptimizedWorkerPool{
-		numWorkers:     config.NumWorkers,
-		maxQueueSize:   config.QueueSize,
-		batchSize:      config.BatchSize,
-		batchTimeout:   config.BatchTimeout,
-		workerQueues:   workerQueues,
-		dispatcherChan: make(chan RuleTask, config.QueueSize),
-		dispatcherStop: make(chan struct{}),
-		workerStats:    make([]WorkerStats, config.NumWorkers),
-		busyWorkers:    make([]int32, config.NumWorkers),
-		ctx:            ctx,
-		cancel:         cancel,
-		service:        service,
+		numWorkers:    config.NumWorkers,
+		maxQueueSize:  perWorker * config.NumWorkers,
+		submitTimeout: config.SubmitTimeout,
+		workerQueues:  make([]chan RuleTask, config.NumWorkers),
+		workerStats:   make([]WorkerStats, config.NumWorkers),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
-	
-	// 初始化worker统计
 	for i := 0; i < config.NumWorkers; i++ {
+		pool.workerQueues[i] = make(chan RuleTask, perWorker)
 		pool.workerStats[i].WorkerID = i
 		pool.workerStats[i].IsIdle = true
 	}
-	
+	if service != nil {
+		pool.process = func(task RuleTask) error {
+			return service.processRuleTaskInternal(task.Rule, task.Point)
+		}
+	}
 	return pool
-}
-
-// WorkerPoolConfig 工作池配置
-type WorkerPoolConfig struct {
-	NumWorkers   int           `json:"num_workers"`
-	QueueSize    int           `json:"queue_size"`
-	BatchSize    int           `json:"batch_size"`
-	BatchTimeout time.Duration `json:"batch_timeout"`
 }
 
 // Start 启动工作池
 func (p *OptimizedWorkerPool) Start() error {
-	log.Info().
-		Int("workers", p.numWorkers).
-		Int("queue_size", p.maxQueueSize).
-		Int("batch_size", p.batchSize).
-		Dur("batch_timeout", p.batchTimeout).
-		Msg("启动优化工作池")
-	
-	// 启动任务分发器
-	p.wg.Add(1)
-	go p.dispatcherWorker()
-	
-	// 启动所有worker
+	log.Info().Int("workers", p.numWorkers).Int("queue_size", p.maxQueueSize).Msg("启动规则引擎工作池")
 	for i := 0; i < p.numWorkers; i++ {
 		p.wg.Add(1)
 		go p.worker(i)
 	}
-	
-	// 启动统计收集器
-	p.wg.Add(1)
-	go p.statsCollector()
-	
 	return nil
 }
 
-// Stop 停止工作池
+// Stop 停止工作池：不再接收新任务，处理完队列中剩余任务后退出
 func (p *OptimizedWorkerPool) Stop() error {
-	log.Info().Msg("停止优化工作池")
-	
-	// 停止分发器
-	close(p.dispatcherStop)
-	
-	// 取消上下文，通知所有goroutine停止
-	p.cancel()
-	
-	// 等待所有worker完成
-	p.wg.Wait()
-	
-	log.Info().
-		Int64("total_tasks", atomic.LoadInt64(&p.totalTasks)).
-		Int64("completed_tasks", atomic.LoadInt64(&p.completedTasks)).
-		Int64("failed_tasks", atomic.LoadInt64(&p.failedTasks)).
-		Msg("工作池停止完成")
-	
+	p.stopOnce.Do(func() {
+		p.stopped.Store(true)
+		p.cancel()
+		p.wg.Wait()
+		log.Info().
+			Int64("total_tasks", atomic.LoadInt64(&p.totalTasks)).
+			Int64("completed_tasks", atomic.LoadInt64(&p.completedTasks)).
+			Int64("failed_tasks", atomic.LoadInt64(&p.failedTasks)).
+			Int64("dropped_tasks", atomic.LoadInt64(&p.droppedTasks)).
+			Msg("规则引擎工作池已停止")
+	})
 	return nil
 }
 
-// SubmitTask 提交任务 - 增强版本，支持背压处理
+// shardFor 根据数据序列选择 worker（FNV-1a）
+func (p *OptimizedWorkerPool) shardFor(task RuleTask) int {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	s := task.Point.DeviceID
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	h ^= 0xff
+	h *= prime32
+	s = task.Point.Key
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	return int(h % uint32(p.numWorkers))
+}
+
+// SubmitTask 提交任务。返回 false 表示任务被丢弃（工作池已停止或队列持续满）。
 func (p *OptimizedWorkerPool) SubmitTask(task RuleTask) bool {
+	if p.stopped.Load() {
+		return false
+	}
+	q := p.workerQueues[p.shardFor(task)]
+
 	select {
-	case p.dispatcherChan <- task:
+	case q <- task:
 		atomic.AddInt64(&p.totalTasks, 1)
 		return true
 	default:
-		// 队列满，尝试背压处理
-		return p.handleBackpressure(task)
 	}
-}
 
-// handleBackpressure 处理背压情况
-func (p *OptimizedWorkerPool) handleBackpressure(task RuleTask) bool {
-	// 策略1: 尝试短暂等待
-	select {
-	case p.dispatcherChan <- task:
-		atomic.AddInt64(&p.totalTasks, 1)
-		log.Debug().
-			Str("rule_id", task.Rule.ID).
-			Str("device_id", task.Point.DeviceID).
-			Msg("背压处理成功：短暂等待后任务提交成功")
-		return true
-	case <-time.After(time.Millisecond * 50): // 50ms超时
-		// 策略2: 优先级处理 - 为关键规则保留处理能力
-		if p.isHighPriorityRule(task.Rule) {
-			return p.forceSubmitHighPriorityTask(task)
-		}
-		
-		// 策略3: 记录失败并提供监控信息
-		atomic.AddInt64(&p.failedTasks, 1)
-		
-		// 提供更详细的背压信息
-		totalTasks := atomic.LoadInt64(&p.totalTasks)
-		failedTasks := atomic.LoadInt64(&p.failedTasks)
-		failureRate := float64(failedTasks) / float64(totalTasks) * 100
-		
-		log.Warn().
-			Str("rule_id", task.Rule.ID).
-			Str("device_id", task.Point.DeviceID).
-			Int64("total_tasks", totalTasks).
-			Int64("failed_tasks", failedTasks).
-			Float64("failure_rate", failureRate).
-			Msg("工作池队列满，任务被丢弃")
-			
-		return false
-	}
-}
-
-// isHighPriorityRule 判断是否为高优先级规则
-func (p *OptimizedWorkerPool) isHighPriorityRule(rule *Rule) bool {
-	// 基于规则类型和优先级判断
-	if rule.Priority >= 90 { // 高优先级规则
-		return true
-	}
-	
-	// 安全相关规则视为高优先级
-	for _, action := range rule.Actions {
-		if action.Type == "alert" {
-			return true
-		}
-	}
-	
-	return false
-}
-
-// forceSubmitHighPriorityTask 强制提交高优先级任务
-func (p *OptimizedWorkerPool) forceSubmitHighPriorityTask(task RuleTask) bool {
-	// 尝试直接向最空闲的worker提交
-	bestWorker := p.selectBestWorker()
-	
-	select {
-	case p.workerQueues[bestWorker] <- task:
-		atomic.AddInt64(&p.totalTasks, 1)
-		log.Info().
-			Str("rule_id", task.Rule.ID).
-			Str("device_id", task.Point.DeviceID).
-			Int("worker_id", bestWorker).
-			Msg("高优先级任务强制提交成功")
-		return true
-	case <-time.After(time.Millisecond * 20): // 更短的超时
-		atomic.AddInt64(&p.failedTasks, 1)
-		log.Error().
-			Str("rule_id", task.Rule.ID).
-			Str("device_id", task.Point.DeviceID).
-			Msg("高优先级任务强制提交失败")
-		return false
-	}
-}
-
-// dispatcherWorker 智能任务分发器
-func (p *OptimizedWorkerPool) dispatcherWorker() {
-	defer p.wg.Done()
-	
-	log.Info().Msg("任务分发器启动")
-	
-	for {
+	if p.submitTimeout > 0 {
+		timer := time.NewTimer(p.submitTimeout)
+		defer timer.Stop()
 		select {
-		case task := <-p.dispatcherChan:
-			// 选择最空闲的worker
-			workerIndex := p.selectBestWorker()
-			
-			select {
-			case p.workerQueues[workerIndex] <- task:
-				// 任务分发成功
-			default:
-				// worker队列满，尝试其他worker
-				if !p.tryAlternativeWorkers(task, workerIndex) {
-					// 所有worker都满，丢弃任务
-					atomic.AddInt64(&p.failedTasks, 1)
-					log.Warn().
-						Str("rule_id", task.Rule.ID).
-						Str("device_id", task.Point.DeviceID).
-						Msg("工作池队列满，任务被丢弃")
-				}
-			}
-			
-		case <-p.dispatcherStop:
-			log.Info().Msg("任务分发器停止")
-			return
+		case q <- task:
+			atomic.AddInt64(&p.totalTasks, 1)
+			return true
+		case <-timer.C:
 		case <-p.ctx.Done():
-			log.Info().Msg("任务分发器上下文取消")
-			return
 		}
 	}
-}
 
-// selectBestWorker 选择最佳worker（负载均衡）
-func (p *OptimizedWorkerPool) selectBestWorker() int {
-	// 方案1：轮询 + 负载检查
-	startIndex := int(atomic.AddUint64(&p.nextWorker, 1) % uint64(p.numWorkers))
-	
-	// 检查起始worker是否空闲
-	if atomic.LoadInt32(&p.busyWorkers[startIndex]) == 0 {
-		return startIndex
-	}
-	
-	// 方案2：寻找最空闲的worker
-	minBusy := int32(1000000) // 足够大的初始值
-	bestWorker := startIndex
-	
-	for i := 0; i < p.numWorkers; i++ {
-		busy := atomic.LoadInt32(&p.busyWorkers[i])
-		if busy < minBusy {
-			minBusy = busy
-			bestWorker = i
+	dropped := atomic.AddInt64(&p.droppedTasks, 1)
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&p.lastDropLog)
+	if now-last > int64(10*time.Second) && atomic.CompareAndSwapInt64(&p.lastDropLog, last, now) {
+		ruleID := ""
+		if task.Rule != nil {
+			ruleID = task.Rule.ID
 		}
-		
-		// 如果找到完全空闲的worker，立即返回
-		if busy == 0 {
-			return i
-		}
-	}
-	
-	return bestWorker
-}
-
-// tryAlternativeWorkers 尝试替代worker
-func (p *OptimizedWorkerPool) tryAlternativeWorkers(task RuleTask, excludeWorker int) bool {
-	for i := 0; i < p.numWorkers; i++ {
-		if i == excludeWorker {
-			continue
-		}
-		
-		select {
-		case p.workerQueues[i] <- task:
-			return true
-		default:
-			continue
-		}
+		log.Warn().Str("rule_id", ruleID).Str("device_id", task.Point.DeviceID).
+			Int64("dropped_total", dropped).Msg("规则引擎工作池队列已满，任务被丢弃")
 	}
 	return false
 }
 
-// worker 工作协程
 func (p *OptimizedWorkerPool) worker(workerID int) {
 	defer p.wg.Done()
-	
-	log.Info().Int("worker_id", workerID).Msg("Worker启动")
-	
 	queue := p.workerQueues[workerID]
-	batch := make([]RuleTask, 0, p.batchSize)
-	batchTimer := time.NewTimer(p.batchTimeout)
-	batchTimer.Stop() // 初始时不启动计时器
-	
 	for {
 		select {
 		case task := <-queue:
-			// 标记worker繁忙
-			atomic.AddInt32(&p.busyWorkers[workerID], 1)
-			
-			batch = append(batch, task)
-			
-			// 如果是第一个任务，启动批处理计时器
-			if len(batch) == 1 {
-				batchTimer.Reset(p.batchTimeout)
-			}
-			
-			// 检查是否达到批处理大小
-			if len(batch) >= p.batchSize {
-				p.processBatch(workerID, batch)
-				batch = batch[:0] // 清空批次，保留容量
-				batchTimer.Stop()
-				atomic.StoreInt32(&p.busyWorkers[workerID], 0)
-			}
-			
-		case <-batchTimer.C:
-			// 批处理超时，处理当前批次
-			if len(batch) > 0 {
-				p.processBatch(workerID, batch)
-				batch = batch[:0]
-				atomic.StoreInt32(&p.busyWorkers[workerID], 0)
-			}
-			
+			p.runTask(workerID, task)
 		case <-p.ctx.Done():
-			// 处理剩余任务
-			if len(batch) > 0 {
-				p.processBatch(workerID, batch)
+			// 处理剩余任务后退出
+			for {
+				select {
+				case task := <-queue:
+					p.runTask(workerID, task)
+				default:
+					return
+				}
 			}
-			log.Info().Int("worker_id", workerID).Msg("Worker停止")
-			return
 		}
 	}
 }
 
-// processBatch 批量处理任务
-func (p *OptimizedWorkerPool) processBatch(workerID int, batch []RuleTask) {
-	startTime := time.Now()
-	processed := 0
-	failed := 0
-	
-	for _, task := range batch {
-		if err := p.processRuleTask(task); err != nil {
-			failed++
-			log.Error().
-				Err(err).
-				Str("rule_id", task.Rule.ID).
-				Str("device_id", task.Point.DeviceID).
-				Int("worker_id", workerID).
-				Msg("规则处理失败")
-		} else {
-			processed++
+func (p *OptimizedWorkerPool) runTask(workerID int, task RuleTask) {
+	start := time.Now()
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = errPanic(r)
+				log.Error().Interface("panic", r).Int("worker_id", workerID).Msg("规则处理发生panic")
+			}
+		}()
+		if p.process != nil {
+			err = p.process(task)
 		}
-	}
-	
-	// 更新统计
-	duration := time.Since(startTime)
-	p.updateWorkerStats(workerID, processed, failed, duration)
-	
-	// 更新全局统计
-	atomic.AddInt64(&p.completedTasks, int64(processed))
-	atomic.AddInt64(&p.failedTasks, int64(failed))
-	
-	// 更新平均延迟
-	if processed > 0 {
-		avgLatency := duration.Nanoseconds() / int64(processed)
-		// 使用指数移动平均更新延迟
-		oldLatency := atomic.LoadInt64(&p.avgLatency)
-		newLatency := (oldLatency*7 + avgLatency*3) / 10 // 权重0.3新值，0.7旧值
-		atomic.StoreInt64(&p.avgLatency, newLatency)
-	}
-	
-	log.Debug().
-		Int("worker_id", workerID).
-		Int("batch_size", len(batch)).
-		Int("processed", processed).
-		Int("failed", failed).
-		Dur("duration", duration).
-		Msg("批处理完成")
-}
+	}()
+	d := time.Since(start)
 
-// processRuleTask 处理单个规则任务
-func (p *OptimizedWorkerPool) processRuleTask(task RuleTask) error {
-	// 这里调用实际的规则处理逻辑
-	// 为了避免循环依赖，使用接口调用
-	return p.service.processRuleTaskInternal(task.Rule, task.Point)
-}
+	if err != nil {
+		atomic.AddInt64(&p.failedTasks, 1)
+	} else {
+		atomic.AddInt64(&p.completedTasks, 1)
+	}
+	old := atomic.LoadInt64(&p.avgLatency)
+	atomic.StoreInt64(&p.avgLatency, (old*7+d.Nanoseconds()*3)/10)
 
-// updateWorkerStats 更新worker统计
-func (p *OptimizedWorkerPool) updateWorkerStats(workerID int, processed, failed int, duration time.Duration) {
 	p.statsLock.Lock()
-	defer p.statsLock.Unlock()
-	
-	stats := &p.workerStats[workerID]
-	stats.TasksProcessed += int64(processed)
-	stats.TasksFailed += int64(failed)
-	stats.LastTaskTime = time.Now()
-	stats.QueueLength = len(p.workerQueues[workerID])
-	stats.IsIdle = (stats.QueueLength == 0)
-	
-	// 计算平均延迟（指数移动平均）
-	if processed > 0 {
-		taskAvgLatency := duration / time.Duration(processed)
-		if stats.AvgLatency == 0 {
-			stats.AvgLatency = taskAvgLatency
-		} else {
-			// EMA with α=0.3
-			stats.AvgLatency = time.Duration(float64(stats.AvgLatency)*0.7 + float64(taskAvgLatency)*0.3)
-		}
+	ws := &p.workerStats[workerID]
+	if err != nil {
+		ws.TasksFailed++
+	} else {
+		ws.TasksProcessed++
 	}
+	ws.LastTaskTime = time.Now()
+	ws.QueueLength = len(p.workerQueues[workerID])
+	ws.IsIdle = ws.QueueLength == 0
+	if ws.AvgLatency == 0 {
+		ws.AvgLatency = d
+	} else {
+		ws.AvgLatency = time.Duration(float64(ws.AvgLatency)*0.7 + float64(d)*0.3)
+	}
+	p.statsLock.Unlock()
 }
 
-// statsCollector 统计收集器
-func (p *OptimizedWorkerPool) statsCollector() {
-	defer p.wg.Done()
-	
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			p.logPoolStats()
-		case <-p.ctx.Done():
-			return
-		}
-	}
-}
+type panicError struct{ v interface{} }
 
-// logPoolStats 记录工作池统计
-func (p *OptimizedWorkerPool) logPoolStats() {
-	totalTasks := atomic.LoadInt64(&p.totalTasks)
-	completedTasks := atomic.LoadInt64(&p.completedTasks)
-	failedTasks := atomic.LoadInt64(&p.failedTasks)
-	avgLatency := time.Duration(atomic.LoadInt64(&p.avgLatency))
-	
-	p.statsLock.RLock()
-	idleWorkers := 0
-	totalQueueLen := 0
-	for i := 0; i < p.numWorkers; i++ {
-		if p.workerStats[i].IsIdle {
-			idleWorkers++
-		}
-		totalQueueLen += p.workerStats[i].QueueLength
-	}
-	p.statsLock.RUnlock()
-	
-	throughput := float64(completedTasks) / 60.0 // 每分钟处理任务数
-	
-	log.Info().
-		Int64("total_tasks", totalTasks).
-		Int64("completed", completedTasks).
-		Int64("failed", failedTasks).
-		Dur("avg_latency", avgLatency).
-		Int("idle_workers", idleWorkers).
-		Int("total_queue_len", totalQueueLen).
-		Float64("throughput_per_min", throughput).
-		Msg("工作池性能统计")
-}
+func (e panicError) Error() string { return "panic in rule processing" }
+
+func errPanic(v interface{}) error { return panicError{v: v} }
 
 // GetStats 获取工作池统计信息
 func (p *OptimizedWorkerPool) GetStats() WorkerPoolStats {
 	p.statsLock.RLock()
 	defer p.statsLock.RUnlock()
-	
+
 	stats := WorkerPoolStats{
 		NumWorkers:     p.numWorkers,
 		TotalTasks:     atomic.LoadInt64(&p.totalTasks),
 		CompletedTasks: atomic.LoadInt64(&p.completedTasks),
 		FailedTasks:    atomic.LoadInt64(&p.failedTasks),
+		DroppedTasks:   atomic.LoadInt64(&p.droppedTasks),
 		AvgLatency:     time.Duration(atomic.LoadInt64(&p.avgLatency)),
 		WorkerStats:    make([]WorkerStats, p.numWorkers),
 	}
-	
 	copy(stats.WorkerStats, p.workerStats)
-	
-	// 计算汇总信息
 	for i := 0; i < p.numWorkers; i++ {
-		stats.TotalQueueLength += p.workerStats[i].QueueLength
-		if p.workerStats[i].IsIdle {
+		ql := len(p.workerQueues[i])
+		stats.WorkerStats[i].QueueLength = ql
+		stats.TotalQueueLength += ql
+		if ql == 0 {
 			stats.IdleWorkers++
 		}
 	}
-	
 	if stats.TotalTasks > 0 {
 		stats.SuccessRate = float64(stats.CompletedTasks) / float64(stats.TotalTasks)
 	}
-	
 	return stats
 }
 
 // WorkerPoolStats 工作池统计信息
 type WorkerPoolStats struct {
-	NumWorkers       int             `json:"num_workers"`
-	TotalTasks       int64           `json:"total_tasks"`
-	CompletedTasks   int64           `json:"completed_tasks"`
-	FailedTasks      int64           `json:"failed_tasks"`
-	SuccessRate      float64         `json:"success_rate"`
-	AvgLatency       time.Duration   `json:"avg_latency"`
-	IdleWorkers      int             `json:"idle_workers"`
-	TotalQueueLength int             `json:"total_queue_length"`
-	WorkerStats      []WorkerStats   `json:"worker_stats"`
+	NumWorkers       int           `json:"num_workers"`
+	TotalTasks       int64         `json:"total_tasks"`
+	CompletedTasks   int64         `json:"completed_tasks"`
+	FailedTasks      int64         `json:"failed_tasks"`
+	DroppedTasks     int64         `json:"dropped_tasks"`
+	SuccessRate      float64       `json:"success_rate"`
+	AvgLatency       time.Duration `json:"avg_latency"`
+	IdleWorkers      int           `json:"idle_workers"`
+	TotalQueueLength int           `json:"total_queue_length"`
+	WorkerStats      []WorkerStats `json:"worker_stats"`
 }

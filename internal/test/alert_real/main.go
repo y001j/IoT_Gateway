@@ -17,11 +17,11 @@ import (
 
 // RealAlertTestFramework 测试真实的IoT Gateway Alert功能
 type RealAlertTestFramework struct {
-	alertHandler   *actions.AlertHandler
-	alertService   services.AlertService
-	natsConn       *nats.Conn
-	testResults    []TestResult
-	mutex          sync.RWMutex
+	alertHandler *actions.AlertHandler
+	alertService services.AlertService
+	natsConn     *nats.Conn
+	testResults  []TestResult
+	mutex        sync.RWMutex
 }
 
 // TestResult 测试结果
@@ -115,7 +115,7 @@ func (tf *RealAlertTestFramework) TestRealThrottlingMechanism() {
 		successCount := int32(0)
 		throttledCount := int32(0)
 		errorCount := int32(0)
-		
+
 		// 启动10个并发goroutine测试竞态条件
 		numGoroutines := 10
 		for i := 0; i < numGoroutines; i++ {
@@ -125,7 +125,7 @@ func (tf *RealAlertTestFramework) TestRealThrottlingMechanism() {
 
 				ctx := context.Background()
 				result, err := tf.alertHandler.Execute(ctx, point, rule, config)
-				
+
 				if err != nil {
 					fmt.Printf("  [Goroutine %d] Error: %v\n", id, err)
 					errorCount++
@@ -149,7 +149,7 @@ func (tf *RealAlertTestFramework) TestRealThrottlingMechanism() {
 
 		wg.Wait()
 
-		fmt.Printf("  Results: Success: %d, Throttled: %d, Errors: %d\n", 
+		fmt.Printf("  Results: Success: %d, Throttled: %d, Errors: %d\n",
 			successCount, throttledCount, errorCount)
 
 		// 验证：由于竞态条件，可能会有多个成功
@@ -157,7 +157,7 @@ func (tf *RealAlertTestFramework) TestRealThrottlingMechanism() {
 		if successCount > 5 {
 			return fmt.Errorf("too many successful alerts (%d), indicates severe race condition", successCount)
 		}
-		
+
 		if successCount == 1 {
 			fmt.Println("  ✅ Throttling working correctly (no race condition)")
 		} else {
@@ -189,7 +189,7 @@ func (tf *RealAlertTestFramework) TestRealStatisticsAccuracy() {
 				},
 			},
 			{
-				Title:       "Real Test Alert 2", 
+				Title:       "Real Test Alert 2",
 				Description: "Testing real alert service stats",
 				Level:       "error",
 				Source:      "test-real-stats",
@@ -207,7 +207,7 @@ func (tf *RealAlertTestFramework) TestRealStatisticsAccuracy() {
 				return fmt.Errorf("failed to create test alert %d: %w", i+1, err)
 			}
 			createdAlerts = append(createdAlerts, alert)
-			fmt.Printf("  Created alert %s (Level: %s, Source: %s)\n", 
+			fmt.Printf("  Created alert %s (Level: %s, Source: %s)\n",
 				alert.ID, alert.Level, alert.Source)
 		}
 
@@ -267,7 +267,7 @@ func (tf *RealAlertTestFramework) TestRealStatisticsAccuracy() {
 		testPoints := []model.Point{
 			{
 				DeviceID:  "device-stats-rule-1",
-				Key:       "temperature", 
+				Key:       "temperature",
 				Value:     90.0,
 				Timestamp: time.Now(),
 			},
@@ -288,7 +288,7 @@ func (tf *RealAlertTestFramework) TestRealStatisticsAccuracy() {
 				},
 			},
 			{
-				"level":   "warning", 
+				"level":   "warning",
 				"message": "High humidity alert for stats test",
 				"channels": []map[string]interface{}{
 					{"type": "console"},
@@ -374,7 +374,7 @@ func (tf *RealAlertTestFramework) generateTestReport() error {
 	// 按类别打印结果
 	fmt.Println("\n📋 Results by Category:")
 	categories := make(map[string][]TestResult)
-	
+
 	for _, result := range tf.testResults {
 		if categories[result.TestCategory] == nil {
 			categories[result.TestCategory] = []TestResult{}

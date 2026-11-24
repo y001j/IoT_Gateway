@@ -1,10 +1,10 @@
 package northbound
 
 import (
+	"errors"
 	//"context"
 
 	"encoding/json"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,14 +17,14 @@ import (
 // SinkStats 定义了连接器的统计信息
 type SinkStats struct {
 	// 64-bit fields first for ARM32 alignment
-	MessagesTotal  int64     `json:"messages_total"`
-	MessagesFailed int64     `json:"messages_failed"`
+	MessagesTotal  int64 `json:"messages_total"`
+	MessagesFailed int64 `json:"messages_failed"`
 	// Other fields
-	Name           string    `json:"name"`
-	Type           string    `json:"type"`
-	Running        bool      `json:"running"`
-	LastError      string    `json:"last_error,omitempty"`
-	LastMessage    time.Time `json:"last_message"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	Running     bool      `json:"running"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastMessage time.Time `json:"last_message"`
 }
 
 // SinkHealthStatus 连接器健康状态
@@ -37,18 +37,18 @@ type SinkHealthStatus struct {
 // SinkMetrics 连接器指标
 type SinkMetrics struct {
 	// 64-bit fields first for ARM32 alignment
-	MessagesPublished   int64         `json:"messages_published"`   // 发布的消息总数
-	ErrorsCount         int64         `json:"errors_count"`         // 错误总数
+	MessagesPublished int64 `json:"messages_published"` // 发布的消息总数
+	ErrorsCount       int64 `json:"errors_count"`       // 错误总数
 	// Other fields
-	LastPublishTime     time.Time     `json:"last_publish_time"`    // 最后发布时间
-	ConnectionUptime    time.Duration `json:"connection_uptime"`    // 连接正常运行时间
-	LastError           string        `json:"last_error,omitempty"` // 最后错误信息
+	LastPublishTime     time.Time     `json:"last_publish_time"`     // 最后发布时间
+	ConnectionUptime    time.Duration `json:"connection_uptime"`     // 连接正常运行时间
+	LastError           string        `json:"last_error,omitempty"`  // 最后错误信息
 	AverageResponseTime float64       `json:"average_response_time"` // 平均响应时间(毫秒)
 }
 
 // StandardConfig 是所有连接器的标准配置结构
 type StandardConfig struct {
-	Name       string            `json:"name"`
+	Name string `json:"name"`
 
 	Type       string            `json:"type"`
 	BatchSize  int               `json:"batch_size,omitempty"`
@@ -214,10 +214,10 @@ func (b *BaseSink) AddTags(points []model.Point) {
 func (b *BaseSink) Health() (SinkHealthStatus, error) {
 	b.statsMutex.RLock()
 	defer b.statsMutex.RUnlock()
-	
+
 	status := "healthy"
 	message := "Sink is running normally"
-	
+
 	// 如果连接器未运行，标记为unhealthy
 	if !b.IsRunning() {
 		status = "unhealthy"
@@ -227,7 +227,7 @@ func (b *BaseSink) Health() (SinkHealthStatus, error) {
 		status = "degraded"
 		message = b.stats.LastError
 	}
-	
+
 	return SinkHealthStatus{
 		Status:    status,
 		Message:   message,
@@ -239,7 +239,7 @@ func (b *BaseSink) Health() (SinkHealthStatus, error) {
 func (b *BaseSink) GetMetrics() (interface{}, error) {
 	b.statsMutex.RLock()
 	defer b.statsMutex.RUnlock()
-	
+
 	return SinkMetrics{
 		MessagesPublished:   b.stats.MessagesTotal,
 		ErrorsCount:         b.stats.MessagesFailed,
@@ -254,9 +254,9 @@ func (b *BaseSink) GetMetrics() (interface{}, error) {
 func (b *BaseSink) GetLastError() error {
 	b.statsMutex.RLock()
 	defer b.statsMutex.RUnlock()
-	
+
 	if b.stats.LastError != "" {
-		return fmt.Errorf(b.stats.LastError)
+		return errors.New(b.stats.LastError)
 	}
 	return nil
 }
@@ -265,7 +265,7 @@ func (b *BaseSink) GetLastError() error {
 func (b *BaseSink) SafePublishBatch(batch []model.Point, publishFunc func([]model.Point) error, operationStart time.Time) error {
 	// 执行实际的发布操作
 	err := publishFunc(batch)
-	
+
 	if err != nil {
 		// 发布失败，记录错误
 		b.SetLastError(err)
@@ -276,19 +276,19 @@ func (b *BaseSink) SafePublishBatch(batch []model.Point, publishFunc func([]mode
 			Msg("发布数据失败")
 		return err
 	}
-	
+
 	// 发布成功，更新统计信息
 	b.IncrementMessageCount()
 	b.statsMutex.Lock()
 	b.stats.LastMessage = time.Now()
 	b.statsMutex.Unlock()
-	
+
 	log.Debug().
 		Str("sink", b.name).
 		Int("batch_size", len(batch)).
 		Float64("response_time_ms", float64(time.Since(operationStart).Nanoseconds())/1000000.0).
 		Msg("发布数据成功")
-	
+
 	return nil
 }
 
@@ -301,13 +301,13 @@ type ExtendedSink interface {
 
 	// Healthy 检查连接器健康状态
 	Healthy() error
-	
+
 	// Health 返回连接器健康状态
 	Health() (SinkHealthStatus, error)
-	
+
 	// GetMetrics 返回连接器运行指标
 	GetMetrics() (SinkMetrics, error)
-	
+
 	// GetLastError 返回最后的错误信息
 	GetLastError() error
 }

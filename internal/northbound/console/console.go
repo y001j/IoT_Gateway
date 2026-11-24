@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -23,6 +25,7 @@ func init() {
 func NewConsoleSink() *ConsoleSink {
 	return &ConsoleSink{
 		BaseSink: northbound.NewBaseSink("console"),
+		out:      os.Stdout,
 	}
 }
 
@@ -34,6 +37,7 @@ type ConsoleSink struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	out    io.Writer // 输出目标，默认标准输出（测试时可替换）
 }
 
 // Init 初始化控制台sink
@@ -96,17 +100,22 @@ func (s *ConsoleSink) Publish(batch []model.Point) error {
 
 	// 记录发布操作开始时间
 	publishStart := time.Now()
-	
+
 	// 使用BaseSink的SafePublishBatch方法，自动处理统计
 	return s.SafePublishBatch(batch, func(batch []model.Point) error {
+		s.AddTags(batch)
+
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		// 添加到缓冲区
 		s.buffer = append(s.buffer, batch...)
 
-		// 如果缓冲区超过批处理大小，立即刷新
-		if len(s.buffer) >= 100 { // 简化的批处理大小
+		// 达到配置的批处理大小时立即刷新（以前写死为 100，忽略了 batch_size 配置）
+		limit := s.GetBatchSize()
+		if limit <= 0 {
+			limit = 100
+		}
+		if len(s.buffer) >= limit {
 			return s.flushLocked()
 		}
 
@@ -117,7 +126,7 @@ func (s *ConsoleSink) Publish(batch []model.Point) error {
 // Stop 停止控制台sink
 func (s *ConsoleSink) Stop() error {
 	s.SetRunning(false)
-	
+
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -151,7 +160,7 @@ func (s *ConsoleSink) flushLocked() error {
 	}
 
 	// 打印所有数据点到控制台
-	fmt.Print("\n===== 数据点批次开始 =====\n")
+	fmt.Fprint(s.writer(), "\n===== 数据点批次开始 =====\n")
 	for _, point := range s.buffer {
 		// 格式化时间
 		timeStr := point.Timestamp.Format("2006-01-02 15:04:05.000")
@@ -169,7 +178,7 @@ func (s *ConsoleSink) flushLocked() error {
 		}
 
 		// 打印数据点
-		fmt.Printf("[%s] %s.%s = %v (%s) %s\n",
+		fmt.Fprintf(s.writer(), "[%s] %s.%s = %v (%s) %s\n",
 			timeStr,
 			point.DeviceID,
 			point.Key,
@@ -177,9 +186,16 @@ func (s *ConsoleSink) flushLocked() error {
 			point.Type,
 			tagsStr)
 	}
-	fmt.Println("===== 数据点批次结束 =====")
+	fmt.Fprintln(s.writer(), "===== 数据点批次结束 =====")
 
 	// 清空缓冲区
 	s.buffer = s.buffer[:0]
 	return nil
+}
+
+func (s *ConsoleSink) writer() io.Writer {
+	if s.out == nil {
+		return os.Stdout
+	}
+	return s.out
 }

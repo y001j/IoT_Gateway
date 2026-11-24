@@ -3,6 +3,7 @@ package geo
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // DistanceFunction 计算两点间距离的函数
@@ -26,55 +27,40 @@ func (f *DistanceFunction) Call(args ...interface{}) (interface{}, error) {
 	if len(args) != 4 {
 		return nil, fmt.Errorf("distance function requires 4 arguments (lat1, lng1, lat2, lng2)")
 	}
-	
-	lat1, err := f.toFloat64(args[0])
+
+	lat1, err := toFloat64(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lat1: %v", err)
 	}
-	
-	lng1, err := f.toFloat64(args[1])
+
+	lng1, err := toFloat64(args[1])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lng1: %v", err)
 	}
-	
-	lat2, err := f.toFloat64(args[2])
+
+	lat2, err := toFloat64(args[2])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lat2: %v", err)
 	}
-	
-	lng2, err := f.toFloat64(args[3])
+
+	lng2, err := toFloat64(args[3])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lng2: %v", err)
 	}
-	
+
 	coord1 := Coordinate{Latitude: lat1, Longitude: lng1}
 	coord2 := Coordinate{Latitude: lat2, Longitude: lng2}
-	
+
 	if !f.processor.IsValidCoordinate(lat1, lng1) {
 		return nil, fmt.Errorf("invalid coordinate 1: lat=%f, lng=%f", lat1, lng1)
 	}
-	
+
 	if !f.processor.IsValidCoordinate(lat2, lng2) {
 		return nil, fmt.Errorf("invalid coordinate 2: lat=%f, lng=%f", lat2, lng2)
 	}
-	
+
 	distance := f.processor.HaversineDistance(coord1, coord2)
 	return distance, nil
-}
-
-func (f *DistanceFunction) toFloat64(val interface{}) (float64, error) {
-	switch v := val.(type) {
-	case float64:
-		return v, nil
-	case int:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case string:
-		return strconv.ParseFloat(v, 64)
-	default:
-		return 0, fmt.Errorf("cannot convert %T to float64", val)
-	}
 }
 
 // InRegionFunction 判断坐标是否在区域内的函数
@@ -98,43 +84,28 @@ func (f *InRegionFunction) Call(args ...interface{}) (interface{}, error) {
 	if len(args) != 3 {
 		return nil, fmt.Errorf("in_region function requires 3 arguments (lat, lng, region_name)")
 	}
-	
-	lat, err := f.toFloat64(args[0])
+
+	lat, err := toFloat64(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid latitude: %v", err)
 	}
-	
-	lng, err := f.toFloat64(args[1])
+
+	lng, err := toFloat64(args[1])
 	if err != nil {
 		return nil, fmt.Errorf("invalid longitude: %v", err)
 	}
-	
+
 	regionName, ok := args[2].(string)
 	if !ok {
 		return nil, fmt.Errorf("region_name must be string")
 	}
-	
+
 	if !f.processor.IsValidCoordinate(lat, lng) {
 		return nil, fmt.Errorf("invalid coordinate: lat=%f, lng=%f", lat, lng)
 	}
-	
+
 	coord := Coordinate{Latitude: lat, Longitude: lng}
 	return f.processor.IsInRegion(coord, regionName), nil
-}
-
-func (f *InRegionFunction) toFloat64(val interface{}) (float64, error) {
-	switch v := val.(type) {
-	case float64:
-		return v, nil
-	case int:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case string:
-		return strconv.ParseFloat(v, 64)
-	default:
-		return 0, fmt.Errorf("cannot convert %T to float64", val)
-	}
 }
 
 // NearestRegionFunction 获取最近区域的函数
@@ -158,39 +129,24 @@ func (f *NearestRegionFunction) Call(args ...interface{}) (interface{}, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("nearest_region function requires 2 arguments (lat, lng)")
 	}
-	
-	lat, err := f.toFloat64(args[0])
+
+	lat, err := toFloat64(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid latitude: %v", err)
 	}
-	
-	lng, err := f.toFloat64(args[1])
+
+	lng, err := toFloat64(args[1])
 	if err != nil {
 		return nil, fmt.Errorf("invalid longitude: %v", err)
 	}
-	
+
 	if !f.processor.IsValidCoordinate(lat, lng) {
 		return nil, fmt.Errorf("invalid coordinate: lat=%f, lng=%f", lat, lng)
 	}
-	
+
 	coord := Coordinate{Latitude: lat, Longitude: lng}
 	regionName, _ := f.processor.GetNearestRegion(coord)
 	return regionName, nil
-}
-
-func (f *NearestRegionFunction) toFloat64(val interface{}) (float64, error) {
-	switch v := val.(type) {
-	case float64:
-		return v, nil
-	case int:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case string:
-		return strconv.ParseFloat(v, 64)
-	default:
-		return 0, fmt.Errorf("cannot convert %T to float64", val)
-	}
 }
 
 // BearingFunction 计算方位角的函数
@@ -214,55 +170,40 @@ func (f *BearingFunction) Call(args ...interface{}) (interface{}, error) {
 	if len(args) != 4 {
 		return nil, fmt.Errorf("bearing function requires 4 arguments (lat1, lng1, lat2, lng2)")
 	}
-	
-	lat1, err := f.toFloat64(args[0])
+
+	lat1, err := toFloat64(args[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lat1: %v", err)
 	}
-	
-	lng1, err := f.toFloat64(args[1])
+
+	lng1, err := toFloat64(args[1])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lng1: %v", err)
 	}
-	
-	lat2, err := f.toFloat64(args[2])
+
+	lat2, err := toFloat64(args[2])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lat2: %v", err)
 	}
-	
-	lng2, err := f.toFloat64(args[3])
+
+	lng2, err := toFloat64(args[3])
 	if err != nil {
 		return nil, fmt.Errorf("invalid lng2: %v", err)
 	}
-	
+
 	coord1 := Coordinate{Latitude: lat1, Longitude: lng1}
 	coord2 := Coordinate{Latitude: lat2, Longitude: lng2}
-	
+
 	if !f.processor.IsValidCoordinate(lat1, lng1) {
 		return nil, fmt.Errorf("invalid coordinate 1: lat=%f, lng=%f", lat1, lng1)
 	}
-	
+
 	if !f.processor.IsValidCoordinate(lat2, lng2) {
 		return nil, fmt.Errorf("invalid coordinate 2: lat=%f, lng=%f", lat2, lng2)
 	}
-	
+
 	bearing := f.processor.Bearing(coord1, coord2)
 	return bearing, nil
-}
-
-func (f *BearingFunction) toFloat64(val interface{}) (float64, error) {
-	switch v := val.(type) {
-	case float64:
-		return v, nil
-	case int:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case string:
-		return strconv.ParseFloat(v, 64)
-	default:
-		return 0, fmt.Errorf("cannot convert %T to float64", val)
-	}
 }
 
 // ValidCoordinateFunction 验证坐标有效性的函数
@@ -286,30 +227,39 @@ func (f *ValidCoordinateFunction) Call(args ...interface{}) (interface{}, error)
 	if len(args) != 2 {
 		return nil, fmt.Errorf("valid_coordinate function requires 2 arguments (lat, lng)")
 	}
-	
-	lat, err := f.toFloat64(args[0])
+
+	lat, err := toFloat64(args[0])
 	if err != nil {
 		return false, nil // 无法转换为数字，返回false但不报错
 	}
-	
-	lng, err := f.toFloat64(args[1])
+
+	lng, err := toFloat64(args[1])
 	if err != nil {
 		return false, nil // 无法转换为数字，返回false但不报错
 	}
-	
+
 	return f.processor.IsValidCoordinate(lat, lng), nil
 }
 
-func (f *ValidCoordinateFunction) toFloat64(val interface{}) (float64, error) {
+// toFloat64 把表达式参数转换为 float64（支持常见数值类型和数字字符串）
+func toFloat64(val interface{}) (float64, error) {
 	switch v := val.(type) {
 	case float64:
 		return v, nil
+	case float32:
+		return float64(v), nil
 	case int:
+		return float64(v), nil
+	case int32:
 		return float64(v), nil
 	case int64:
 		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
 	case string:
-		return strconv.ParseFloat(v, 64)
+		return strconv.ParseFloat(strings.TrimSpace(v), 64)
 	default:
 		return 0, fmt.Errorf("cannot convert %T to float64", val)
 	}

@@ -43,9 +43,11 @@ func (h *ForwardHandler) Execute(ctx context.Context, point model.Point, rule *r
 	}
 
 	// 获取目标主题
+	// 默认发布到 iot.rules.forward.<device>.<key>。
+	// 以前默认发布到 iot.data.*，规则引擎会再次消费转发出的消息，形成死循环。
 	subject, ok := config["subject"].(string)
 	if !ok || subject == "" {
-		subject = fmt.Sprintf("iot.data.%s.%s", point.DeviceID, point.Key)
+		subject = model.RuleOutputSubject("forward", point.DeviceID, point.Key)
 	}
 
 	// 准备转发数据
@@ -75,7 +77,7 @@ func (h *ForwardHandler) Execute(ctx context.Context, point model.Point, rule *r
 		}, nil
 	}
 
-	if err := h.natsConn.Publish(subject, jsonData); err != nil {
+	if err := rules.PublishRuleOutput(h.natsConn, subject, jsonData); err != nil {
 		return &rules.ActionResult{
 			Type:     "forward",
 			Success:  false,

@@ -63,9 +63,9 @@ func (h *AlertHandler) GetAlerts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": gin.H{
-			"alerts": alerts,
-			"total":  total,
-			"page":   req.Page,
+			"alerts":    alerts,
+			"total":     total,
+			"page":      req.Page,
 			"page_size": req.PageSize,
 		},
 	})
@@ -136,7 +136,7 @@ func (h *AlertHandler) DeleteAlert(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "告警删除成功",
 	})
 }
@@ -153,11 +153,8 @@ func (h *AlertHandler) AcknowledgeAlert(c *gin.Context) {
 	}
 
 	// 获取用户ID
-	userID, _ := c.Get("user_id")
-	userIDStr := ""
-	if userID != nil {
-		userIDStr = userID.(string)
-	}
+	// JWT claims 中的 user_id 是 float64，以前直接断言为 string 会 panic
+	userIDStr := userIDFromContext(c)
 
 	if err := h.alertService.AcknowledgeAlert(id, userIDStr, req.Comment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -165,7 +162,7 @@ func (h *AlertHandler) AcknowledgeAlert(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "告警确认成功",
 	})
 }
@@ -182,11 +179,8 @@ func (h *AlertHandler) ResolveAlert(c *gin.Context) {
 	}
 
 	// 获取用户ID
-	userID, _ := c.Get("user_id")
-	userIDStr := ""
-	if userID != nil {
-		userIDStr = userID.(string)
-	}
+	// JWT claims 中的 user_id 是 float64，以前直接断言为 string 会 panic
+	userIDStr := userIDFromContext(c)
 
 	if err := h.alertService.ResolveAlert(id, userIDStr, req.Comment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -194,7 +188,7 @@ func (h *AlertHandler) ResolveAlert(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "告警解决成功",
 	})
 }
@@ -277,7 +271,7 @@ func (h *AlertHandler) DeleteAlertRule(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "告警规则删除成功",
 	})
 }
@@ -369,7 +363,7 @@ func (h *AlertHandler) DeleteNotificationChannel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "通知渠道删除成功",
 	})
 }
@@ -383,7 +377,12 @@ func (h *AlertHandler) TestNotificationChannel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code": 0,
+		"code":    0,
 		"message": "测试通知发送成功",
 	})
+}
+
+// userIDFromContext 从上下文中获取用户 ID 字符串（兼容 string/float64/int）
+func userIDFromContext(c *gin.Context) string {
+	return (&BaseHandler{}).GetUserID(c)
 }

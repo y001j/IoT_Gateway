@@ -40,14 +40,14 @@ type MQTTSubAdapter struct {
 
 // TopicConfig 定义了要订阅的MQTT主题配置
 type TopicConfig struct {
-	Topic     string                     `json:"topic"`                // 要订阅的主题
-	QoS       byte                       `json:"qos"`                  // 服务质量
-	Key       string                     `json:"key"`                  // 数据点标识符
-	Type      string                     `json:"type"`                 // 数据类型: int, float, bool, string, location, vector3d, color
-	Path      string                     `json:"path"`                 // JSON路径，用于从消息中提取值 (基础类型)
-	DeviceID  string                     `json:"device_id"`            // 设备ID，如果为空则使用适配器默认值
-	Tags      map[string]string          `json:"tags,omitempty"`       // 附加标签
-	Composite *CompositeExtractConfig    `json:"composite,omitempty"`  // 复合数据提取配置
+	Topic     string                  `json:"topic"`               // 要订阅的主题
+	QoS       byte                    `json:"qos"`                 // 服务质量
+	Key       string                  `json:"key"`                 // 数据点标识符
+	Type      string                  `json:"type"`                // 数据类型: int, float, bool, string, location, vector3d, color
+	Path      string                  `json:"path"`                // JSON路径，用于从消息中提取值 (基础类型)
+	DeviceID  string                  `json:"device_id"`           // 设备ID，如果为空则使用适配器默认值
+	Tags      map[string]string       `json:"tags,omitempty"`      // 附加标签
+	Composite *CompositeExtractConfig `json:"composite,omitempty"` // 复合数据提取配置
 }
 
 // CompositeExtractConfig 复合数据提取配置
@@ -82,7 +82,6 @@ type ColorExtractConfig struct {
 	AlphaPath string `json:"alpha_path,omitempty"`
 }
 
-
 // Name 返回适配器名称
 func (a *MQTTSubAdapter) Name() string {
 	return a.BaseAdapter.Name()
@@ -92,7 +91,7 @@ func (a *MQTTSubAdapter) Name() string {
 func (a *MQTTSubAdapter) Init(cfg json.RawMessage) error {
 	// 创建配置解析器
 	a.parser = config.NewParserWithDefaults(config.GetDefaultMQTTSubConfig())
-	
+
 	// 解析配置
 	mqttConfig, err := a.parser.Parse(cfg)
 	if err != nil {
@@ -132,11 +131,11 @@ func (a *MQTTSubAdapter) initWithConfig(config *config.MQTTSubConfig) error {
 			DeviceID: topicConfig.DeviceID,
 			Tags:     topicConfig.Tags,
 		}
-		
+
 		// 转换复合对象配置
 		if topicConfig.Composite != nil {
 			topic.Composite = &CompositeExtractConfig{}
-			
+
 			if topicConfig.Composite.Location != nil {
 				topic.Composite.Location = &LocationExtractConfig{
 					LatitudePath:  topicConfig.Composite.Location.LatitudePath,
@@ -147,7 +146,7 @@ func (a *MQTTSubAdapter) initWithConfig(config *config.MQTTSubConfig) error {
 					HeadingPath:   topicConfig.Composite.Location.HeadingPath,
 				}
 			}
-			
+
 			if topicConfig.Composite.Vector3D != nil {
 				topic.Composite.Vector3D = &Vector3DExtractConfig{
 					XPath: topicConfig.Composite.Vector3D.XPath,
@@ -155,7 +154,7 @@ func (a *MQTTSubAdapter) initWithConfig(config *config.MQTTSubConfig) error {
 					ZPath: topicConfig.Composite.Vector3D.ZPath,
 				}
 			}
-			
+
 			if topicConfig.Composite.Color != nil {
 				topic.Composite.Color = &ColorExtractConfig{
 					RedPath:   topicConfig.Composite.Color.RedPath,
@@ -175,7 +174,7 @@ func (a *MQTTSubAdapter) initWithConfig(config *config.MQTTSubConfig) error {
 	} else {
 		a.deviceID = config.Name // 使用适配器名称作为默认设备ID
 	}
-	
+
 	// 创建MQTT客户端选项
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(config.Broker)
@@ -219,7 +218,6 @@ func (a *MQTTSubAdapter) initWithConfig(config *config.MQTTSubConfig) error {
 	return nil
 }
 
-
 // Start 启动适配器
 func (a *MQTTSubAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 	a.mutex.Lock()
@@ -229,6 +227,8 @@ func (a *MQTTSubAdapter) Start(ctx context.Context, ch chan<- model.Point) error
 		return nil
 	}
 	a.running = true
+	// 每次启动使用新的停止通道，支持 Stop 后再次 Start
+	a.stopCh = make(chan struct{})
 
 	// 连接MQTT代理
 	if token := a.client.Connect(); token.Wait() && token.Error() != nil {
@@ -258,9 +258,10 @@ func (a *MQTTSubAdapter) Start(ctx context.Context, ch chan<- model.Point) error
 	}
 
 	// 监听停止信号
+	stopCh := a.stopCh
 	go func() {
 		select {
-		case <-a.stopCh:
+		case <-stopCh:
 			// 取消所有订阅
 			for _, topicCfg := range a.topics {
 				if token := a.client.Unsubscribe(topicCfg.Topic); token.Wait() && token.Error() != nil {
@@ -298,7 +299,7 @@ func (a *MQTTSubAdapter) createMessageHandler(topicCfg TopicConfig, ch chan<- mo
 	return func(client mqtt.Client, msg mqtt.Message) {
 		// 记录消息处理开始时间
 		messageStart := time.Now()
-		
+
 		log.Debug().
 			Str("name", a.Name()).
 			Str("topic", msg.Topic()).
@@ -317,12 +318,11 @@ func (a *MQTTSubAdapter) createMessageHandler(topicCfg TopicConfig, ch chan<- mo
 
 		// 尝试解析JSON
 		var jsonData map[string]interface{}
-		err := json.Unmarshal(msg.Payload(), &jsonData)
-
-		if err != nil {
-			// 如果不是JSON，直接使用整个消息作为字符串
-			value = string(msg.Payload())
-			dataType = model.TypeString
+		var err error
+		if json.Unmarshal(msg.Payload(), &jsonData) != nil {
+			// 不是 JSON 对象：纯文本或单个 JSON 值（很多设备直接发布 "23.5"、"true"）。
+			// 以前这里的解析错误没有清除，这类消息全部被丢弃。
+			value, dataType, err = a.convertScalarPayload(topicCfg.Type, msg.Payload())
 		} else {
 			// 根据类型处理数据提取
 			switch topicCfg.Type {
@@ -347,11 +347,14 @@ func (a *MQTTSubAdapter) createMessageHandler(topicCfg TopicConfig, ch chan<- mo
 						return
 					}
 					value = extractedValue
+				} else if topicCfg.Type == "string" || topicCfg.Type == "" {
+					// 未指定路径的字符串类型：保留原始消息文本（以前会被格式化成 map[a:1]）
+					value = string(msg.Payload())
 				} else {
 					// 如果未指定路径，使用整个JSON
 					value = jsonData
 				}
-				
+
 				// 转换基础数据类型
 				dataType, value, err = a.convertBasicType(topicCfg.Type, value)
 			}
@@ -381,7 +384,7 @@ func (a *MQTTSubAdapter) createMessageHandler(topicCfg TopicConfig, ch chan<- mo
 
 		// 使用BaseAdapter的SafeSendDataPoint方法，自动处理统计
 		a.SafeSendDataPoint(ch, point, messageStart)
-		
+
 		log.Debug().
 			Str("name", a.Name()).
 			Str("key", topicCfg.Key).
@@ -442,7 +445,7 @@ func (a *MQTTSubAdapter) configureTLS(opts *mqtt.ClientOptions, tlsConfig *confi
 
 	// 设置TLS配置
 	opts.SetTLSConfig(config)
-	
+
 	log.Info().
 		Str("name", a.Name()).
 		Bool("skip_verify", tlsConfig.SkipVerify).
@@ -451,6 +454,29 @@ func (a *MQTTSubAdapter) configureTLS(opts *mqtt.ClientOptions, tlsConfig *confi
 		Msg("TLS配置完成")
 
 	return nil
+}
+
+// convertScalarPayload 转换非 JSON 对象的消息：单个 JSON 值（数字、字符串、布尔）或纯文本
+func (a *MQTTSubAdapter) convertScalarPayload(dataType string, payload []byte) (interface{}, model.DataType, error) {
+	switch dataType {
+	case "location", "vector3d", "color":
+		return nil, "", fmt.Errorf("%s 类型的消息必须是 JSON 对象", dataType)
+	}
+	var raw interface{} = strings.TrimSpace(string(payload))
+	var v interface{}
+	if json.Unmarshal(payload, &v) == nil && v != nil {
+		if _, isArr := v.([]interface{}); !isArr {
+			raw = v
+		}
+	}
+	if dataType == "string" || dataType == "" {
+		if s, ok := raw.(string); ok {
+			return s, model.TypeString, nil
+		}
+		return strings.TrimSpace(string(payload)), model.TypeString, nil
+	}
+	dt, val, err := a.convertBasicType(dataType, raw)
+	return val, dt, err
 }
 
 // convertBasicType 转换基础数据类型
@@ -471,7 +497,7 @@ func (a *MQTTSubAdapter) convertBasicType(dataType string, value interface{}) (m
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为整数", v)
 		}
-		
+
 	case "float":
 		switch v := value.(type) {
 		case float64:
@@ -487,7 +513,7 @@ func (a *MQTTSubAdapter) convertBasicType(dataType string, value interface{}) (m
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为浮点数", v)
 		}
-		
+
 	case "bool":
 		switch v := value.(type) {
 		case bool:
@@ -508,13 +534,13 @@ func (a *MQTTSubAdapter) convertBasicType(dataType string, value interface{}) (m
 		default:
 			return "", nil, fmt.Errorf("无法将类型 %T 转换为布尔值", v)
 		}
-		
+
 	case "string":
 		if s, ok := value.(string); ok {
 			return model.TypeString, s, nil
 		}
 		return model.TypeString, fmt.Sprintf("%v", value), nil
-		
+
 	default:
 		// 默认为字符串类型
 		if s, ok := value.(string); ok {
@@ -529,7 +555,7 @@ func (a *MQTTSubAdapter) extractValue(data map[string]interface{}, path string) 
 	if path == "" {
 		return nil, fmt.Errorf("路径不能为空")
 	}
-	
+
 	// 处理嵌套路径，如 "data.temperature"
 	parts := strings.Split(path, ".")
 	current := data
@@ -567,12 +593,12 @@ func (a *MQTTSubAdapter) extractFloatValue(data map[string]interface{}, path str
 	if path == "" {
 		return 0, nil // 可选字段为空时返回0
 	}
-	
+
 	value, err := a.extractValue(data, path)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	switch v := value.(type) {
 	case float64:
 		return v, nil
@@ -594,55 +620,55 @@ func (a *MQTTSubAdapter) extractLocationData(data map[string]interface{}, topicC
 	if topicCfg.Composite == nil || topicCfg.Composite.Location == nil {
 		return nil, "", fmt.Errorf("location类型数据点缺少复合配置")
 	}
-	
+
 	config := topicCfg.Composite.Location
-	
+
 	// 提取必需字段
 	lat, err := a.extractFloatValue(data, config.LatitudePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取纬度失败: %w", err)
 	}
-	
+
 	lon, err := a.extractFloatValue(data, config.LongitudePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取经度失败: %w", err)
 	}
-	
+
 	location := &model.LocationData{
 		Latitude:  lat,
 		Longitude: lon,
 	}
-	
+
 	// 提取可选字段
 	if config.AltitudePath != "" {
 		if alt, err := a.extractFloatValue(data, config.AltitudePath); err == nil {
 			location.Altitude = alt
 		}
 	}
-	
+
 	if config.AccuracyPath != "" {
 		if acc, err := a.extractFloatValue(data, config.AccuracyPath); err == nil {
 			location.Accuracy = acc
 		}
 	}
-	
+
 	if config.SpeedPath != "" {
 		if speed, err := a.extractFloatValue(data, config.SpeedPath); err == nil {
 			location.Speed = speed
 		}
 	}
-	
+
 	if config.HeadingPath != "" {
 		if heading, err := a.extractFloatValue(data, config.HeadingPath); err == nil {
 			location.Heading = heading
 		}
 	}
-	
+
 	// 验证数据
 	if err := location.Validate(); err != nil {
 		return nil, "", fmt.Errorf("GPS位置数据验证失败: %w", err)
 	}
-	
+
 	return location, model.TypeLocation, nil
 }
 
@@ -651,36 +677,36 @@ func (a *MQTTSubAdapter) extractVector3DData(data map[string]interface{}, topicC
 	if topicCfg.Composite == nil || topicCfg.Composite.Vector3D == nil {
 		return nil, "", fmt.Errorf("vector3d类型数据点缺少复合配置")
 	}
-	
+
 	config := topicCfg.Composite.Vector3D
-	
+
 	// 提取XYZ坐标
 	x, err := a.extractFloatValue(data, config.XPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取X坐标失败: %w", err)
 	}
-	
+
 	y, err := a.extractFloatValue(data, config.YPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取Y坐标失败: %w", err)
 	}
-	
+
 	z, err := a.extractFloatValue(data, config.ZPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取Z坐标失败: %w", err)
 	}
-	
+
 	vector := &model.Vector3D{
 		X: x,
 		Y: y,
 		Z: z,
 	}
-	
+
 	// 验证数据
 	if err := vector.Validate(); err != nil {
 		return nil, "", fmt.Errorf("3D向量数据验证失败: %w", err)
 	}
-	
+
 	return vector, model.TypeVector3D, nil
 }
 
@@ -689,36 +715,36 @@ func (a *MQTTSubAdapter) extractColorData(data map[string]interface{}, topicCfg 
 	if topicCfg.Composite == nil || topicCfg.Composite.Color == nil {
 		return nil, "", fmt.Errorf("color类型数据点缺少复合配置")
 	}
-	
+
 	config := topicCfg.Composite.Color
-	
+
 	// 提取RGB值
 	red, err := a.extractFloatValue(data, config.RedPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取红色分量失败: %w", err)
 	}
-	
+
 	green, err := a.extractFloatValue(data, config.GreenPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取绿色分量失败: %w", err)
 	}
-	
+
 	blue, err := a.extractFloatValue(data, config.BluePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("提取蓝色分量失败: %w", err)
 	}
-	
+
 	// 将0-255范围的RGB值转换为uint8
 	r := uint8(math.Min(255, math.Max(0, red)))
 	g := uint8(math.Min(255, math.Max(0, green)))
 	b := uint8(math.Min(255, math.Max(0, blue)))
-	
+
 	color := &model.ColorData{
 		R: r,
 		G: g,
 		B: b,
 	}
-	
+
 	// 提取Alpha值 (可选)，将0-1范围转换为0-255
 	if config.AlphaPath != "" {
 		if alpha, err := a.extractFloatValue(data, config.AlphaPath); err == nil {
@@ -729,12 +755,12 @@ func (a *MQTTSubAdapter) extractColorData(data map[string]interface{}, topicCfg 
 	} else {
 		color.A = 255 // 默认不透明
 	}
-	
+
 	// 验证数据
 	if err := color.Validate(); err != nil {
 		return nil, "", fmt.Errorf("颜色数据验证失败: %w", err)
 	}
-	
+
 	return color, model.TypeColor, nil
 }
 

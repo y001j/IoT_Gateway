@@ -14,6 +14,7 @@ const RulesPage = React.lazy(() => import('./pages/RulesPage'));
 const SystemPage = React.lazy(() => import('./pages/SystemPage'));
 const AlertsPage = React.lazy(() => import('./pages/AlertsPage').then(module => ({ default: module.AlertsPage })));
 const MonitoringPage = React.lazy(() => import('./pages/MonitoringPage'));
+const HistoryPage = React.lazy(() => import('./pages/HistoryPage'));
 
 import './App.css';
 
@@ -178,6 +179,11 @@ function App() {
                 <Route path="monitoring" element={
                   <Suspense fallback={<PageLoader />}>
                     <MonitoringPage />
+                  </Suspense>
+                } />
+                <Route path="history" element={
+                  <Suspense fallback={<PageLoader />}>
+                    <HistoryPage />
                   </Suspense>
                 } />
                 <Route path="system" element={

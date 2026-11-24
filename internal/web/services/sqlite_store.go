@@ -4,41 +4,43 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/rs/zerolog/log"
+	"github.com/y001j/iot-gateway/internal/web/utils"
 	"sync"
 	"time"
 
 	"github.com/y001j/iot-gateway/internal/web/models"
 
-	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite"
 )
 
 // PreparedStatements 预处理语句集合
 type PreparedStatements struct {
-	createUser    *sql.Stmt
-	getUserByID   *sql.Stmt
+	createUser        *sql.Stmt
+	getUserByID       *sql.Stmt
 	getUserByUsername *sql.Stmt
-	updateUser    *sql.Stmt
-	deleteUser    *sql.Stmt
-	listUsers     *sql.Stmt
-	countUsers    *sql.Stmt
+	updateUser        *sql.Stmt
+	deleteUser        *sql.Stmt
+	listUsers         *sql.Stmt
+	countUsers        *sql.Stmt
 }
 
 // SQLiteStore SQLite存储实现
 type SQLiteStore struct {
-	db     *sql.DB
-	stmts  *PreparedStatements
-	mu     sync.RWMutex
+	db    *sql.DB
+	stmts *PreparedStatements
+	mu    sync.RWMutex
 }
 
 // NewSQLiteStore 创建新的SQLite存储
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	return NewSQLiteStoreWithConfig(&models.SQLiteConfig{
-		Path:              dbPath,
-		MaxOpenConns:      25,
-		MaxIdleConns:      5,
-		ConnMaxLifetime:   "5m",
-		ConnMaxIdleTime:   "1m",
+		Path:            dbPath,
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: "5m",
+		ConnMaxIdleTime: "1m",
 	})
 }
 
@@ -52,7 +54,7 @@ func NewSQLiteStoreWithConfig(config *models.SQLiteConfig) (*SQLiteStore, error)
 	// 配置连接池参数
 	db.SetMaxOpenConns(config.MaxOpenConns)
 	db.SetMaxIdleConns(config.MaxIdleConns)
-	
+
 	// 解析时间字符串
 	if config.ConnMaxLifetime != "" {
 		if duration, err := time.ParseDuration(config.ConnMaxLifetime); err == nil {
@@ -61,7 +63,7 @@ func NewSQLiteStoreWithConfig(config *models.SQLiteConfig) (*SQLiteStore, error)
 			db.SetConnMaxLifetime(5 * time.Minute) // 默认值
 		}
 	}
-	
+
 	if config.ConnMaxIdleTime != "" {
 		if duration, err := time.ParseDuration(config.ConnMaxIdleTime); err == nil {
 			db.SetConnMaxIdleTime(duration)
@@ -71,7 +73,7 @@ func NewSQLiteStoreWithConfig(config *models.SQLiteConfig) (*SQLiteStore, error)
 	}
 
 	store := &SQLiteStore{db: db}
-	
+
 	// 初始化数据库表
 	if err := store.initDatabase(); err != nil {
 		db.Close()
@@ -151,7 +153,13 @@ func (s *SQLiteStore) initDatabase() error {
 
 	if count == 0 {
 		// 创建默认管理员用户
-		adminPassword, _ := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
+		// 首个管理员账号的初始密码：环境变量 IOT_GATEWAY_ADMIN_PASSWORD 或随机生成
+		// （以前固定为 admin123）
+		initialPassword, pwFile, _ := utils.InitialAdminPassword(DataDir())
+		if pwFile != "" {
+			log.Warn().Str("file", pwFile).Msg("已创建管理员账号 admin，初始密码已写入该文件，请登录后立即修改密码并删除该文件")
+		}
+		adminPassword, _ := bcrypt.GenerateFromPassword([]byte(initialPassword), bcrypt.DefaultCost)
 		_, err = s.db.Exec(`
 			INSERT INTO users (
 				username, password, email, role, status, display_name, created_at, updated_at
@@ -271,7 +279,7 @@ func (s *SQLiteStore) CreateUser(user *models.User) error {
 	now := time.Now()
 	stmt := tx.Stmt(s.stmts.createUser)
 	defer stmt.Close()
-	
+
 	result, err := stmt.Exec(
 		user.Username,
 		user.Password,
@@ -679,6 +687,9 @@ func (s *SQLiteStore) GetSession(id string) (*models.Session, error) {
 		return nil, err
 	}
 
+	// 表中没有 active 列：会话存在即为有效（登出/改密码时直接删除会话）。
+	// 以前 Active 恒为 false，导致 SQLite 存储下 ValidateToken 和刷新令牌必然失败
+	session.Active = true
 	return session, nil
 }
 
@@ -778,6 +789,9 @@ func (s *SQLiteStore) GetSessionByToken(token string) (*models.Session, error) {
 		return nil, err
 	}
 
+	// 表中没有 active 列：会话存在即为有效（登出/改密码时直接删除会话）。
+	// 以前 Active 恒为 false，导致 SQLite 存储下 ValidateToken 和刷新令牌必然失败
+	session.Active = true
 	return session, nil
 }
 
@@ -803,9 +817,11 @@ func (s *SQLiteStore) GetSessionByRefreshToken(refreshToken string) (*models.Ses
 		return nil, err
 	}
 
+	// 表中没有 active 列：会话存在即为有效（登出/改密码时直接删除会话）。
+	// 以前 Active 恒为 false，导致 SQLite 存储下 ValidateToken 和刷新令牌必然失败
+	session.Active = true
 	return session, nil
 }
-
 
 // GetUser 获取用户
 func (s *SQLiteStore) GetUser(id int) (*models.User, error) {
@@ -824,5 +840,11 @@ func (s *SQLiteStore) UpdateSession(session *models.Session) error {
 		session.ExpiresAt,
 		session.ID,
 	)
+	return err
+}
+
+// DeleteUserSessions 删除用户的所有会话（修改密码后使所有已签发令牌失效）
+func (s *SQLiteStore) DeleteUserSessions(userID int) error {
+	_, err := s.db.Exec("DELETE FROM sessions WHERE user_id = ?", userID)
 	return err
 }
