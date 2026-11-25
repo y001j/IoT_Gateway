@@ -377,3 +377,13 @@ func TestIsConnectionError(t *testing.T) {
 		t.Errorf("误判为连接错误")
 	}
 }
+
+func TestModbusRegistered(t *testing.T) {
+	a, ok := southbound.Create("modbus")
+	if !ok {
+		t.Fatal("modbus 适配器应已注册")
+	}
+	if _, ok := a.(*ModbusAdapter); !ok {
+		t.Fatalf("类型错误: %T", a)
+	}
+}

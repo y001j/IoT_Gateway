@@ -20,6 +20,7 @@ type ConfigService interface {
 	GetConfig() (*models.SystemConfig, error)
 	UpdateConfig(config *models.SystemConfig) error
 	ApplyConfig(config *models.SystemConfig) error
+	ValidateConfig(config *models.SystemConfig) error
 }
 
 // configService 配置服务实现
@@ -135,6 +136,11 @@ func (s *configService) GetConfig() (*models.SystemConfig, error) {
 		return s.LoadConfig()
 	}
 	return cfg, nil
+}
+
+// ValidateConfig 只校验配置，不保存、不应用
+func (s *configService) ValidateConfig(config *models.SystemConfig) error {
+	return s.validateConfig(config)
 }
 
 // UpdateConfig 更新配置

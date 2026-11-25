@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -627,11 +628,6 @@ func (s *RuleEngineService) GetWorkerPoolStats() *WorkerPoolStats {
 	return &st
 }
 
-// processRuleTask 处理规则任务
-func (s *RuleEngineService) processRuleTask(task RuleTask) {
-	_ = s.processRule(task.Rule, task.Point)
-}
-
 // processRule 处理单个规则：评估条件，命中后按顺序执行动作管道。
 //
 // 动作管道语义：
@@ -813,18 +809,14 @@ func (s *RuleEngineService) executeAction(action *Action, point model.Point, rul
 			}
 		}
 	} else {
-		// 回退到内置的简化实现
+		// 没有注册处理器时：forward 有内置实现，其余动作报错。
+		// 运行时 transform/filter/aggregate 由 actions.RegisterBuiltinHandlers 注册，alert 在 Start 中注册；
+		// 以前 transform/alert 在这里各有一份简化的重复实现（transform 还直接拼接 NATS 主题），已删除。
 		switch action.Type {
-		case "aggregate":
-			err = fmt.Errorf("aggregate 动作处理器未注册")
-		case "transform":
-			err = s.executeTransformAction(action, point, rule)
-		case "filter":
-			err = fmt.Errorf("filter 动作处理器未注册")
 		case "forward":
 			err = s.executeForwardAction(action, point, rule)
-		case "alert":
-			err = s.executeAlertAction(action, point, rule)
+		case "aggregate", "transform", "filter", "alert":
+			err = fmt.Errorf("%s 动作处理器未注册", action.Type)
 		default:
 			err = fmt.Errorf("不支持的动作类型: %s", action.Type)
 		}
@@ -896,72 +888,6 @@ func (s *RuleEngineService) formatOutputKey(template string, point model.Point) 
 	return result
 }
 
-// executeTransformAction 执行转换动作
-func (s *RuleEngineService) executeTransformAction(action *Action, point model.Point, rule *Rule) error {
-	config := action.Config
-
-	// 简单的转换实现
-	transformedPoint := point
-	transformedPoint.Timestamp = time.Now()
-
-	// 应用简单的转换
-	if scale, ok := config["scale"].(float64); ok {
-		if val, ok := point.Value.(float64); ok {
-			transformedPoint.Value = val * scale
-		}
-	}
-
-	if offset, ok := config["offset"].(float64); ok {
-		if val, ok := transformedPoint.Value.(float64); ok {
-			transformedPoint.Value = val + offset
-		}
-	}
-
-	// 发布转换后的数据到NATS
-	if s.bus != nil {
-		subject := fmt.Sprintf("transformed.%s.%s", transformedPoint.DeviceID, transformedPoint.Key)
-		if subjectCfg, ok := config["publish_subject"].(string); ok && subjectCfg != "" {
-			subject = subjectCfg
-		}
-
-		publishData := map[string]interface{}{
-			"device_id": transformedPoint.DeviceID,
-			"key":       transformedPoint.Key,
-			"value":     SafeValueForJSON(transformedPoint.Value),
-			"type":      string(transformedPoint.Type),
-			"timestamp": transformedPoint.Timestamp,
-			"tags":      SafeValueForJSON(transformedPoint.GetTagsCopy()),
-			"transform_info": map[string]interface{}{
-				"rule_id":        rule.ID,
-				"rule_name":      rule.Name,
-				"action":         "transform",
-				"original_value": SafeValueForJSON(point.Value),
-			},
-			"processed_at": time.Now(),
-		}
-
-		if jsonData, err := json.Marshal(publishData); err == nil {
-			if err := s.bus.Publish(subject, jsonData); err != nil {
-				log.Error().Err(err).Str("subject", subject).Msg("发布转换数据失败")
-			} else {
-				log.Debug().
-					Str("rule_id", rule.ID).
-					Str("subject", subject).
-					Msg("转换数据已发布到NATS")
-			}
-		}
-	}
-
-	log.Debug().
-		Str("rule_id", rule.ID).
-		Str("point_key", point.Key).
-		Interface("original_value", point.Value).
-		Interface("transformed_value", transformedPoint.Value).
-		Msg("执行转换动作")
-
-	return nil
-}
-
 // executeForwardAction 执行转发动作
 func (s *RuleEngineService) executeForwardAction(action *Action, point model.Point, rule *Rule) error {
 	config := action.Config
@@ -1002,16 +928,6 @@ func (s *RuleEngineService) executeForwardAction(action *Action, point model.Poi
 	if err := PublishRuleOutput(s.bus, subject, jsonData); err != nil {
 		return fmt.Errorf("发送NATS消息失败: %w", err)
 	}
-	return nil
-}
-
-// executeAlertAction 执行告警动作
-func (s *RuleEngineService) executeAlertAction(action *Action, point model.Point, rule *Rule) error {
-	log.Warn().
-		Str("rule_id", rule.ID).
-		Str("point_key", point.Key).
-		Interface("point_value", point.Value).
-		Msg("规则告警触发")
 	return nil
 }
 
@@ -1093,13 +1009,16 @@ func (s *RuleEngineService) watchRuleChanges() {
 				Str("rule_id", ruleID).
 				Msg("规则变化事件")
 
-			// 更新规则索引
+			// 更新规则索引（数据分发使用该索引）。以前这里匹配 "created"/"updated"/"deleted"，
+			// 而管理器发出的是 "update"/"delete"，热加载的规则变更从未生效。
 			if event.Rule != nil {
 				switch event.Type {
-				case "created", "updated":
+				case RuleEventUpdate:
 					s.updateRuleIndex(event.Rule, "update")
-				case "deleted":
+				case RuleEventDelete:
 					s.updateRuleIndex(event.Rule, "remove")
+				default:
+					log.Warn().Str("event_type", event.Type).Msg("未知的规则变化事件类型")
 				}
 			}
 		}
@@ -1186,13 +1105,6 @@ type BuiltinAlertHandler struct {
 // Name 返回处理器名称
 func (h *BuiltinAlertHandler) Name() string {
 	return "BuiltinAlertHandler"
-}
-
-// InitializeForTesting 为测试初始化处理器
-func (h *BuiltinAlertHandler) InitializeForTesting() {
-	if h.throttleMap == nil {
-		h.throttleMap = make(map[string]time.Time)
-	}
 }
 
 // Execute 执行告警动作 - 增强版
@@ -1687,15 +1599,13 @@ func (h *BuiltinAlertHandler) sendEmailAlert(alert *Alert, config map[string]int
 	// - subject: 邮件主题模板
 	// - template: 邮件内容模板 (支持HTML)
 
-	log.Info().
+	// 以前什么都不做却返回 nil，投递结果显示"成功"。各渠道独立发送，返回错误不影响其他渠道。
+	log.Warn().
 		Str("alert_id", alert.ID).
 		Str("type", "email").
 		Interface("config", RedactConfig(config)).
-		Msg("邮件告警发送 (占位符实现 - 待开发)")
-
-	// 返回成功以避免影响其他通道
-	// 在实际实现时，应该返回真实的错误
-	return nil
+		Msg("邮件告警渠道尚未实现")
+	return fmt.Errorf("email: %w", ErrChannelNotImplemented)
 }
 
 // sendSMSAlert 发送短信告警 (企业功能 - 占位符实现)
@@ -1710,91 +1620,16 @@ func (h *BuiltinAlertHandler) sendSMSAlert(alert *Alert, config map[string]inter
 	// - phone_numbers: 接收手机号列表
 	// - template_params: 模板参数
 
-	log.Info().
+	log.Warn().
 		Str("alert_id", alert.ID).
 		Str("type", "sms").
 		Interface("config", RedactConfig(config)).
-		Msg("短信告警发送 (占位符实现 - 待开发)")
-
-	// 返回成功以避免影响其他通道
-	// 在实际实现时，应该返回真实的错误
-	return nil
+		Msg("短信告警渠道尚未实现")
+	return fmt.Errorf("sms: %w", ErrChannelNotImplemented)
 }
 
-// sendToChannelsWithRetry 带重试机制的多通道发送 (企业功能 - 占位符实现)
-func (h *BuiltinAlertHandler) sendToChannelsWithRetry(ctx context.Context, alert *Alert, config map[string]interface{}) map[string]ChannelResult {
-	// TODO: 实现重试机制
-	// 预期功能:
-	// - 指数退避重试策略
-	// - 每个通道独立重试计数
-	// - 重试间隔可配置
-	// - 最大重试次数限制
-	// - 失败时的故障转移通道
-	// - 重试状态跟踪和日志
-
-	// 目前回退到标准发送方式
-	// 当需要重试功能时，可以在Execute方法中调用此方法
-	log.Debug().
-		Str("alert_id", alert.ID).
-		Msg("重试机制发送 (占位符实现 - 使用标准发送)")
-
-	return h.sendToChannels(ctx, alert, config)
-}
-
-// enableChannelFailover 启用通道故障转移 (企业功能 - 占位符实现)
-func (h *BuiltinAlertHandler) enableChannelFailover(config map[string]interface{}) []ChannelConfig {
-	// TODO: 实现故障转移机制
-	// 预期功能:
-	// - 主通道失败时自动切换到备用通道
-	// - 通道健康检查和监控
-	// - 故障转移策略配置 (立即/延迟/条件)
-	// - 故障恢复后的回切机制
-	// - 故障转移事件记录和告警
-
-	// 目前返回标准通道配置
-	log.Debug().Msg("通道故障转移 (占位符实现 - 使用标准通道)")
-
-	return h.parseChannelConfig(config)
-}
-
-// trackDeliveryStatus 跟踪投递状态 (企业功能 - 占位符实现)
-func (h *BuiltinAlertHandler) trackDeliveryStatus(alert *Alert, channel string, result ChannelResult) {
-	// TODO: 实现投递状态跟踪
-	// 预期功能:
-	// - 投递状态持久化存储
-	// - 投递成功率统计
-	// - 通道性能监控
-	// - 投递失败原因分析
-	// - 投递历史查询接口
-	// - 投递状态回调通知
-
-	log.Debug().
-		Str("alert_id", alert.ID).
-		Str("channel", channel).
-		Bool("success", result.Success).
-		Dur("duration", result.Duration).
-		Msg("投递状态跟踪 (占位符实现 - 待开发)")
-}
-
-// validateChannelConfig 验证通道配置 (企业功能增强 - 占位符实现)
-func (h *BuiltinAlertHandler) validateChannelConfig(channels []ChannelConfig) error {
-	// TODO: 实现企业级配置验证
-	// 预期功能:
-	// - 邮件SMTP连接测试
-	// - 短信服务商API验证
-	// - Webhook端点可达性检查
-	// - 配置参数完整性验证
-	// - 安全配置检查 (SSL/TLS)
-	// - 配置模板语法验证
-
-	for _, channel := range channels {
-		log.Debug().
-			Str("type", channel.Type).
-			Msg("通道配置验证 (占位符实现 - 跳过)")
-	}
-
-	return nil
-}
+// ErrChannelNotImplemented 通知渠道尚未实现
+var ErrChannelNotImplemented = errors.New("该通知渠道尚未实现，请使用 webhook/nats 渠道或 Web 告警的通知渠道")
 
 // startCleanupRoutine 启动清理协程
 func (h *BuiltinAlertHandler) startCleanupRoutine() {
@@ -1960,56 +1795,4 @@ func (s *RuleEngineService) publishRuleEvent(eventType string, rule *Rule, point
 			Int("bytes", len(eventJSON)).
 			Msg("规则事件发布成功")
 	}
-}
-
-// SetHotReloadEnabled 动态设置热加载状态
-func (s *RuleEngineService) SetHotReloadEnabled(enabled bool) error {
-	if s.config == nil {
-		s.config = &RuleEngineConfig{}
-	}
-	if s.config.HotReload == nil {
-		s.config.HotReload = &HotReloadConfig{
-			Enabled:          true,
-			GracefulFallback: true,
-			RetryInterval:    "30s",
-			MaxRetries:       3,
-			DebounceDelay:    "100ms",
-		}
-	}
-
-	oldEnabled := s.config.HotReload.Enabled
-	s.config.HotReload.Enabled = enabled
-
-	// 通知规则管理器
-	if s.manager != nil {
-		s.manager.SetHotReloadConfig(s.config.HotReload)
-	}
-
-	log.Info().
-		Bool("old_enabled", oldEnabled).
-		Bool("new_enabled", enabled).
-		Msg("规则文件热加载状态已更新")
-
-	return nil
-}
-
-// GetHotReloadStatus 获取热加载状态
-func (s *RuleEngineService) GetHotReloadStatus() map[string]interface{} {
-	status := map[string]interface{}{
-		"enabled":           false,
-		"graceful_fallback": true,
-		"retry_interval":    "30s",
-		"max_retries":       3,
-		"debounce_delay":    "100ms",
-	}
-
-	if s.config != nil && s.config.HotReload != nil {
-		status["enabled"] = s.config.HotReload.Enabled
-		status["graceful_fallback"] = s.config.HotReload.GracefulFallback
-		status["retry_interval"] = s.config.HotReload.RetryInterval
-		status["max_retries"] = s.config.HotReload.MaxRetries
-		status["debounce_delay"] = s.config.HotReload.DebounceDelay
-	}
-
-	return status
 }

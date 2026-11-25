@@ -16,3 +16,11 @@ func simFloat32() float32 {
 func simIntn(n int) int {
 	return rand.Intn(n) // #nosec G404 -- 模拟传感器数据，非安全用途
 }
+
+// simIntUpTo 返回 [0, max) 内的随机整数；max < 1 时返回 0（rand.Intn 遇到非正数会 panic）
+func simIntUpTo(max float64) int {
+	if max < 1 {
+		return 0
+	}
+	return simIntn(int(max))
+}

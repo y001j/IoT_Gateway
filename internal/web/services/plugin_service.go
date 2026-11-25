@@ -2,9 +2,7 @@ package services
 
 import (
 	"bufio"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -489,7 +487,7 @@ func (s *pluginService) GetPluginStats(name string) (*models.PluginStats, error)
 						// 使用真实的响应时间
 						stats.AverageLatency = adapterMetrics.AverageResponseTime
 
-						// 获取真实的内存和CPU使用率
+						// 资源占用（内置插件无法单独统计）
 						memUsage, cpuUsage := s.getResourceUsage(name)
 						stats.MemoryUsage = memUsage
 						stats.CPUUsage = cpuUsage
@@ -530,7 +528,7 @@ func (s *pluginService) GetPluginStats(name string) (*models.PluginStats, error)
 						// 使用真实的响应时间
 						stats.AverageLatency = sinkMetrics.AverageResponseTime
 
-						// 获取真实的内存和CPU使用率
+						// 资源占用（内置插件无法单独统计）
 						memUsage, cpuUsage := s.getResourceUsage(name)
 						stats.MemoryUsage = memUsage
 						stats.CPUUsage = cpuUsage
@@ -574,55 +572,7 @@ func (s *pluginService) GetPluginStats(name string) (*models.PluginStats, error)
 
 // getResourceUsage 获取插件的资源使用情况
 func (s *pluginService) getResourceUsage(pluginName string) (memoryUsage int64, cpuUsage float64) {
-	// 由于插件运行在同一进程中，我们返回进程的资源使用情况
-	// 在实际部署中，可以通过监控系统或容器指标获取更精确的数据
-
-	// 获取当前进程的内存使用情况
-	memUsage := s.getProcessMemoryUsage()
-
-	// 获取当前进程的CPU使用率
-	cpuUsage = s.getProcessCPUUsage()
-
-	// 简化估算：假设每个插件使用相同的资源比例
-	pluginCount := len(s.manager.GetPlugins())
-	if pluginCount > 0 {
-		memUsage = memUsage / int64(pluginCount)
-		cpuUsage = cpuUsage / float64(pluginCount)
-	}
-
-	return memUsage, cpuUsage
-}
-
-// getProcessMemoryUsage 获取当前进程的内存使用量（字节）
-func (s *pluginService) getProcessMemoryUsage() int64 {
-	// 在Windows下，可以使用以下方式获取内存使用量
-	// 这里返回一个合理的估算值
-
-	// 基础内存使用：20-50MB之间的随机值，模拟真实情况
-	baseMemory := int64(20 * 1024 * 1024)     // 20MB基础
-	variableMemory := int64(30 * 1024 * 1024) // 最多额外30MB
-
-	// 基于当前时间添加一些变化，模拟内存使用的波动
-	if randomNum, err := rand.Int(rand.Reader, big.NewInt(100)); err == nil {
-		variation := randomNum.Int64()
-		baseMemory += (variableMemory * variation) / 100
-	}
-
-	return baseMemory
-}
-
-// getProcessCPUUsage 获取当前进程的CPU使用率（百分比）
-func (s *pluginService) getProcessCPUUsage() float64 {
-	// 基础CPU使用率：5-25%之间的随机值，模拟真实情况
-	baseCPU := 5.0
-	maxVariation := 20.0
-
-	// 基于当前时间添加一些变化，模拟CPU使用的波动
-	if randomNum, err := rand.Int(rand.Reader, big.NewInt(100)); err == nil {
-		variation := float64(randomNum.Int64())
-		cpuUsage := baseCPU + (maxVariation*variation)/100.0
-		return cpuUsage
-	}
-
-	return baseCPU // 默认返回基础CPU使用率
+	// 内置插件与网关运行在同一进程，无法单独统计资源占用，返回 0（前端显示"不可单独统计"）。
+	// 以前返回 20~50MB、5%~25% 之间的随机数并标为"真实使用率"
+	return 0, 0
 }

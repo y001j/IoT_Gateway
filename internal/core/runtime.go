@@ -454,7 +454,7 @@ func (r *Runtime) updateRuleEngineMetrics() {
 				engineMetrics := ruleService.GetMetrics()
 				if engineMetrics != nil {
 					// 详细调试日志：显示原始指标数据
-					log.Info().
+					log.Debug().
 						Int64("raw_rules_total", engineMetrics.RulesTotal).
 						Int64("raw_rules_enabled", engineMetrics.RulesEnabled).
 						Int64("raw_rules_matched", engineMetrics.RulesMatched).
@@ -475,7 +475,7 @@ func (r *Runtime) updateRuleEngineMetrics() {
 						engineMetrics.ActionsFailed,     // 动作失败次数
 					)
 
-					log.Info().
+					log.Debug().
 						Int("synced_total_rules", int(engineMetrics.RulesTotal)).
 						Int("synced_enabled_rules", int(engineMetrics.RulesEnabled)).
 						Int64("synced_rules_matched", engineMetrics.RulesMatched).

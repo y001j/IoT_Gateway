@@ -20,9 +20,7 @@ import (
 )
 
 func init() {
-	southbound.Register("modbus", func() southbound.Adapter {
-		return &ModbusAdapter{}
-	})
+	southbound.Register("modbus", NewAdapter)
 }
 
 const (

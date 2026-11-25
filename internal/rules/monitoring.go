@@ -337,7 +337,7 @@ func (m *RuleMonitor) GetErrors(limit int) []*MonitoringRuleError {
 		limit = len(m.errors)
 	}
 
-	// 返回最新的错误（倒序）
+	// 返回最新的 limit 条错误（按时间先后排列）
 	result := make([]*MonitoringRuleError, limit)
 	start := len(m.errors) - limit
 	for i := 0; i < limit; i++ {
@@ -375,21 +375,29 @@ func (m *RuleMonitor) run() {
 			m.updatePerformanceStats()
 			m.checkAlerts()
 		case err := <-m.notificationChan:
-			m.handleErrorNotification(err)
+			if err != nil {
+				m.handleErrorNotification(err)
+			}
 		}
 	}
 }
 
 // performHealthChecks 执行健康检查
 func (m *RuleMonitor) performHealthChecks() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 不持锁执行检查：以前持有写锁执行（每项最长 5 秒），期间规则处理路径上的
+	// RecordError/RecordRuleExecution 全部被阻塞
+	m.mu.RLock()
+	checkers := make(map[string]HealthChecker, len(m.healthChecks))
+	for name, c := range m.healthChecks {
+		checkers[name] = c
+	}
+	m.mu.RUnlock()
 
 	checkResults := make(map[string]string)
 	overallStatus := "healthy"
 	var messages []string
 
-	for name, checker := range m.healthChecks {
+	for name, checker := range checkers {
 		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 		err := checker.Check(ctx)
 		cancel()
@@ -403,6 +411,8 @@ func (m *RuleMonitor) performHealthChecks() {
 		}
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.healthStatus.CheckResults = checkResults
 	m.healthStatus.LastChecked = time.Now()
 
@@ -504,9 +514,11 @@ func (m *RuleMonitor) logError(ruleError *MonitoringRuleError) {
 }
 
 // Close 关闭监控器
+// 可重复调用。不关闭 notificationChan：以前关闭后 run 循环会读到 nil 并在
+// handleErrorNotification 中空指针 panic（规则引擎停止时网关崩溃），之后的 RecordError
+// 向已关闭的通道发送也会 panic；run 通过 ctx 退出即可。
 func (m *RuleMonitor) Close() {
 	m.cancel()
-	close(m.notificationChan)
 }
 
 // 辅助函数
@@ -537,11 +549,16 @@ func getDefaultAlertThresholds() *AlertThresholds {
 
 // ToJSON 将监控数据转换为JSON
 func (m *RuleMonitor) ToJSON() ([]byte, error) {
+	// 先取指标和最近错误：它们各自加读锁。以前在持有读锁时调用，
+	// 递归读锁遇到等待中的写锁（如 RecordError）会死锁。
+	metrics := m.GetMetrics()
+	recentErrors := m.GetErrors(10)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	data := map[string]interface{}{
-		"metrics":           m.GetMetrics(),
+		"metrics":           metrics,
 		"health_status":     m.healthStatus,
 		"performance_stats": m.performanceStats,
 		"error_stats": map[string]interface{}{
@@ -550,7 +567,7 @@ func (m *RuleMonitor) ToJSON() ([]byte, error) {
 		},
 		"action_stats":  m.actionStats,
 		"rule_stats":    m.ruleStats,
-		"recent_errors": m.GetErrors(10),
+		"recent_errors": recentErrors,
 	}
 
 	return json.Marshal(data)

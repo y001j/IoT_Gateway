@@ -186,3 +186,27 @@ func TestLogService(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNewIDUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 10000; i++ {
+		id := newID("x")
+		if seen[id] {
+			t.Fatalf("ID 重复: %s", id)
+		}
+		seen[id] = true
+	}
+	// 快速连续创建的通知渠道 ID 不能相同（以前只用 UnixNano，会互相覆盖）
+	alerts := NewAlertService()
+	ids := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		ch, err := alerts.CreateNotificationChannel(&models.NotificationChannelCreateRequest{Name: "c", Type: "webhook", Enabled: true, Config: map[string]interface{}{"url": "http://x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ids[ch.ID] {
+			t.Fatalf("渠道 ID 重复: %s", ch.ID)
+		}
+		ids[ch.ID] = true
+	}
+}

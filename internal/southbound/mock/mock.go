@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -217,6 +218,9 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 	// 初始化BaseAdapter
 	a.BaseAdapter = southbound.NewBaseAdapter(config.Name, "mock")
 	a.interval = config.Interval.Duration()
+	if a.interval <= 0 { // time.NewTicker 遇到 0 或负数会 panic
+		a.interval = time.Second
+	}
 
 	// 从新配置格式转换到内部格式
 	a.points = make([]mockPoint, len(config.DataPoints))
@@ -362,8 +366,13 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 					var pointType model.DataType
 
 					if p.DataType != "" {
-						// 生成复合数据
+						// 生成复合数据：保留生成函数给出的类型，不做下面的基础类型转换。
+						// 以前复合点位也会进入 switch p.Type 的 default 分支被转换成 float 0，
+						// 配置文件中的 location/vector3d/color 等模拟点位实际发出的都是 0.0。
 						pointValue, pointType = a.generateCompositeData(p)
+						if isNilValue(pointValue) {
+							continue // 缺少复合配置，generate* 已记录错误
+						}
 					} else if p.Constant != nil {
 						// 使用常量值
 						pointValue = p.Constant
@@ -392,9 +401,11 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						pointValue = newVal
 					}
 
-					// 根据配置的类型转换值
-					switch p.Type {
-					case "int":
+					// 根据配置的类型转换值（仅基础类型）
+					switch {
+					case p.DataType != "":
+						// 复合类型，见上
+					case p.Type == "int":
 						// 对于整数类型，将浮点值转换为整数
 						var intValue int
 						switch v := pointValue.(type) {
@@ -417,7 +428,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						pointValue = intValue
 						pointType = model.TypeInt
 
-					case "bool":
+					case p.Type == "bool":
 						// 对于布尔类型，将值转换为布尔值
 						var boolValue bool
 						switch v := pointValue.(type) {
@@ -433,7 +444,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						pointValue = boolValue
 						pointType = model.TypeBool
 
-					case "string":
+					case p.Type == "string":
 						// 对于字符串类型，确保值是字符串
 						if str, ok := pointValue.(string); ok {
 							pointValue = str
@@ -584,6 +595,44 @@ func (a *MockAdapter) Stop() error {
 	return nil
 }
 
+// vectorBounds 返回第 i 维的取值范围：优先使用逐维配置，否则使用全局范围
+func vectorBounds(cfg *config.MockVectorConfig, i int) (float64, float64) {
+	minVal, maxVal := cfg.GlobalMin, cfg.GlobalMax
+	if i < len(cfg.MinValues) {
+		minVal = cfg.MinValues[i]
+	}
+	if i < len(cfg.MaxValues) {
+		maxVal = cfg.MaxValues[i]
+	}
+	return minVal, maxVal
+}
+
+// fitLabels 让标签数量与维度一致（多余的截断，不足的用序号补齐）。
+// 数量不一致时 VectorData/ArrayData.Validate 会拒绝数据。
+func fitLabels(labels []string, n int) []string {
+	if len(labels) == 0 || len(labels) == n {
+		return labels
+	}
+	out := make([]string, n)
+	for i := range out {
+		if i < len(labels) {
+			out[i] = labels[i]
+		} else {
+			out[i] = strconv.Itoa(i)
+		}
+	}
+	return out
+}
+
+// isNilValue 判断接口值是否为 nil 或包装了 nil 指针（generate* 在缺少配置时返回带类型的 nil）
+func isNilValue(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Ptr && rv.IsNil()
+}
+
 // NewAdapter 创建一个新的模拟适配器实例
 func NewAdapter() southbound.Adapter {
 	return NewMockAdapter()
@@ -685,6 +734,12 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 		if simFloat64() < 0.1 { // 10%概率调整速度
 			state.speed = config.SpeedMin + simFloat64()*(config.SpeedMax-config.SpeedMin)
 		}
+	}
+
+	// 保证坐标合法：circular/linear 没有范围约束，起点靠近极点或 ±180° 经线时会越界
+	state.currentLat = math.Max(-90, math.Min(90, state.currentLat))
+	if state.currentLng > 180 || state.currentLng < -180 {
+		state.currentLng = math.Mod(state.currentLng+540, 360) - 180
 	}
 
 	// 创建位置数据
@@ -883,17 +938,7 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 
 	values := make([]float64, config.Dimension)
 	for i := 0; i < config.Dimension; i++ {
-		var minVal, maxVal float64
-		if len(config.MinValues) > i {
-			minVal = config.MinValues[i]
-		} else {
-			minVal = config.GlobalMin
-		}
-		if len(config.MaxValues) > i {
-			maxVal = config.MaxValues[i]
-		} else {
-			maxVal = config.GlobalMax
-		}
+		minVal, maxVal := vectorBounds(config, i)
 
 		// 根据分布类型生成初始值
 		switch config.Distribution {
@@ -902,7 +947,7 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 			values[i] = (minVal+maxVal)/2.0 + (simFloat64()-0.5)*(maxVal-minVal)*0.3
 		case "exponential":
 			// 指数分布（简化版本）
-			values[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-simFloat64()))
+			values[i] = math.Min(maxVal, minVal+(maxVal-minVal)*(-math.Log(1.0-simFloat64()))) // 截断到上限，以前会超出配置范围
 		default:
 			// 均匀分布
 			values[i] = minVal + simFloat64()*(maxVal-minVal)
@@ -1043,17 +1088,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 	case "walk":
 		// 随机游走
 		for i := range newValues {
-			var minVal, maxVal float64
-			if len(config.MinValues) > i {
-				minVal = config.MinValues[i]
-			} else {
-				minVal = config.GlobalMin
-			}
-			if len(config.MaxValues) > i {
-				maxVal = config.MaxValues[i]
-			} else {
-				maxVal = config.GlobalMax
-			}
+			minVal, maxVal := vectorBounds(config, i)
 
 			// 随机变化，有相关性
 			change := (simFloat64() - 0.5) * 0.1 * (maxVal - minVal)
@@ -1077,8 +1112,10 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 		// 振荡模式
 		state.time += 0.1
 		for i := range newValues {
-			amplitude := (config.MaxValues[i] - config.MinValues[i]) / 2.0
-			center := (config.MaxValues[i] + config.MinValues[i]) / 2.0
+			// 以前直接用 MinValues[i]/MaxValues[i]：只配置 global_min/max 时第一次生成就 panic，网关进程崩溃
+			minVal, maxVal := vectorBounds(config, i)
+			amplitude := (maxVal - minVal) / 2.0
+			center := (maxVal + minVal) / 2.0
 			frequency := 1.0 + float64(i)*0.1 // 不同维度不同频率
 			newValues[i] = center + amplitude*math.Sin(state.time*frequency)
 		}
@@ -1086,17 +1123,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 	default:
 		// 随机模式
 		for i := range newValues {
-			var minVal, maxVal float64
-			if len(config.MinValues) > i {
-				minVal = config.MinValues[i]
-			} else {
-				minVal = config.GlobalMin
-			}
-			if len(config.MaxValues) > i {
-				maxVal = config.MaxValues[i]
-			} else {
-				maxVal = config.GlobalMax
-			}
+			minVal, maxVal := vectorBounds(config, i)
 
 			switch config.Distribution {
 			case "normal":
@@ -1105,7 +1132,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 				newValues[i] = center + (simFloat64()-0.5)*(maxVal-minVal)*0.3
 			case "exponential":
 				// 指数分布
-				newValues[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-simFloat64()))
+				newValues[i] = math.Min(maxVal, minVal+(maxVal-minVal)*(-math.Log(1.0-simFloat64()))) // 截断到上限，以前会超出配置范围
 			default:
 				// 均匀分布
 				newValues[i] = minVal + simFloat64()*(maxVal-minVal)
@@ -1119,7 +1146,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 	return &model.VectorData{
 		Values:    newValues,
 		Dimension: len(newValues),
-		Labels:    config.Labels,
+		Labels:    fitLabels(config.Labels, len(newValues)),
 		Unit:      config.Unit,
 	}, model.TypeVector
 }
@@ -1174,7 +1201,7 @@ func (a *MockAdapter) generateArrayData(p *mockPoint) (*model.ArrayData, model.D
 		DataType: config.ElementType,
 		Size:     len(newValues),
 		Unit:     config.Unit,
-		Labels:   config.Labels,
+		Labels:   fitLabels(config.Labels, len(newValues)),
 	}, model.TypeArray
 }
 
@@ -1221,6 +1248,9 @@ func (a *MockAdapter) generateMatrixData(p *mockPoint) (*model.MatrixData, model
 			}
 		}
 	}
+
+	// 微调会随机改动任意元素，这里统一保证矩阵类型的结构
+	enforceMatrixStructure(config.MatrixType, newValues)
 
 	// 更新状态
 	state.lastValues = newValues
@@ -1349,10 +1379,35 @@ func (a *MockAdapter) generateArrayElement(config *config.MockArrayConfig) inter
 	return 0.0
 }
 
+// enforceMatrixStructure 保证 identity/diagonal/symmetric 矩阵的结构。
+// 以前只有每 10 次的完全重新生成会按类型生成，中间的微调会破坏结构；symmetric 从未保证对称。
+func enforceMatrixStructure(matrixType string, m [][]float64) {
+	for i := range m {
+		for j := range m[i] {
+			switch matrixType {
+			case "identity":
+				if i == j {
+					m[i][j] = 1
+				} else {
+					m[i][j] = 0
+				}
+			case "diagonal":
+				if i != j {
+					m[i][j] = 0
+				}
+			case "symmetric":
+				if j < i && i < len(m[j]) {
+					m[i][j] = m[j][i] // 用上三角镜像下三角
+				}
+			}
+		}
+	}
+}
+
 // generateMatrixElement 生成矩阵元素
 func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row, col int) float64 {
-	// 检查稀疏度
-	if config.Sparsity > 0 && simFloat64() < config.Sparsity {
+	// 检查稀疏度（单位矩阵不受影响）
+	if config.MatrixType != "identity" && config.Sparsity > 0 && simFloat64() < config.Sparsity {
 		return 0.0
 	}
 

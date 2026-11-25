@@ -503,11 +503,6 @@ func TestDataFlowTrackerRates(t *testing.T) {
 
 func approxEq(a, b float64) bool { return a-b < 0.01 && b-a < 0.01 }
 
-func mustJSONString(v interface{}) string {
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
 // ---------- 插件服务 ----------
 
 func TestPluginServiceWithAdapter(t *testing.T) {

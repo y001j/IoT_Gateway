@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -641,13 +642,17 @@ func (h *TransformHandler) isWeightUnit(unit string) bool {
 
 // evaluateSimpleExpression 计算简单表达式
 func (h *TransformHandler) evaluateSimpleExpression(expression string, value interface{}) (interface{}, error) {
-	// 替换变量
-	expr := strings.ReplaceAll(expression, "x", fmt.Sprintf("%v", value))
+	// 替换变量：只替换独立的标识符 x，并加括号保证负数正确（2-x）。
+	// 以前替换所有字母 x，exp(x) 会变成 e4p(4)
+	expr := exprVarPattern.ReplaceAllString(expression, "("+fmt.Sprintf("%v", value)+")")
 
 	// 简单的数学表达式计算（这里可以集成更强大的表达式引擎）
 	// 目前只支持基本的四则运算
 	return h.calculateExpression(expr)
 }
+
+// exprVarPattern 匹配表达式中的变量 x
+var exprVarPattern = regexp.MustCompile(`\bx\b`)
 
 // calculateExpression 计算表达式
 func (h *TransformHandler) calculateExpression(expr string) (interface{}, error) {
@@ -942,15 +947,11 @@ func (h *TransformHandler) toBool(value interface{}) bool {
 		return v
 	case string:
 		return strings.ToLower(v) == "true" || v == "1"
-	case int, int32, int64:
-		return v != 0
-	case float32, float64:
-		if num, ok := value.(float64); ok {
-			return num != 0
-		}
-		if num, ok := value.(float32); ok {
-			return num != 0
-		}
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		// 以前写成 case int, int32, int64: return v != 0，v 是接口值，
+		// int64(0) 与常量 0（int）比较永远不相等，0 被转换成 true
+		f, ok := convertToFloat64(v)
+		return ok && f != 0
 	}
 	return value != nil
 }
@@ -2078,122 +2079,6 @@ func (h *TransformHandler) compositeToArrayTransform(compositeData model.Composi
 	}
 }
 
-// vectorTransformTransform 向量变换转换
-func (h *TransformHandler) vectorTransformTransform(compositeData model.CompositeData, parameters map[string]interface{}) (interface{}, error) {
-	vectorData, ok := compositeData.(*model.VectorData)
-	if !ok {
-		return nil, fmt.Errorf("数据不是VectorData类型")
-	}
-
-	transform, ok := parameters["transform"].(string)
-	if !ok {
-		transform = "normalize" // 默认归一化
-	}
-
-	newValues := make([]float64, len(vectorData.Values))
-	copy(newValues, vectorData.Values)
-
-	switch transform {
-	case "normalize":
-		// 归一化向量
-		magnitude := 0.0
-		for _, val := range newValues {
-			magnitude += val * val
-		}
-		magnitude = math.Sqrt(magnitude)
-
-		if magnitude > 0 {
-			for i := range newValues {
-				newValues[i] /= magnitude
-			}
-		}
-
-	case "scale":
-		// 缩放向量
-		if scaleParam, exists := parameters["scale"]; exists {
-			var scale float64
-			if s, ok := scaleParam.(float64); ok {
-				scale = s
-			} else if s, ok := scaleParam.(int); ok {
-				scale = float64(s)
-			} else {
-				return nil, fmt.Errorf("缩放参数必须是数值")
-			}
-
-			for i := range newValues {
-				newValues[i] *= scale
-			}
-		} else {
-			return nil, fmt.Errorf("缺少缩放参数")
-		}
-
-	case "abs":
-		// 绝对值
-		for i := range newValues {
-			newValues[i] = math.Abs(newValues[i])
-		}
-
-	case "clamp":
-		// 限制值域
-		var minVal, maxVal float64 = -math.MaxFloat64, math.MaxFloat64
-
-		if minParam, exists := parameters["min"]; exists {
-			if m, ok := minParam.(float64); ok {
-				minVal = m
-			} else if m, ok := minParam.(int); ok {
-				minVal = float64(m)
-			}
-		}
-
-		if maxParam, exists := parameters["max"]; exists {
-			if m, ok := maxParam.(float64); ok {
-				maxVal = m
-			} else if m, ok := maxParam.(int); ok {
-				maxVal = float64(m)
-			}
-		}
-
-		for i := range newValues {
-			if newValues[i] < minVal {
-				newValues[i] = minVal
-			}
-			if newValues[i] > maxVal {
-				newValues[i] = maxVal
-			}
-		}
-
-	case "offset":
-		// 偏移
-		if offsetParam, exists := parameters["offset"]; exists {
-			var offset float64
-			if o, ok := offsetParam.(float64); ok {
-				offset = o
-			} else if o, ok := offsetParam.(int); ok {
-				offset = float64(o)
-			} else {
-				return nil, fmt.Errorf("偏移参数必须是数值")
-			}
-
-			for i := range newValues {
-				newValues[i] += offset
-			}
-		} else {
-			return nil, fmt.Errorf("缺少偏移参数")
-		}
-
-	default:
-		return nil, fmt.Errorf("不支持的向量变换类型: %s", transform)
-	}
-
-	// 返回变换后的向量
-	return &model.VectorData{
-		Values:    newValues,
-		Dimension: len(newValues),
-		Labels:    vectorData.Labels,
-		Unit:      vectorData.Unit,
-	}, nil
-}
-
 // geoGeofenceTransform 地理围栏检查
 func (h *TransformHandler) geoGeofenceTransform(compositeData model.CompositeData, params map[string]interface{}) (interface{}, error) {
 	locationData, ok := compositeData.(*model.LocationData)
@@ -2266,8 +2151,15 @@ func (h *TransformHandler) geoCoordinateConvertTransform(compositeData model.Com
 		// BD09 转 WGS84
 		gcjLat, gcjLng := h.bd09ToGcj02(locationData.Latitude, locationData.Longitude)
 		convertedLat, convertedLng = h.gcj02ToWgs84(gcjLat, gcjLng)
+	case "GCJ02_to_BD09":
+		convertedLat, convertedLng = h.gcj02ToBd09(locationData.Latitude, locationData.Longitude)
+	case "BD09_to_GCJ02":
+		convertedLat, convertedLng = h.bd09ToGcj02(locationData.Latitude, locationData.Longitude)
 	default:
-		// 同一坐标系或不支持的转换
+		if sourceSystem != targetSystem {
+			// 以前不支持的转换（包括写错坐标系名称）静默返回原坐标
+			return nil, fmt.Errorf("不支持的坐标转换: %s -> %s（支持 WGS84/GCJ02/BD09）", sourceSystem, targetSystem)
+		}
 		convertedLat = locationData.Latitude
 		convertedLng = locationData.Longitude
 	}
@@ -2646,16 +2538,30 @@ func (h *TransformHandler) performMovingAverage(timeseriesData *model.TimeSeries
 		return nil, fmt.Errorf("窗口大小无效: %d", window)
 	}
 
+	var res interface{}
+	var err error
 	switch windowType {
 	case "sliding":
-		return h.calculateSlidingAverage(timeseriesData.Values, window)
+		res, err = h.calculateSlidingAverage(timeseriesData.Values, window)
 	case "expanding":
-		return h.calculateExpandingAverage(timeseriesData.Values)
+		res, err = h.calculateExpandingAverage(timeseriesData.Values)
 	case "fixed":
-		return h.calculateFixedWindowAverage(timeseriesData.Values, window)
+		res, err = h.calculateFixedWindowAverage(timeseriesData.Values, window)
 	default:
 		return nil, fmt.Errorf("不支持的窗口类型: %s", windowType)
 	}
+	if err != nil {
+		return nil, err
+	}
+	// 以前结果没有时间戳，TimeSeriesData.Validate 不通过
+	out := res.(*model.TimeSeriesData)
+	out.Unit = timeseriesData.Unit
+	if windowType == "fixed" {
+		out.Timestamps = windowEndTimestamps(timeseriesData.Timestamps, window, len(out.Values))
+	} else {
+		out.Timestamps = tailTimestamps(timeseriesData.Timestamps, len(out.Values))
+	}
+	return out, nil
 }
 
 // performDifferencing 差分运算
@@ -2692,9 +2598,13 @@ func (h *TransformHandler) performDifferencing(timeseriesData *model.TimeSeriesD
 		result = h.calculateSeasonalDifference(result, int(seasonalPeriod))
 	}
 
+	if len(result) == 0 {
+		return nil, fmt.Errorf("差分阶数过大，没有剩余数据点")
+	}
 	return &model.TimeSeriesData{
-		Values: result,
-		Unit:   timeseriesData.Unit,
+		Timestamps: tailTimestamps(timeseriesData.Timestamps, len(result)),
+		Values:     result,
+		Unit:       timeseriesData.Unit,
 	}, nil
 }
 
@@ -2710,21 +2620,8 @@ func (h *TransformHandler) performResampling(timeseriesData *model.TimeSeriesDat
 		resampleMethod = "mean"
 	}
 
-	// 根据重采样频率和方法处理数据
-	switch resampleFrequency {
-	case "minute":
-		return h.resampleToMinute(timeseriesData.Values, resampleMethod)
-	case "hour":
-		return h.resampleToHour(timeseriesData.Values, resampleMethod)
-	case "day":
-		return h.resampleToDay(timeseriesData.Values, resampleMethod)
-	case "week":
-		return h.resampleToWeek(timeseriesData.Values, resampleMethod)
-	case "month":
-		return h.resampleToMonth(timeseriesData.Values, resampleMethod)
-	default:
-		return nil, fmt.Errorf("不支持的重采样频率: %s", resampleFrequency)
-	}
+	// 按真实时间戳分桶。以前不管频率如何都按每 60 个点分组，结果也没有时间戳
+	return resampleByTime(timeseriesData, resampleFrequency, resampleMethod)
 }
 
 // performAnomalyDetection 异常检测
@@ -3030,76 +2927,6 @@ func (h *TransformHandler) calculateSeasonalDifference(values []float64, period 
 		result[i-period] = values[i] - values[i-period]
 	}
 	return result
-}
-
-// 重采样辅助函数
-func (h *TransformHandler) resampleToHour(values []float64, method string) (interface{}, error) {
-	// 简化实现：假设原始数据是分钟级别，重采样到小时级别
-	hourlyValues := make([]float64, 0)
-	windowSize := 60 // 60分钟
-
-	for i := 0; i < len(values); i += windowSize {
-		end := i + windowSize
-		if end > len(values) {
-			end = len(values)
-		}
-
-		var aggregated float64
-		switch method {
-		case "mean":
-			sum := 0.0
-			for j := i; j < end; j++ {
-				sum += values[j]
-			}
-			aggregated = sum / float64(end-i)
-		case "sum":
-			for j := i; j < end; j++ {
-				aggregated += values[j]
-			}
-		case "max":
-			aggregated = values[i]
-			for j := i; j < end; j++ {
-				if values[j] > aggregated {
-					aggregated = values[j]
-				}
-			}
-		case "min":
-			aggregated = values[i]
-			for j := i; j < end; j++ {
-				if values[j] < aggregated {
-					aggregated = values[j]
-				}
-			}
-		case "first":
-			aggregated = values[i]
-		case "last":
-			aggregated = values[end-1]
-		default:
-			return nil, fmt.Errorf("不支持的重采样方法: %s", method)
-		}
-		hourlyValues = append(hourlyValues, aggregated)
-	}
-
-	return &model.TimeSeriesData{
-		Values: hourlyValues,
-	}, nil
-}
-
-// 占位符实现（为了编译通过）
-func (h *TransformHandler) resampleToMinute(values []float64, method string) (interface{}, error) {
-	return h.resampleToHour(values, method) // 简化实现
-}
-
-func (h *TransformHandler) resampleToDay(values []float64, method string) (interface{}, error) {
-	return h.resampleToHour(values, method) // 简化实现
-}
-
-func (h *TransformHandler) resampleToWeek(values []float64, method string) (interface{}, error) {
-	return h.resampleToHour(values, method) // 简化实现
-}
-
-func (h *TransformHandler) resampleToMonth(values []float64, method string) (interface{}, error) {
-	return h.resampleToHour(values, method) // 简化实现
 }
 
 // 异常检测辅助函数
@@ -3442,7 +3269,7 @@ func (h *TransformHandler) arrayFilterTransform(compositeData model.CompositeDat
 		case "percentile":
 			isOutlier = h.detectOutliersPercentile(numericValues, threshold)
 		default:
-			isOutlier = h.detectOutliersZScore(numericValues, threshold)
+			return nil, fmt.Errorf("不支持的离群检测方法: %s", method)
 		}
 
 		// 过滤异常值
@@ -3673,7 +3500,8 @@ func (h *TransformHandler) arraySmoothTransform(compositeData model.CompositeDat
 	case "savgol":
 		smoothedValues = h.savgolSmooth(numericValues, window)
 	default:
-		smoothedValues = h.movingAverage(numericValues, window)
+		// 以前未知方法静默回退为移动平均，配置写错无法发现
+		return nil, fmt.Errorf("不支持的平滑方法: %s", method)
 	}
 
 	// 转换回interface{}类型
@@ -3725,7 +3553,7 @@ func (h *TransformHandler) arrayNormalizeTransform(compositeData model.Composite
 	case "robust":
 		normalizedValues = h.robustNormalize(numericValues)
 	default:
-		normalizedValues = h.minMaxNormalize(numericValues)
+		return nil, fmt.Errorf("不支持的归一化方法: %s", method)
 	}
 
 	// 转换回interface{}类型
@@ -3804,7 +3632,8 @@ func (h *TransformHandler) arrayTransformTransform(compositeData model.Composite
 			transformedValues[i] = math.Abs(val)
 		}
 	default:
-		transformedValues = numericValues
+		// 以前未知变换类型原样返回数据
+		return nil, fmt.Errorf("不支持的数组变换类型: %s", transformType)
 	}
 
 	// 转换回interface{}类型
@@ -4532,4 +4361,113 @@ func (h *TransformHandler) parseTemplateString(templateStr string, point model.P
 	}
 
 	return result
+}
+
+// tailTimestamps 返回与输入序列尾部对齐的 n 个时间戳（滑动平均、差分的第 i 个结果对应输入的第 len-n+i 个点）
+func tailTimestamps(ts []time.Time, n int) []time.Time {
+	if n > len(ts) {
+		return nil
+	}
+	out := make([]time.Time, n)
+	copy(out, ts[len(ts)-n:])
+	return out
+}
+
+// windowEndTimestamps 返回每个固定窗口最后一个点的时间戳
+func windowEndTimestamps(ts []time.Time, window, n int) []time.Time {
+	out := make([]time.Time, 0, n)
+	for i := 0; i < n; i++ {
+		end := (i+1)*window - 1
+		if end >= len(ts) {
+			end = len(ts) - 1
+		}
+		if end < 0 {
+			return nil
+		}
+		out = append(out, ts[end])
+	}
+	return out
+}
+
+// resampleBucket 返回时间点所在桶的起始时间
+func resampleBucket(t time.Time, frequency string) (time.Time, error) {
+	switch frequency {
+	case "minute":
+		return t.Truncate(time.Minute), nil
+	case "hour":
+		return t.Truncate(time.Hour), nil
+	case "day":
+		y, m, d := t.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, t.Location()), nil
+	case "week": // 以周一为一周开始
+		y, m, d := t.Date()
+		day := time.Date(y, m, d, 0, 0, 0, 0, t.Location())
+		offset := (int(day.Weekday()) + 6) % 7
+		return day.AddDate(0, 0, -offset), nil
+	case "month":
+		y, m, _ := t.Date()
+		return time.Date(y, m, 1, 0, 0, 0, 0, t.Location()), nil
+	default:
+		return time.Time{}, fmt.Errorf("不支持的重采样频率: %s", frequency)
+	}
+}
+
+// resampleByTime 按时间桶聚合时间序列（输入需按时间排序）
+func resampleByTime(data *model.TimeSeriesData, frequency, method string) (*model.TimeSeriesData, error) {
+	if len(data.Timestamps) != len(data.Values) || len(data.Values) == 0 {
+		return nil, fmt.Errorf("重采样需要与数值一一对应的时间戳")
+	}
+	switch method {
+	case "mean", "sum", "max", "min", "first", "last":
+	default:
+		return nil, fmt.Errorf("不支持的重采样方法: %s", method)
+	}
+	out := &model.TimeSeriesData{Unit: data.Unit}
+	var bucket []float64
+	var bucketStart time.Time
+	flush := func() {
+		if len(bucket) == 0 {
+			return
+		}
+		var v float64
+		switch method {
+		case "mean", "sum":
+			for _, x := range bucket {
+				v += x
+			}
+			if method == "mean" {
+				v /= float64(len(bucket))
+			}
+		case "max":
+			v = bucket[0]
+			for _, x := range bucket {
+				v = math.Max(v, x)
+			}
+		case "min":
+			v = bucket[0]
+			for _, x := range bucket {
+				v = math.Min(v, x)
+			}
+		case "first":
+			v = bucket[0]
+		case "last":
+			v = bucket[len(bucket)-1]
+		}
+		out.Timestamps = append(out.Timestamps, bucketStart)
+		out.Values = append(out.Values, v)
+		bucket = bucket[:0]
+	}
+	for i, t := range data.Timestamps {
+		b, err := resampleBucket(t, frequency)
+		if err != nil {
+			return nil, err
+		}
+		if len(bucket) > 0 && !b.Equal(bucketStart) {
+			flush()
+		}
+		bucketStart = b
+		bucket = append(bucket, data.Values[i])
+	}
+	flush()
+	return out, nil
 }

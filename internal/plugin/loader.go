@@ -15,7 +15,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/y001j/iot-gateway/internal/northbound"
 	"github.com/y001j/iot-gateway/internal/southbound"
-	"github.com/y001j/iot-gateway/internal/southbound/mock"
 )
 
 // PluginType 表示插件类型
@@ -395,50 +394,31 @@ func (l *Loader) loadBuiltinPlugin(meta Meta) error {
 	builtinName := parts[1]
 	log.Info().Str("name", meta.Name).Str("builtin", builtinName).Str("type", meta.Type).Msg("加载内置插件")
 
-	// 根据插件类型和名称加载对应的内置插件
+	// 根据插件类型从注册表创建内置插件。以前适配器只支持写死的 mock，连接器也是写死的列表
 	switch PluginType(meta.Type) {
 	case TypeAdapter:
-		// 加载内置适配器
-		switch builtinName {
-		case "mock":
-			// 使用 mock 包中的工厂函数
-			log.Debug().Str("name", meta.Name).Msg("创建 mock 适配器实例")
-			adapter := mock.NewAdapter()
-			if adapter == nil {
-				log.Error().Str("name", meta.Name).Msg("mock 适配器创建失败")
-				return fmt.Errorf("mock 适配器创建失败")
-			}
-
-			// 检查适配器是否已存在
-			if _, exists := l.adapters[meta.Name]; exists {
-				log.Warn().Str("name", meta.Name).Msg("适配器已存在，将被覆盖")
-			}
-
-			// 注册适配器，同时使用内置名称和配置名称作为键
-			l.adapters[builtinName] = adapter
-			l.adapters[meta.Name] = adapter
-			log.Info().Str("name", meta.Name).Str("type", "mock").Msg("内置适配器注册成功")
-			return nil
-		default:
+		adapter, ok := southbound.Create(builtinName)
+		if !ok {
 			return fmt.Errorf("未知的内置适配器: %s", builtinName)
 		}
+		if _, exists := l.adapters[meta.Name]; exists {
+			log.Warn().Str("name", meta.Name).Msg("适配器已存在，将被覆盖")
+		}
+		// 同时使用内置名称和配置名称作为键
+		l.adapters[builtinName] = adapter
+		l.adapters[meta.Name] = adapter
+		log.Info().Str("name", meta.Name).Str("type", builtinName).Msg("内置适配器注册成功")
+		return nil
 
 	case TypeSink:
-		// 加载内置连接器
-		switch builtinName {
-		case "mqtt", "console", "influxdb", "redis", "websocket", "jetstream":
-			// 使用新的注册系统创建连接器
-			sink := northbound.CreateSink(builtinName)
-			if sink == nil {
-				return fmt.Errorf("创建内置连接器失败: %s", builtinName)
-			}
-			l.sinks[builtinName] = sink
-			l.sinks[meta.Name] = sink
-			log.Info().Str("name", meta.Name).Str("type", builtinName).Msg("内置连接器注册成功")
-			return nil
-		default:
+		sink := northbound.CreateSink(builtinName)
+		if sink == nil {
 			return fmt.Errorf("未知的内置连接器: %s", builtinName)
 		}
+		l.sinks[builtinName] = sink
+		l.sinks[meta.Name] = sink
+		log.Info().Str("name", meta.Name).Str("type", builtinName).Msg("内置连接器注册成功")
+		return nil
 	}
 
 	return fmt.Errorf("未知的插件类型: %s", meta.Type)
@@ -457,12 +437,12 @@ func (l *Loader) GetAdapter(name string) (southbound.Adapter, bool) {
 	for k := range l.adapters {
 		adapterNames = append(adapterNames, k)
 	}
-	log.Info().Str("requested_name", name).Strs("available_adapters", adapterNames).Msg("查找适配器")
+	log.Debug().Str("requested_name", name).Strs("available_adapters", adapterNames).Msg("查找适配器")
 
-	// 直接查找适配器
+	// 直接查找适配器（作为管理器查找的后备路径，找不到是正常情况，不记为错误）
 	adapter, exists := l.adapters[name]
 	if !exists {
-		log.Error().Str("requested_name", name).Strs("available_adapters", adapterNames).Msg("适配器未找到")
+		log.Debug().Str("requested_name", name).Strs("available_adapters", adapterNames).Msg("适配器未找到")
 	}
 	return adapter, exists
 }

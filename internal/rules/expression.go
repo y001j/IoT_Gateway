@@ -892,11 +892,6 @@ func (e *ExpressionEngine) evaluateCustomExpression(expression string) (interfac
 		return e.evaluateTimeRangeExpression(expression)
 	}
 
-	// 处理数组包含检查
-	if strings.Contains(expression, "in_array") {
-		return e.evaluateInArrayExpression(expression)
-	}
-
 	return nil, fmt.Errorf("无法解析自定义表达式: %s", expression)
 }
 
@@ -975,12 +970,6 @@ func (e *ExpressionEngine) evaluateTimeRangeExpression(expression string) (inter
 		// 跨越午夜的情况（如 22:00 - 6:00）
 		return currentHour >= startHour || currentHour < endHour, nil
 	}
-}
-
-// evaluateInArrayExpression 评估数组包含表达式
-func (e *ExpressionEngine) evaluateInArrayExpression(expression string) (interface{}, error) {
-	// 简化实现：in_array(value, [item1, item2, ...])
-	return false, fmt.Errorf("in_array函数暂未实现")
 }
 
 // 数学运算函数
@@ -1082,15 +1071,6 @@ func (e *ExpressionEngine) greaterEqual(left, right interface{}) (bool, error) {
 		return false, nil
 	}
 	return result >= 0, nil
-}
-
-// 逻辑函数
-func (e *ExpressionEngine) logicalAnd(left, right interface{}) bool {
-	return toBool(left) && toBool(right)
-}
-
-func (e *ExpressionEngine) logicalOr(left, right interface{}) bool {
-	return toBool(left) || toBool(right)
 }
 
 // RegisterFunction 注册自定义函数
@@ -1212,7 +1192,6 @@ func (e *ExpressionEngine) registerBuiltinFunctions() {
 	e.RegisterFunction(&VectorMagnitudeFunction{})
 	e.RegisterFunction(&VectorDotProductFunction{})
 	e.RegisterFunction(&VectorCrossProductFunction{})
-	e.RegisterFunction(&VectorNormalizeFunction{})
 	e.RegisterFunction(&VectorAngleFunction{})
 	e.RegisterFunction(&VectorDistanceFunction{})
 
@@ -1517,51 +1496,6 @@ func (f *StringEndsWithFunction) Call(args ...interface{}) (interface{}, error) 
 	str := fmt.Sprintf("%v", args[0])
 	suffix := fmt.Sprintf("%v", args[1])
 	return strings.HasSuffix(str, suffix), nil
-}
-
-// 数据检查函数
-type ExistsFunction struct {
-	engine *ExpressionEngine // 引用表达式引擎以访问变量
-}
-
-func (f *ExistsFunction) Name() string        { return "exists" }
-func (f *ExistsFunction) Description() string { return "检查指定字段是否存在" }
-func (f *ExistsFunction) Call(args ...interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("exists函数需要1个参数")
-	}
-
-	// 特殊处理：如果参数是一个map（如tags），检查是否非空
-	if tagMap, ok := args[0].(map[string]string); ok {
-		return len(tagMap) > 0, nil
-	}
-
-	fieldName := fmt.Sprintf("%v", args[0])
-
-	// 检查当前数据点中是否存在该字段
-	if f.engine != nil {
-		f.engine.mu.RLock()
-		_, exists := f.engine.variables[fieldName]
-		f.engine.mu.RUnlock()
-		if exists {
-			return true, nil
-		}
-
-		// 检查是否是当前数据点的key
-		if currentKey, ok := f.engine.variables["key"]; ok && currentKey == fieldName {
-			return true, nil
-		}
-	}
-
-	// 简单实现：检查常见字段名
-	commonFields := []string{"temperature", "humidity", "pressure", "voltage", "current", "power", "rotation_speed", "vibration"}
-	for _, field := range commonFields {
-		if field == fieldName {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }
 
 // 时间函数
@@ -2026,11 +1960,47 @@ func (f *VectorCrossProductFunction) Call(args ...interface{}) (interface{}, err
 	return nil, fmt.Errorf("vectorCross函数需要2个Vector3D参数或6个数值参数")
 }
 
-// VectorNormalizeFunction 向量归一化
+// 数据检查函数
+type ExistsFunction struct {
+	engine *ExpressionEngine // 引用表达式引擎以访问变量
+}
+
+func (f *ExistsFunction) Name() string        { return "exists" }
+func (f *ExistsFunction) Description() string { return "检查指定字段是否存在" }
+func (f *ExistsFunction) Call(args ...interface{}) (interface{}, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("exists函数需要1个参数")
+	}
+
+	// 特殊处理：如果参数是一个map（如tags），检查是否非空
+	if tagMap, ok := args[0].(map[string]string); ok {
+		return len(tagMap) > 0, nil
+	}
+
+	fieldName := fmt.Sprintf("%v", args[0])
+
+	// 检查当前数据点中是否存在该字段
+	if f.engine != nil {
+		f.engine.mu.RLock()
+		_, exists := f.engine.variables[fieldName]
+		f.engine.mu.RUnlock()
+		if exists {
+			return true, nil
+		}
+
+		// 检查是否是当前数据点的key
+		if currentKey, ok := f.engine.variables["key"]; ok && currentKey == fieldName {
+			return true, nil
+		}
+	}
+
+	// 以前这里对 temperature/humidity 等"常见字段名"一律返回 true，与数据是否存在无关
+	return false, nil
+}
+
+// VectorNormalizeFunction 3D 向量归一化（由 GenericVectorNormalizeFunction 注册为 vectorNormalize 并委托调用）
 type VectorNormalizeFunction struct{}
 
-func (f *VectorNormalizeFunction) Name() string        { return "vectorNormalize" }
-func (f *VectorNormalizeFunction) Description() string { return "将3D向量归一化为单位向量" }
 func (f *VectorNormalizeFunction) Call(args ...interface{}) (interface{}, error) {
 	if len(args) == 1 {
 		// 单参数：Vector3D对象

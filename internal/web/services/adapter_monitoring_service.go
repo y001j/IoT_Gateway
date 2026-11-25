@@ -127,18 +127,29 @@ func (s *AdapterMonitoringService) startMonitoring() {
 
 // collectMetrics 收集指标
 func (s *AdapterMonitoringService) collectMetrics() {
-	plugins := s.pluginManager.GetPlugins()
+	// 按运行中的实例统计。以前遍历 GetPlugins()（插件类型，如 mock），再用类型名查找
+	// 按实例名（如 mock1）保存的适配器，实例名与类型不同时拿不到任何详细指标
+	adapters, sinks := s.pluginManager.RunningInstances()
 
 	s.metricsLock.Lock()
 	defer s.metricsLock.Unlock()
 
 	now := time.Now()
-
-	for _, pluginMeta := range plugins {
-		if pluginMeta.Type == "adapter" {
-			s.updateAdapterMetrics(pluginMeta, now)
-		} else if pluginMeta.Type == "sink" {
-			s.updateSinkMetrics(pluginMeta, now)
+	for name, typ := range adapters {
+		s.updateAdapterMetrics(&plugin.Meta{Name: name, Type: typ, Status: "running"}, now)
+	}
+	for name, typ := range sinks {
+		s.updateSinkMetrics(&plugin.Meta{Name: name, Type: typ, Status: "running"}, now)
+	}
+	// 之前记录过、现在已停止的实例
+	for name, m := range s.adapterMetrics {
+		if _, ok := adapters[name]; !ok {
+			s.updateAdapterMetrics(&plugin.Meta{Name: name, Type: m.Type, Status: "stopped"}, now)
+		}
+	}
+	for name, m := range s.sinkMetrics {
+		if _, ok := sinks[name]; !ok {
+			s.updateSinkMetrics(&plugin.Meta{Name: name, Type: m.Type, Status: "stopped"}, now)
 		}
 	}
 }
@@ -203,7 +214,11 @@ func (s *AdapterMonitoringService) updateAdapterDetailedMetrics(adapterInterface
 		}
 
 		// 获取运行指标
-		if adapterMetrics, err := extAdapter.GetMetrics(); err == nil {
+		raw, err := extAdapter.GetMetrics()
+		if p, ok := raw.(*southbound.AdapterMetrics); ok && p != nil {
+			raw = *p
+		}
+		if adapterMetrics, ok := raw.(southbound.AdapterMetrics); err == nil && ok {
 			metrics.DataPointsCount = adapterMetrics.DataPointsCollected
 			metrics.ErrorsCount = adapterMetrics.ErrorsCount
 			metrics.LastError = adapterMetrics.LastError

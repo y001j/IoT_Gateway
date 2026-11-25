@@ -9,7 +9,10 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/viper"
 	"github.com/y001j/iot-gateway/internal/metrics"
+	"github.com/y001j/iot-gateway/internal/rules"
 	"github.com/y001j/iot-gateway/internal/testutil"
+	"os"
+	"path/filepath"
 )
 
 func newTestRuntime(t *testing.T) *Runtime {
@@ -125,4 +128,26 @@ func TestNATSOptions(t *testing.T) {
 	if o.MaxReconnect != -1 || o.AsyncErrorCB == nil || o.Name != "iot-gateway" {
 		t.Fatalf("NATS 连接参数错误: max_reconnect=%d", o.MaxReconnect)
 	}
+}
+
+func TestUpdateRuleEngineMetrics(t *testing.T) {
+	dir := t.TempDir()
+	rule := `{"id":"r1","name":"r1","enabled":true,"conditions":{"field":"key","value":"temp"},"actions":[{"type":"alert","config":{"message":"m"}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "r1.json"), []byte(rule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := map[string]interface{}{"enabled": true, "rules_dir": dir, "hot_reload": map[string]interface{}{"enabled": false}}
+	rs := rules.NewRuleEngineServiceWithConfig(cfg)
+	if err := rs.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.GetRuleManager().LoadRules(); err != nil {
+		t.Fatal(err)
+	}
+	r := &Runtime{metrics: metrics.NewLightweightMetrics(), Svcs: []Service{rs}}
+	r.updateRuleEngineMetrics()
+	if got := r.metrics.RuleMetrics; got.TotalRules != 1 || got.EnabledRules != 1 {
+		t.Fatalf("规则指标未同步: %+v", got)
+	}
+	(&Runtime{}).updateRuleEngineMetrics() // 没有指标收集器时直接返回
 }

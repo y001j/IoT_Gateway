@@ -307,25 +307,3 @@ func (c *ISPClient) handleMessage(msg *ISPMessage) {
 		log.Warn().Str("type", msg.Type).Msg("未知消息类型")
 	}
 }
-
-// GetDataChannel 获取数据通道
-func (c *ISPClient) GetDataChannel() <-chan *ISPMessage {
-	dataCh := make(chan *ISPMessage, 100)
-
-	// 启动数据消息过滤协程
-	go func() {
-		defer close(dataCh)
-
-		for {
-			select {
-			case <-c.ctx.Done():
-				return
-			default:
-				time.Sleep(100 * time.Millisecond)
-				// 实际的数据消息处理会在receiveLoop中进行
-			}
-		}
-	}()
-
-	return dataCh
-}

@@ -182,7 +182,7 @@ func (s *ruleService) CreateRule(req *models.RuleCreateRequest) (*models.Rule, e
 	}
 
 	newRule := &rules.Rule{
-		ID:          fmt.Sprintf("rule-%d", time.Now().UnixNano()), // Generate a unique ID
+		ID:          newID("rule"),
 		Name:        req.Name,
 		Description: req.Description,
 		Enabled:     req.Enabled,

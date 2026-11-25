@@ -568,7 +568,7 @@ func (s *alertService) GetAlertRules() ([]models.AlertRule, error) {
 // CreateAlertRule 创建告警规则
 func (s *alertService) CreateAlertRule(req *models.AlertRuleCreateRequest) (*models.AlertRule, error) {
 	rule := &models.AlertRule{
-		ID:                   fmt.Sprintf("rule-%d", time.Now().UnixNano()),
+		ID:                   newID("rule"),
 		Name:                 req.Name,
 		Description:          req.Description,
 		Enabled:              req.Enabled,
@@ -688,7 +688,7 @@ func (s *alertService) GetNotificationChannels() ([]models.NotificationChannel, 
 // CreateNotificationChannel 创建通知渠道
 func (s *alertService) CreateNotificationChannel(req *models.NotificationChannelCreateRequest) (*models.NotificationChannel, error) {
 	channel := &models.NotificationChannel{
-		ID:        fmt.Sprintf("channel-%d", time.Now().UnixNano()),
+		ID:        newID("channel"),
 		Name:      req.Name,
 		Type:      req.Type,
 		Enabled:   req.Enabled,

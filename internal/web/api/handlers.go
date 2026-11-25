@@ -104,16 +104,6 @@ func (h *BaseHandler) GetUserID(c *gin.Context) string {
 	return ""
 }
 
-// GetUserRoles 从上下文获取用户角色
-func (h *BaseHandler) GetUserRoles(c *gin.Context) []string {
-	if roles, exists := c.Get("roles"); exists {
-		if roleList, ok := roles.([]string); ok {
-			return roleList
-		}
-	}
-	return []string{}
-}
-
 // HasRole 检查用户是否有指定角色
 func (h *BaseHandler) HasRole(c *gin.Context, role string) bool {
 	// 从上下文获取用户角色
@@ -132,18 +122,6 @@ func (h *BaseHandler) HasRole(c *gin.Context, role string) bool {
 	return false
 }
 
-// RequireRole 要求指定角色的中间件
-func (h *BaseHandler) RequireRole(role string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !h.HasRole(c, role) {
-			h.ErrorResponse(c, http.StatusForbidden, "Insufficient permissions")
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-
 // BindJSON 绑定 JSON 数据
 func (h *BaseHandler) BindJSON(c *gin.Context, obj interface{}) bool {
 	if err := c.ShouldBindJSON(obj); err != nil {
@@ -151,20 +129,6 @@ func (h *BaseHandler) BindJSON(c *gin.Context, obj interface{}) bool {
 		return false
 	}
 	return true
-}
-
-// BindQuery 绑定查询参数
-func (h *BaseHandler) BindQuery(c *gin.Context, obj interface{}) bool {
-	if err := c.ShouldBindQuery(obj); err != nil {
-		h.ValidationErrorResponse(c, err)
-		return false
-	}
-	return true
-}
-
-// GetPathParam 获取路径参数
-func (h *BaseHandler) GetPathParam(c *gin.Context, key string) string {
-	return c.Param(key)
 }
 
 // GetQueryParam 获取查询参数
@@ -182,20 +146,4 @@ type Handler struct {
 	*SystemHandler
 	*PluginHandler
 	*RuleHandler
-}
-
-// NewHandler returns a new API handler
-func NewHandler(s *services.Services) *Handler {
-	// 创建各个模块的处理器
-	authHandler := NewAuthHandler(s.Auth)
-	systemHandler := NewSystemHandlerWithServices(s)
-	pluginHandler := NewPluginHandler(s.Plugin)
-	ruleHandler := NewRuleHandler(s.Rule)
-
-	return &Handler{
-		AuthHandler:   authHandler,
-		SystemHandler: systemHandler,
-		PluginHandler: pluginHandler,
-		RuleHandler:   ruleHandler,
-	}
 }

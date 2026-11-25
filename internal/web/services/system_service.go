@@ -22,6 +22,7 @@ type SystemService interface {
 	GetHealth() (*models.HealthCheck, error)
 	GetConfig() (*models.SystemConfig, error)
 	UpdateConfig(config *models.SystemConfig) error
+	ValidateConfig(config *models.SystemConfig) error
 	RestartService(serviceName string) error
 }
 
@@ -241,6 +242,14 @@ func (s *systemService) GetConfig() (*models.SystemConfig, error) {
 }
 
 // UpdateConfig 更新系统配置。提交的 JWT 密钥为遮盖占位值或为空时保留原值。
+// ValidateConfig 校验配置但不保存
+func (s *systemService) ValidateConfig(config *models.SystemConfig) error {
+	if s.configService == nil {
+		return fmt.Errorf("配置服务不可用")
+	}
+	return s.configService.ValidateConfig(config)
+}
+
 func (s *systemService) UpdateConfig(config *models.SystemConfig) error {
 	if s.configService == nil {
 		return fmt.Errorf("配置服务不可用")

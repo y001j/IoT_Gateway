@@ -135,6 +135,6 @@ export interface SystemConfig {
 
 export interface ConfigValidationResponse {
   valid: boolean;
-  errors?: string[];
-  warnings?: string[];
+  // 与后端 models.ErrorDetail 一致
+  errors?: { field: string; message: string }[];
 }
