@@ -125,6 +125,8 @@ func TestBufferedSinkSurvivesOutageInOrder(t *testing.T) {
 	publishPoints(t, nc, 0, 50)
 	testutil.WaitFor(t, 10*time.Second, func() bool { return len(sink.values()) == 50 }, "目标恢复后应补发全部数据")
 	assertSequence(t, sink.values(), 50)
+	// 目标写入成功后运行器还要 AckSync 才更新 Delivered，等统计追上再断言
+	testutil.WaitFor(t, 3*time.Second, func() bool { return r.Stats().Delivered == 50 }, "Delivered 应为 50")
 	st := r.Stats()
 	if st.Delivered != 50 || st.Failed < 5 || st.Lost != 0 {
 		t.Fatalf("统计错误: %+v", st)
@@ -236,9 +238,7 @@ func TestBufferedSinkSkipsRuleOutputsAndGarbage(t *testing.T) {
 	if got := sink.values(); len(got) != 1 || got[0] != 0 {
 		t.Fatalf("规则输出不应写入缓冲 Sink: %v", got)
 	}
-	if r.Stats().Discarded != 1 {
-		t.Fatalf("无法解析的消息应计入丢弃: %+v", r.Stats())
-	}
+	testutil.WaitFor(t, 3*time.Second, func() bool { return r.Stats().Discarded == 1 }, "无法解析的消息应计入丢弃")
 }
 
 func TestConfigAndHelpers(t *testing.T) {

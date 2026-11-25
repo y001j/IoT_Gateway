@@ -10,7 +10,7 @@ on:
 
 env:
   GO_VERSION: '1.24'
-  NODE_VERSION: '18'
+  NODE_VERSION: '22' # vite 7 需要 Node 20.19+
 
 jobs:
   # Go后端测试
@@ -208,12 +208,14 @@ jobs:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Run gosec Security Scanner
-      # securecodewarrior/github-action-gosec 仓库已不存在，改用 gosec 官方 action
-      uses: securego/gosec@v2.22.4
-      with:
-        args: '-fmt sarif -out gosec.sarif ./...'
+      # 官方 action 的 Docker 镜像内置的 Go 版本低于 go.mod 要求，加载包失败且不输出原因；
+      # 改为用 setup-go 的 Go 安装同一版本 gosec。发现问题时同样失败，并在日志中列出问题。
+      run: |
+        go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+        gosec -fmt sarif -out gosec.sarif -stdout -verbose text ./...
 
     - name: Upload SARIF file
+      if: always() && hashFiles('gosec.sarif') != ''
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: gosec.sarif
