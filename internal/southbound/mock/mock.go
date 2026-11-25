@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/rand"
 	"strconv"
 	"time"
 
@@ -229,7 +228,7 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 			Max:      dp.MaxValue,
 			Type:     "float", // 默认为浮点类型
 			Variance: 0.1,     // 默认波动
-			lastVal:  dp.MinValue + rand.Float64()*(dp.MaxValue-dp.MinValue),
+			lastVal:  dp.MinValue + simFloat64()*(dp.MaxValue-dp.MinValue),
 		}
 
 		// 处理复合数据类型配置
@@ -244,8 +243,8 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 					point.locationState = &locationState{
 						currentLat: dp.LocationConfig.StartLatitude,
 						currentLng: dp.LocationConfig.StartLongitude,
-						direction:  rand.Float64() * 2 * math.Pi, // 随机初始方向
-						speed:      dp.LocationConfig.SpeedMin + rand.Float64()*(dp.LocationConfig.SpeedMax-dp.LocationConfig.SpeedMin),
+						direction:  simFloat64() * 2 * math.Pi, // 随机初始方向
+						speed:      dp.LocationConfig.SpeedMin + simFloat64()*(dp.LocationConfig.SpeedMax-dp.LocationConfig.SpeedMin),
 						lastUpdate: time.Now(),
 					}
 				}
@@ -253,9 +252,9 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 				if dp.Vector3DConfig != nil {
 					point.Vector3DConfig = dp.Vector3DConfig
 					point.vector3dState = &vector3dState{
-						lastX: dp.Vector3DConfig.XMin + rand.Float64()*(dp.Vector3DConfig.XMax-dp.Vector3DConfig.XMin),
-						lastY: dp.Vector3DConfig.YMin + rand.Float64()*(dp.Vector3DConfig.YMax-dp.Vector3DConfig.YMin),
-						lastZ: dp.Vector3DConfig.ZMin + rand.Float64()*(dp.Vector3DConfig.ZMax-dp.Vector3DConfig.ZMin),
+						lastX: dp.Vector3DConfig.XMin + simFloat64()*(dp.Vector3DConfig.XMax-dp.Vector3DConfig.XMin),
+						lastY: dp.Vector3DConfig.YMin + simFloat64()*(dp.Vector3DConfig.YMax-dp.Vector3DConfig.YMin),
+						lastZ: dp.Vector3DConfig.ZMin + simFloat64()*(dp.Vector3DConfig.ZMax-dp.Vector3DConfig.ZMin),
 						time:  0,
 					}
 				}
@@ -263,7 +262,7 @@ func (a *MockAdapter) initFromNewConfig(config *config.MockConfig) error {
 				if dp.ColorConfig != nil {
 					point.ColorConfig = dp.ColorConfig
 					point.colorState = &colorState{
-						currentHue: rand.Float64() * 360,
+						currentHue: simFloat64() * 360,
 						colorIndex: 0,
 					}
 				}
@@ -370,7 +369,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						pointValue = p.Constant
 					} else if len(p.Values) > 0 {
 						// 从预定义值列表中随机选择
-						idx := rand.Intn(len(p.Values))
+						idx := simIntn(len(p.Values))
 						pointValue = p.Values[idx]
 					} else {
 						// 生成随机波动
@@ -380,7 +379,7 @@ func (a *MockAdapter) Start(ctx context.Context, ch chan<- model.Point) error {
 						}
 
 						// 在上次值的基础上添加随机波动
-						delta := (rand.Float64()*2 - 1) * variance * (p.Max - p.Min)
+						delta := (simFloat64()*2 - 1) * variance * (p.Max - p.Min)
 						newVal := p.lastVal + delta
 
 						// 确保值在范围内
@@ -633,7 +632,7 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 		switch config.MovementPattern {
 		case "random_walk":
 			// 随机游走
-			state.direction += (rand.Float64() - 0.5) * 0.2 // 方向略微变化
+			state.direction += (simFloat64() - 0.5) * 0.2 // 方向略微变化
 			speedKmh := state.speed
 			speedMs := speedKmh / 3.6 // 转换为米/秒
 
@@ -653,12 +652,12 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 			// 确保在指定范围内
 			if config.LatitudeRange > 0 {
 				if math.Abs(state.currentLat-config.StartLatitude) > config.LatitudeRange {
-					state.currentLat = config.StartLatitude + (config.LatitudeRange * (rand.Float64()*2 - 1))
+					state.currentLat = config.StartLatitude + (config.LatitudeRange * (simFloat64()*2 - 1))
 				}
 			}
 			if config.LongitudeRange > 0 {
 				if math.Abs(state.currentLng-config.StartLongitude) > config.LongitudeRange {
-					state.currentLng = config.StartLongitude + (config.LongitudeRange * (rand.Float64()*2 - 1))
+					state.currentLng = config.StartLongitude + (config.LongitudeRange * (simFloat64()*2 - 1))
 				}
 			}
 
@@ -683,8 +682,8 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 		state.lastUpdate = now
 
 		// 随机调整速度
-		if rand.Float64() < 0.1 { // 10%概率调整速度
-			state.speed = config.SpeedMin + rand.Float64()*(config.SpeedMax-config.SpeedMin)
+		if simFloat64() < 0.1 { // 10%概率调整速度
+			state.speed = config.SpeedMin + simFloat64()*(config.SpeedMax-config.SpeedMin)
 		}
 	}
 
@@ -696,7 +695,7 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 
 	// 添加可选字段
 	if config.AltitudeMin < config.AltitudeMax {
-		locationData.Altitude = config.AltitudeMin + rand.Float64()*(config.AltitudeMax-config.AltitudeMin)
+		locationData.Altitude = config.AltitudeMin + simFloat64()*(config.AltitudeMax-config.AltitudeMin)
 	}
 
 	if state.speed > 0 {
@@ -704,7 +703,7 @@ func (a *MockAdapter) generateLocationData(p *mockPoint) (*model.LocationData, m
 	}
 
 	// 添加GPS精度 (3-10米)
-	locationData.Accuracy = 3.0 + rand.Float64()*7.0
+	locationData.Accuracy = 3.0 + simFloat64()*7.0
 
 	// 添加方向角
 	locationData.Heading = state.direction * (180.0 / math.Pi)
@@ -741,16 +740,16 @@ func (a *MockAdapter) generateVector3DData(p *mockPoint) (*model.Vector3D, model
 		// 考虑轴间相关性
 		if config.Correlation > 0 {
 			// 生成相关的随机变化
-			baseChange := (rand.Float64() - 0.5) * variance
+			baseChange := (simFloat64() - 0.5) * variance
 
 			x = state.lastX + baseChange*(config.XMax-config.XMin)
-			y = state.lastY + (baseChange*config.Correlation+(rand.Float64()-0.5)*variance*(1-config.Correlation))*(config.YMax-config.YMin)
-			z = state.lastZ + (baseChange*config.Correlation+(rand.Float64()-0.5)*variance*(1-config.Correlation))*(config.ZMax-config.ZMin)
+			y = state.lastY + (baseChange*config.Correlation+(simFloat64()-0.5)*variance*(1-config.Correlation))*(config.YMax-config.YMin)
+			z = state.lastZ + (baseChange*config.Correlation+(simFloat64()-0.5)*variance*(1-config.Correlation))*(config.ZMax-config.ZMin)
 		} else {
 			// 独立的随机变化
-			x = state.lastX + (rand.Float64()-0.5)*variance*(config.XMax-config.XMin)
-			y = state.lastY + (rand.Float64()-0.5)*variance*(config.YMax-config.YMin)
-			z = state.lastZ + (rand.Float64()-0.5)*variance*(config.ZMax-config.ZMin)
+			x = state.lastX + (simFloat64()-0.5)*variance*(config.XMax-config.XMin)
+			y = state.lastY + (simFloat64()-0.5)*variance*(config.YMax-config.YMin)
+			z = state.lastZ + (simFloat64()-0.5)*variance*(config.ZMax-config.ZMin)
 		}
 
 		// 确保在范围内
@@ -801,9 +800,9 @@ func (a *MockAdapter) generateColorData(p *mockPoint) (*model.ColorData, model.D
 	switch config.ColorMode {
 	case "random":
 		// 完全随机颜色
-		r = uint8(rand.Intn(256))
-		g = uint8(rand.Intn(256))
-		b = uint8(rand.Intn(256))
+		r = simByte()
+		g = simByte()
+		b = simByte()
 
 	case "rainbow":
 		// 彩虹色相循环
@@ -854,16 +853,16 @@ func (a *MockAdapter) generateColorData(p *mockPoint) (*model.ColorData, model.D
 			}
 
 			// 循环颜色索引
-			if rand.Float64() < 0.1 { // 10%概率切换颜色
+			if simFloat64() < 0.1 { // 10%概率切换颜色
 				state.colorIndex = (state.colorIndex + 1) % len(config.FixedColors)
 			}
 		}
 
 	default:
 		// 默认随机模式
-		r = uint8(rand.Intn(256))
-		g = uint8(rand.Intn(256))
-		b = uint8(rand.Intn(256))
+		r = simByte()
+		g = simByte()
+		b = simByte()
 	}
 
 	return &model.ColorData{
@@ -900,13 +899,13 @@ func (a *MockAdapter) initVectorState(config *config.MockVectorConfig) *vectorSt
 		switch config.Distribution {
 		case "normal":
 			// 正态分布（简化版本）
-			values[i] = (minVal+maxVal)/2.0 + (rand.Float64()-0.5)*(maxVal-minVal)*0.3
+			values[i] = (minVal+maxVal)/2.0 + (simFloat64()-0.5)*(maxVal-minVal)*0.3
 		case "exponential":
 			// 指数分布（简化版本）
-			values[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-rand.Float64()))
+			values[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-simFloat64()))
 		default:
 			// 均匀分布
-			values[i] = minVal + rand.Float64()*(maxVal-minVal)
+			values[i] = minVal + simFloat64()*(maxVal-minVal)
 		}
 	}
 
@@ -1005,12 +1004,12 @@ func (a *MockAdapter) initTimeSeriesState(config *config.MockTimeSeriesConfig) *
 
 		// 添加噪声
 		if config.Noise > 0 {
-			value += (rand.Float64() - 0.5) * 2 * config.Noise
+			value += (simFloat64() - 0.5) * 2 * config.Noise
 		}
 
 		// 添加异常值（如果配置了）
-		if config.Anomalies != nil && rand.Float64() < config.Anomalies.Probability {
-			value += (rand.Float64() - 0.5) * config.Anomalies.Magnitude * value
+		if config.Anomalies != nil && simFloat64() < config.Anomalies.Probability {
+			value += (simFloat64() - 0.5) * config.Anomalies.Magnitude * value
 		}
 
 		values = append(values, value)
@@ -1057,7 +1056,7 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			}
 
 			// 随机变化，有相关性
-			change := (rand.Float64() - 0.5) * 0.1 * (maxVal - minVal)
+			change := (simFloat64() - 0.5) * 0.1 * (maxVal - minVal)
 			if config.Correlation > 0 && i > 0 {
 				// 与前一个维度有相关性
 				prevChange := newValues[i-1] - state.lastValues[i-1]
@@ -1103,13 +1102,13 @@ func (a *MockAdapter) generateVectorData(p *mockPoint) (*model.VectorData, model
 			case "normal":
 				// 正态分布
 				center := (minVal + maxVal) / 2.0
-				newValues[i] = center + (rand.Float64()-0.5)*(maxVal-minVal)*0.3
+				newValues[i] = center + (simFloat64()-0.5)*(maxVal-minVal)*0.3
 			case "exponential":
 				// 指数分布
-				newValues[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-rand.Float64()))
+				newValues[i] = minVal + (maxVal-minVal)*(-math.Log(1.0-simFloat64()))
 			default:
 				// 均匀分布
-				newValues[i] = minVal + rand.Float64()*(maxVal-minVal)
+				newValues[i] = minVal + simFloat64()*(maxVal-minVal)
 			}
 		}
 	}
@@ -1156,7 +1155,7 @@ func (a *MockAdapter) generateArrayData(p *mockPoint) (*model.ArrayData, model.D
 
 	// 随机打乱
 	for i := len(indices) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
+		j := simIntn(i + 1)
 		indices[i], indices[j] = indices[j], indices[i]
 	}
 
@@ -1208,9 +1207,9 @@ func (a *MockAdapter) generateMatrixData(p *mockPoint) (*model.MatrixData, model
 		// 微调部分元素
 		changeCount := max(1, (config.Rows*config.Cols)/10) // 改变10%的元素
 		for k := 0; k < changeCount; k++ {
-			i := rand.Intn(config.Rows)
-			j := rand.Intn(config.Cols)
-			change := (rand.Float64() - 0.5) * (config.MaxValue - config.MinValue) * 0.1
+			i := simIntn(config.Rows)
+			j := simIntn(config.Cols)
+			change := (simFloat64() - 0.5) * (config.MaxValue - config.MinValue) * 0.1
 			newValues[i][j] += change
 
 			// 边界检查
@@ -1269,12 +1268,12 @@ func (a *MockAdapter) generateTimeSeriesData(p *mockPoint) (*model.TimeSeriesDat
 
 	// 添加噪声
 	if config.Noise > 0 {
-		newValue += (rand.Float64() - 0.5) * 2 * config.Noise
+		newValue += (simFloat64() - 0.5) * 2 * config.Noise
 	}
 
 	// 添加异常值
-	if config.Anomalies != nil && rand.Float64() < config.Anomalies.Probability {
-		newValue += (rand.Float64() - 0.5) * config.Anomalies.Magnitude * newValue
+	if config.Anomalies != nil && simFloat64() < config.Anomalies.Probability {
+		newValue += (simFloat64() - 0.5) * config.Anomalies.Magnitude * newValue
 	}
 
 	// 更新序列（滑动窗口）
@@ -1310,40 +1309,40 @@ func (a *MockAdapter) generateTimeSeriesData(p *mockPoint) (*model.TimeSeriesDat
 // generateArrayElement 生成数组元素
 func (a *MockAdapter) generateArrayElement(config *config.MockArrayConfig) interface{} {
 	// 检查是否生成null值
-	if config.NullProbability > 0 && rand.Float64() < config.NullProbability {
+	if config.NullProbability > 0 && simFloat64() < config.NullProbability {
 		return nil
 	}
 
 	switch config.ElementType {
 	case "int":
-		return int(config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue))
+		return int(config.MinValue + simFloat64()*(config.MaxValue-config.MinValue))
 	case "float":
-		return config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue)
+		return config.MinValue + simFloat64()*(config.MaxValue-config.MinValue)
 	case "string":
 		if len(config.StringOptions) > 0 {
-			return config.StringOptions[rand.Intn(len(config.StringOptions))]
+			return config.StringOptions[simIntn(len(config.StringOptions))]
 		}
-		return fmt.Sprintf("string_%d", rand.Intn(1000))
+		return fmt.Sprintf("string_%d", simIntn(1000))
 	case "bool":
 		prob := config.BoolProbability
 		if prob == 0 {
 			prob = 0.5 // 默认50%概率
 		}
-		return rand.Float64() < prob
+		return simFloat64() < prob
 	case "mixed":
 		// 混合类型，随机选择
-		switch rand.Intn(4) {
+		switch simIntn(4) {
 		case 0:
-			return int(config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue))
+			return int(config.MinValue + simFloat64()*(config.MaxValue-config.MinValue))
 		case 1:
-			return config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue)
+			return config.MinValue + simFloat64()*(config.MaxValue-config.MinValue)
 		case 2:
 			if len(config.StringOptions) > 0 {
-				return config.StringOptions[rand.Intn(len(config.StringOptions))]
+				return config.StringOptions[simIntn(len(config.StringOptions))]
 			}
-			return fmt.Sprintf("mixed_%d", rand.Intn(1000))
+			return fmt.Sprintf("mixed_%d", simIntn(1000))
 		case 3:
-			return rand.Float64() < 0.5
+			return simFloat64() < 0.5
 		}
 	}
 
@@ -1353,7 +1352,7 @@ func (a *MockAdapter) generateArrayElement(config *config.MockArrayConfig) inter
 // generateMatrixElement 生成矩阵元素
 func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row, col int) float64 {
 	// 检查稀疏度
-	if config.Sparsity > 0 && rand.Float64() < config.Sparsity {
+	if config.Sparsity > 0 && simFloat64() < config.Sparsity {
 		return 0.0
 	}
 
@@ -1370,7 +1369,7 @@ func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row
 			if config.MatrixType == "identity" {
 				return 1.0
 			} else {
-				value = config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue)
+				value = config.MinValue + simFloat64()*(config.MaxValue-config.MinValue)
 			}
 		} else {
 			return 0.0
@@ -1383,9 +1382,9 @@ func (a *MockAdapter) generateMatrixElement(config *config.MockMatrixConfig, row
 		switch config.Distribution {
 		case "normal":
 			center := (config.MinValue + config.MaxValue) / 2.0
-			value = center + (rand.Float64()-0.5)*(config.MaxValue-config.MinValue)*0.3
+			value = center + (simFloat64()-0.5)*(config.MaxValue-config.MinValue)*0.3
 		default:
-			value = config.MinValue + rand.Float64()*(config.MaxValue-config.MinValue)
+			value = config.MinValue + simFloat64()*(config.MaxValue-config.MinValue)
 		}
 	}
 

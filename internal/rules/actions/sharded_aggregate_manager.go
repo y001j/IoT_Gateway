@@ -35,8 +35,9 @@ type AggregateManagerShard struct {
 
 // BatchProcessor 批量处理器
 type BatchProcessor struct {
-	batchSize     int32
-	flushInterval time.Duration
+	// batchSize / flushInterval 可在运行时由 UpdatePerformanceConfig 修改，批处理协程同时读取，使用原子类型
+	batchSize     atomic.Int32
+	flushInterval atomic.Int64 // time.Duration
 	pointChannels []chan *BatchedPoint
 	flushTicker   *time.Ticker
 	stopChan      chan struct{}
@@ -73,7 +74,7 @@ func NewShardedAggregateManager() *ShardedAggregateManager {
 	}
 
 	sam := &ShardedAggregateManager{
-		numShards: int32(numShards),
+		numShards: int32(numShards), // #nosec G115 -- 已限制在 4~64
 		metrics:   &PerformanceMetrics{},
 	}
 
@@ -81,17 +82,17 @@ func NewShardedAggregateManager() *ShardedAggregateManager {
 	sam.shards = make([]*AggregateManagerShard, numShards)
 	for i := 0; i < numShards; i++ {
 		sam.shards[i] = &AggregateManagerShard{
-			shardID: int32(i),
+			shardID: int32(i), // #nosec G115 -- 分片数不超过 64
 		}
 	}
 
 	// 初始化批量处理器
 	sam.batchProcessor = &BatchProcessor{
-		batchSize:     500,                   // 默认批量大小
-		flushInterval: 10 * time.Millisecond, // 默认刷新间隔
 		pointChannels: make([]chan *BatchedPoint, numShards),
 		stopChan:      make(chan struct{}),
 	}
+	sam.batchProcessor.batchSize.Store(500)                              // 默认批量大小
+	sam.batchProcessor.flushInterval.Store(int64(10 * time.Millisecond)) // 默认刷新间隔
 
 	// 为每个分片创建批量处理通道
 	for i := 0; i < numShards; i++ {
@@ -190,8 +191,10 @@ func (sam *ShardedAggregateManager) shouldUseBatchProcessing(config *AggregateCo
 // getShardID 获取分片ID
 func (sam *ShardedAggregateManager) getShardID(key string) int {
 	hash := fnv.New32a()
-	hash.Write([]byte(key))
-	return int(hash.Sum32()) % int(sam.numShards)
+	_, _ = hash.Write([]byte(key)) // hash.Hash 的 Write 不会返回错误
+	// 先在 uint32 上取模再转 int。以前先转 int：32 位平台上 int 只有 32 位，
+	// 哈希值大于 2^31 时变成负数，取模得到负下标，ARMv7 上约一半的序列会 panic
+	return int(hash.Sum32() % uint32(sam.numShards)) // #nosec G115 -- numShards 在 4~64 之间
 }
 
 // generateStateKey 生成状态键
@@ -303,8 +306,8 @@ func (sam *ShardedAggregateManager) startBatchProcessor(shardID int) {
 
 		shard := sam.shards[shardID]
 		channel := sam.batchProcessor.pointChannels[shardID]
-		batch := make([]*BatchedPoint, 0, sam.batchProcessor.batchSize)
-		ticker := time.NewTicker(sam.batchProcessor.flushInterval)
+		batch := make([]*BatchedPoint, 0, sam.batchProcessor.batchSize.Load())
+		ticker := time.NewTicker(time.Duration(sam.batchProcessor.flushInterval.Load()))
 		defer ticker.Stop()
 
 		for {
@@ -313,7 +316,7 @@ func (sam *ShardedAggregateManager) startBatchProcessor(shardID int) {
 				batch = append(batch, point)
 
 				// 批次满了或者是最后一个，立即处理
-				if len(batch) >= int(sam.batchProcessor.batchSize) {
+				if len(batch) >= int(sam.batchProcessor.batchSize.Load()) {
 					sam.processBatch(shard, batch)
 					batch = batch[:0]
 				}
@@ -502,6 +505,6 @@ func (sam *ShardedAggregateManager) GetMetrics() map[string]interface{} {
 		"average_latency_ms": atomic.LoadInt64(&sam.metrics.averageLatency) / 1000000,
 		"current_tps":        atomic.LoadInt64(&sam.metrics.peakTPS),
 		"num_shards":         sam.numShards,
-		"batch_size":         sam.batchProcessor.batchSize,
+		"batch_size":         sam.batchProcessor.batchSize.Load(),
 	}
 }

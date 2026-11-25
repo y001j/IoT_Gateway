@@ -85,7 +85,7 @@ api.interceptors.response.use(
 
     // 400 Bad Request 特殊处理
     if (error.response?.status === 400) {
-      const errorData = error.response.data as any;
+      const errorData = error.response.data as { message?: string } | undefined;
       if (errorData?.message && errorData.message.includes('RefreshToken')) {
         console.warn('⚠️ Refresh token 验证失败，需要重新登录');
         const { logout } = useAuthStore.getState();

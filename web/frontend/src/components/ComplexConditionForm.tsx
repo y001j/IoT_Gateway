@@ -12,23 +12,27 @@ import {
   Tag,
   Tooltip,
   Tabs,
-  Switch,
+  
   Alert
 } from 'antd';
 import {
   PlusOutlined,
   DeleteOutlined,
   QuestionCircleOutlined,
-  EnvironmentOutlined,
-  BorderOutlined,
-  BgColorsOutlined,
-  OrderedListOutlined,
-  TableOutlined,
-  LineChartOutlined
+  
+  
+  
+  
+  
+ 
 } from '@ant-design/icons';
 import type { Condition } from '../types/rule';
 import type { DataTypeOption } from './DataTypeSelector';
 
+
+import { cfgOptNumber } from '../utils/ruleData';
+/** 条件比较值（与 types/rule 的 Condition.value 一致） */
+type ConditionValue = Condition['value'];
 const { Option } = Select;
 const { TextArea } = Input;
 const { TabPane } = Tabs;
@@ -43,15 +47,15 @@ interface ComplexConditionItem {
   type: 'field' | 'expression' | 'spatial';
   field?: string;
   operator?: string;
-  value?: any;
+  value?: ConditionValue;
   expression?: string;
   spatial_type?: string;
-  spatial_config?: any;
+  spatial_config?: unknown;
 }
 
 const ComplexConditionForm: React.FC<ComplexConditionFormProps> = ({
   dataType,
-  value,
+  value: _value,
   onChange
 }) => {
   const [conditionType, setConditionType] = useState<'simple' | 'and' | 'or' | 'expression'>('simple');
@@ -195,7 +199,7 @@ const ComplexConditionForm: React.FC<ComplexConditionFormProps> = ({
               <Option key={field.key} value={field.key}>
                 <Space>
                   {field.name}
-                  <Tag size="small" color={field.type === 'number' ? 'blue' : field.type === 'string' ? 'green' : 'orange'}>
+                  <Tag color={field.type === 'number' ? 'blue' : field.type === 'string' ? 'green' : 'orange'}>
                     {field.type}
                   </Tag>
                 </Space>
@@ -234,7 +238,7 @@ const ComplexConditionForm: React.FC<ComplexConditionFormProps> = ({
       return (
         <InputNumber
           placeholder="数值"
-          value={condition.value}
+          value={cfgOptNumber(condition.value)}
           onChange={(value) => updateCondition(index, 'value', value)}
           style={{ width: '100%' }}
         />
@@ -257,21 +261,11 @@ const ComplexConditionForm: React.FC<ComplexConditionFormProps> = ({
     return (
       <Input
         placeholder="比较值"
-        value={condition.value}
+        value={condition.value == null ? '' : String(condition.value)}
         onChange={(e) => updateCondition(index, 'value', e.target.value)}
       />
     );
   };
-
-  // 更新条件
-  const updateCondition = useCallback((index: number, field: string, value: any) => {
-    const newConditions = [...conditions];
-    newConditions[index] = { ...newConditions[index], [field]: value };
-    setConditions(newConditions);
-    
-    // 构建并触发onChange
-    buildAndEmitCondition(conditionType, newConditions);
-  }, [conditions, conditionType]);
 
   // 构建条件对象
   const buildAndEmitCondition = useCallback((type: string, conditionList: ComplexConditionItem[]) => {
@@ -314,9 +308,20 @@ const ComplexConditionForm: React.FC<ComplexConditionFormProps> = ({
     onChange?.(result);
   }, [onChange]);
 
+  // 更新条件
+  const updateCondition = useCallback((index: number, field: string, value: ConditionValue) => {
+    const newConditions = [...conditions];
+    newConditions[index] = { ...newConditions[index], [field]: value };
+    setConditions(newConditions);
+    
+    // 构建并触发onChange
+    buildAndEmitCondition(conditionType, newConditions);
+  }, [conditions, conditionType, buildAndEmitCondition]);
+
+
   // 添加条件
   const addCondition = () => {
-    const newConditions = [...conditions, { type: 'field', field: '', operator: 'eq', value: '' }];
+    const newConditions: ComplexConditionItem[] = [...conditions, { type: 'field', field: '', operator: 'eq', value: '' }];
     setConditions(newConditions);
     buildAndEmitCondition(conditionType, newConditions);
   };

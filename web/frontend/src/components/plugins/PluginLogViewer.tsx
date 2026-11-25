@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table,
   Card,
@@ -19,6 +19,8 @@ import { pluginService } from '../../services/pluginService';
 import type { PluginLog, PluginLogRequest } from '../../types/plugin';
 import dayjs from 'dayjs';
 
+import { asHttpError } from '../../utils/errors';
+import type { TablePaginationConfig } from 'antd/es/table';
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -42,12 +44,13 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
   });
 
   // 获取日志列表
-  const fetchLogs = async () => {
+  const { current: currentPage, pageSize } = pagination;
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       const params: PluginLogRequest = {
-        page: pagination.current,
-        page_size: pagination.pageSize,
+        page: currentPage,
+        page_size: pageSize,
         level: filters.level || undefined,
         source: filters.source || undefined,
         from: filters.dateRange?.[0]?.toISOString(),
@@ -60,12 +63,13 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
         ...prev,
         total: response.total
       }));
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取日志失败：' + (error.message || '未知错误'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [pluginName, currentPage, pageSize, filters]);
 
   // 获取日志级别标签
   const getLevelTag = (level: string) => {
@@ -132,7 +136,7 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
   ];
 
   // 处理分页变化
-  const handleTableChange = (paginationConfig: any) => {
+  const handleTableChange = (paginationConfig: TablePaginationConfig) => {
     setPagination(prev => ({
       ...prev,
       current: paginationConfig.current || 1,
@@ -141,7 +145,7 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
   };
 
   // 处理筛选变化
-  const handleFilterChange = (key: string, value: any) => {
+  const handleFilterChange = (key: string, value: unknown) => {
     setFilters(prev => ({
       ...prev,
       [key]: value
@@ -153,9 +157,10 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
   };
 
   // 初始化和依赖更新
+  // 以前不依赖 pluginName，切换插件时日志不会重新加载
   useEffect(() => {
     fetchLogs();
-  }, [pagination.current, pagination.pageSize, filters]);
+  }, [fetchLogs]);
 
   return (
     <Card 
@@ -324,7 +329,7 @@ const PluginLogViewer: React.FC<PluginLogViewerProps> = ({ pluginName }) => {
       />
 
       {/* 自定义样式 */}
-      <style jsx global>{`
+      <style>{`
         .log-row-error {
           background-color: #fff2f0;
           border-left: 3px solid #f5222d;

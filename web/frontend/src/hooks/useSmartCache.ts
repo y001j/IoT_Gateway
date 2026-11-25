@@ -22,7 +22,7 @@ interface SmartCacheResult<T> {
 }
 
 class SmartCache {
-  private cache = new Map<string, CacheEntry<any>>();
+  private cache = new Map<string, CacheEntry<unknown>>();
   private maxSize: number;
   
   constructor(maxSize: number = 100) {
@@ -39,7 +39,7 @@ class SmartCache {
       return null;
     }
     
-    return entry;
+    return entry as CacheEntry<T>;
   }
 
   set<T>(key: string, data: T, ttl: number): void {
@@ -228,7 +228,7 @@ export function useSmartCache<T>(
   useEffect(() => {
     console.log(`🚀 [useSmartCache] 初始加载 effect 触发 for key: ${key}`);
     loadData();
-  }, [loadData]); // 现在loadData依赖稳定了
+  }, [loadData, key]);
 
   // 清理
   useEffect(() => {

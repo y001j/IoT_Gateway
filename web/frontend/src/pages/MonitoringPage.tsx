@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Row,
@@ -51,8 +51,22 @@ import type {
 } from '../types/monitoring';
 import { TIME_RANGE_OPTIONS } from '../types/monitoring';
 
+import { asHttpError } from '../utils/errors';
+import type { SystemStatus, SystemMetrics, HealthCheck, HealthCheckItem } from '../types/system';
 const { Title, Text } = Typography;
 const { Option } = Select;
+
+/** 按适配器聚合的数据流统计 */
+interface AdapterAggregate {
+  name: string;
+  device_id: string;
+  totalPoints: number;
+  totalBytes: number;
+  dataPointCount: number;
+  avgLatency: number;
+  avgErrorRate: number;
+  keys: string[];
+}
 
 const MonitoringPage: React.FC = () => {
   // 状态管理
@@ -68,9 +82,9 @@ const MonitoringPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('overview');
 
   // 系统监控数据状态
-  const [systemStatus, setSystemStatus] = useState<any>(null);
-  const [systemMetrics, setSystemMetrics] = useState<any>(null);
-  const [systemHealth, setSystemHealth] = useState<any>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+  const [systemHealth, setSystemHealth] = useState<HealthCheck | null>(null);
   const [lightweightMetrics, setLightweightMetrics] = useState<LightweightMetrics | null>(null);
 
   // 实时数据连接状态
@@ -121,10 +135,6 @@ const MonitoringPage: React.FC = () => {
   // 加载系统监控数据
   const loadSystemMonitoringData = async () => {
     try {
-      // 检查认证状态
-      const authState = systemService.getAuthState ? systemService.getAuthState() : null;
-      console.log('🔐 当前认证状态:', authState);
-      
       // 并行加载系统状态、指标和健康检查
       const [status, metrics, health] = await Promise.allSettled([
         systemService.getStatus(),
@@ -217,7 +227,8 @@ const MonitoringPage: React.FC = () => {
         setSinks([]);
         setDataFlow([]);
       }
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('❌ 加载监控数据失败:', error);
       message.error('加载监控数据失败: ' + error.message);
     } finally {
@@ -240,7 +251,8 @@ const MonitoringPage: React.FC = () => {
       } else {
         message.error(`${adapterName} 连接测试失败: ${result.error}`);
       }
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('连接测试失败: ' + error.message);
     }
   };
@@ -255,7 +267,8 @@ const MonitoringPage: React.FC = () => {
           await monitoringService.restartAdapter(adapterName);
           message.success('重启请求已提交');
           setTimeout(loadData, 2000); // 2秒后刷新数据
-        } catch (error: any) {
+        } catch (caught) {
+          const error = asHttpError(caught);
           message.error('重启失败: ' + error.message);
         }
       },
@@ -269,7 +282,8 @@ const MonitoringPage: React.FC = () => {
       const result = await monitoringService.getAdapterDiagnostics(adapterName);
       setDiagnostics(result);
       setDiagnosticsVisible(true);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取诊断信息失败: ' + error.message);
     }
   };
@@ -277,11 +291,13 @@ const MonitoringPage: React.FC = () => {
   // 获取认证状态
   const { isAuthenticated, isInitialized } = useAuthStore();
 
-  // 初始加载 - 等待认证完成
+  // 初始加载 - 等待认证完成（通过 ref 调用最新的 loadData，只在认证状态变化时触发）
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
   useEffect(() => {
     if (isInitialized) {
       console.log('🔐 认证状态已初始化，开始加载数据:', { isAuthenticated, isInitialized });
-      loadData();
+      loadDataRef.current();
     } else {
       console.log('⏳ 等待认证状态初始化...');
     }
@@ -376,7 +392,7 @@ const MonitoringPage: React.FC = () => {
       key: 'status',
       render: (status: string) => (
         <Badge
-          status={monitoringService.getStatusColor(status) as any}
+          status={monitoringService.getStatusColor(status)}
           text={monitoringService.getStatusText(status)}
         />
       ),
@@ -429,7 +445,7 @@ const MonitoringPage: React.FC = () => {
     {
       title: '操作',
       key: 'actions',
-      render: (_: any, record: AdapterStatus) => (
+      render: (_: unknown, record: AdapterStatus) => (
         <Space size="small">
           <Tooltip title="测试连接">
             <Button
@@ -487,7 +503,7 @@ const MonitoringPage: React.FC = () => {
       key: 'status',
       render: (status: string) => (
         <Badge
-          status={monitoringService.getStatusColor(status) as any}
+          status={monitoringService.getStatusColor(status)}
           text={monitoringService.getStatusText(status)}
         />
       ),
@@ -608,7 +624,7 @@ const MonitoringPage: React.FC = () => {
       title: '最后数值',
       dataIndex: 'last_value',
       key: 'last_value',
-      render: (value: any, record: DataFlowMetrics) => {
+      render: (value: unknown, record: DataFlowMetrics) => {
         if (!value) return <Text type="secondary">-</Text>;
         
         const displayValue = typeof value === 'number' ? 
@@ -912,7 +928,7 @@ const MonitoringPage: React.FC = () => {
                     <div>
                       <strong>健康检查项:</strong>
                       <div style={{ marginTop: 8 }}>
-                        {systemHealth.checks.map((check: any, index: number) => (
+                        {systemHealth.checks.map((check: HealthCheckItem & { duration?: string }, index: number) => (
                           <Tag 
                             key={index} 
                             color={check.status === 'pass' ? 'green' : check.status === 'warn' ? 'orange' : 'red'}
@@ -1035,9 +1051,9 @@ const MonitoringPage: React.FC = () => {
                         acc[adapterName].avgErrorRate += record.error_rate;
                         acc[adapterName].keys.push(record.key);
                         return acc;
-                      }, {} as any);
+                      }, {} as Record<string, AdapterAggregate>);
 
-                      return Object.values(adapterStats).map((stat: any) => (
+                      return Object.values(adapterStats).map((stat: AdapterAggregate) => (
                         <Col xs={24} sm={12} lg={8} key={stat.name}>
                           <Card size="small" style={{ marginBottom: 8 }}>
                             <Space>

@@ -157,7 +157,7 @@ func (p *OptimizedWorkerPool) shardFor(task RuleTask) int {
 		h ^= uint32(s[i])
 		h *= prime32
 	}
-	return int(h % uint32(p.numWorkers))
+	return int(h % uint32(p.numWorkers)) // #nosec G115 -- numWorkers 为正数且远小于 2^32
 }
 
 // SubmitTask 提交任务。返回 false 表示任务被丢弃（工作池已停止或队列持续满）。

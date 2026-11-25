@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Row,
@@ -29,11 +29,7 @@ import {
 import { systemService } from '../services/systemService';
 import { lightweightMetricsService, type LightweightMetrics } from '../services/lightweightMetricsService';
 // import { useAuthStore } from '../store/authStore';
-import type {
-  SystemStatus,
-  SystemMetrics,
-  HealthCheck,
-} from '../types/system';
+import type { HealthCheck, HealthCheckItem, SystemConfig, SystemMetrics, SystemStatus } from '../types/system';
 
 const { Title } = Typography;
 
@@ -44,7 +40,7 @@ const SystemPage: React.FC = () => {
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [systemHealth, setSystemHealth] = useState<HealthCheck | null>(null);
   const [lightweightMetrics, setLightweightMetrics] = useState<LightweightMetrics | null>(null);
-  const [systemConfig, setSystemConfig] = useState<any>(null);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   // 移除未使用的状态变量
   const [configForm] = Form.useForm();
   const [activeTab, setActiveTab] = useState('status');
@@ -251,13 +247,6 @@ const SystemPage: React.FC = () => {
     });
   };
 
-  // 格式化运行时间
-  const formatUptime = (seconds: number) => {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    return `${days}天 ${hours}小时 ${minutes}分钟`;
-  };
 
   // 格式化文件大小
   const formatFileSize = (bytes: number) => {
@@ -290,11 +279,14 @@ const SystemPage: React.FC = () => {
     }
   };
 
+  // 挂载时加载（通过 ref 调用最新的 refreshAll）
+  const refreshAllRef = useRef(refreshAll);
+  refreshAllRef.current = refreshAll;
   useEffect(() => {
     // 初始化表单默认值
     configForm.setFieldsValue(getDefaultConfig());
     
-    refreshAll();
+    refreshAllRef.current();
   }, [configForm]);
 
   const tabItems = [
@@ -368,7 +360,7 @@ const SystemPage: React.FC = () => {
                   <div>
                     <strong>健康检查项:</strong>
                     <div style={{ marginTop: 8 }}>
-                      {systemHealth.checks?.map((check: any, index: number) => (
+                      {systemHealth.checks?.map((check: HealthCheckItem & { duration?: string }, index: number) => (
                         <Tag 
                           key={index} 
                           color={getStatusColor(check.status)}

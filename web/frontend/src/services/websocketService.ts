@@ -107,7 +107,9 @@ class WebSocketService {
    * 连接到 WebSocket 服务器
    */
   connect(): Promise<void> {
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
+      // 执行器本身不能是 async：async 执行器中抛出的异常不会使 Promise 失败，调用方会一直等待
+      const run = async () => {
       // 严格的连接控制
       const now = Date.now();
       
@@ -232,6 +234,8 @@ class WebSocketService {
         this.isConnecting = false;
         reject(error);
       }
+    };
+      run().catch(reject);
     });
   }
 

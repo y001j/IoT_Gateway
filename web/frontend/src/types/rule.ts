@@ -1,3 +1,11 @@
+/** 规则的详细数据类型定义（data_type 为对象时） */
+export interface RuleDataTypeDefinition {
+  type?: string;
+  name?: string;
+  category?: string;
+  [field: string]: unknown;
+}
+
 export interface Rule {
   id: string;
   name: string;
@@ -5,7 +13,7 @@ export interface Rule {
   enabled: boolean;
   priority: number;
   version: number;
-  data_type?: string | any; // 数据类型：字符串或详细定义
+  data_type?: string | RuleDataTypeDefinition; // 数据类型：字符串或详细定义
   conditions: Condition;
   actions: Action[];
   tags?: Record<string, string>;
@@ -17,7 +25,7 @@ export interface Condition {
   type?: string; // "simple", "expression", "lua"
   field?: string;
   operator?: string;
-  value?: string | number | boolean | null;
+  value?: string | number | boolean | null | (string | number)[]; // in 操作符为数组
   expression?: string;
   script?: string;
   and?: Condition[];
@@ -27,7 +35,7 @@ export interface Condition {
 
 export interface Action {
   type: string;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   async?: boolean;
   timeout?: string;
   retry?: number;
@@ -124,7 +132,7 @@ export interface VectorData {
 }
 
 export interface ArrayData {
-  values: any[];         // 数组值
+  values: unknown[];     // 数组值
   data_type: string;     // 元素数据类型
   size: number;          // 数组大小
   unit?: string;         // 单位
@@ -151,7 +159,7 @@ export interface CompositeDataPoint {
   device_id: string;
   timestamp: string;
   type: DataType;
-  value: LocationData | Vector3D | ColorData | VectorData | ArrayData | MatrixData | TimeSeriesData | any;
+  value: LocationData | Vector3D | ColorData | VectorData | ArrayData | MatrixData | TimeSeriesData | string | number | boolean | null;
   quality: number;
   tags?: Record<string, string>;
 }

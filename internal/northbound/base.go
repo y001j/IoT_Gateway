@@ -59,10 +59,13 @@ type StandardConfig struct {
 
 // BaseSink 提供了所有连接器的基础实现
 type BaseSink struct {
+	// stats 必须是第一个字段：其中的 int64 计数器被 sync/atomic 访问，在 32 位 ARM 上要求 8 字节对齐。
+	// 以前排在 name、sinkType、running 之后（偏移 20），在 ARMv7 上所有连接器写数据时都会
+	// panic: unaligned 64-bit atomic operation。BaseSink 由 NewBaseSink 在堆上分配，起始地址 8 字节对齐。
+	stats      SinkStats
 	name       string
 	sinkType   string
 	running    int32 // 使用atomic操作
-	stats      SinkStats
 	statsMutex sync.RWMutex
 	tags       map[string]string
 	batchSize  int

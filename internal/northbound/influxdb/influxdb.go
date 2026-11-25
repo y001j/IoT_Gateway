@@ -88,7 +88,7 @@ func (s *InfluxDBSink) Init(cfg json.RawMessage) error {
 	// 创建InfluxDB客户端
 	options := influxdb2.DefaultOptions()
 	if s.GetBatchSize() > 0 {
-		options.SetBatchSize(uint(s.GetBatchSize()))
+		options.SetBatchSize(uint(max(s.GetBatchSize(), 1))) // #nosec G115 -- 已保证为正数
 	}
 	if influxConfig.FlushInterval > 0 {
 		options.SetFlushInterval(uint(influxConfig.FlushInterval))

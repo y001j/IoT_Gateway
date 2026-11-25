@@ -52,7 +52,8 @@ func NewWebService(viper *viper.Viper, pluginMgr *plugin.Manager, ruleMgr rules.
 
 	// 确保数据目录存在
 	dataDir := "./data"
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	// 数据目录包含用户库和 JWT 密钥，不允许其他用户列出
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
@@ -194,7 +195,7 @@ func (ws *WebService) Stop(ctx context.Context) error {
 
 	// 关闭服务
 	if ws.services != nil {
-		ws.services.Close()
+		_ = ws.services.Close()
 	}
 
 	log.Info().Msg("Web service stopped")

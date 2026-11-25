@@ -70,7 +70,7 @@ func (l *Loader) Scan() error {
 		}
 
 		filePath := filepath.Join(l.dir, file.Name())
-		data, err := ioutil.ReadFile(filePath)
+		data, err := ioutil.ReadFile(filepath.Clean(filePath))
 		if err != nil {
 			log.Warn().Err(err).Str("file", filePath).Msg("Failed to read plugin meta file")
 			continue

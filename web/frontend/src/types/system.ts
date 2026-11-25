@@ -1,43 +1,46 @@
+// 与后端 internal/web/models/system.go 的 SystemStatus 一致（/api/v1/system/status）
 export interface SystemStatus {
   status: string;
-  uptime: number;
+  uptime: string;
   version: string;
-  build_time: string;
-  go_version: string;
+  start_time: string;
   cpu_usage: number;
   memory_usage: number;
   disk_usage: number;
-  goroutines: number;
-  nats_connected: boolean;
-  jetstream_enabled: boolean;
-  active_plugins: number;
-  active_rules: number;
+  network_in: number;
+  network_out: number;
+  active_connections: number;
+  total_connections: number;
 }
 
+// 与后端 SystemMetrics 一致（/api/v1/system/metrics）
 export interface SystemMetrics {
   timestamp: string;
-  cpu_percent: number;
-  memory_percent: number;
-  memory_used: number;
-  memory_total: number;
-  disk_percent: number;
-  disk_used: number;
-  disk_total: number;
-  network_rx: number;
-  network_tx: number;
-  process_count: number;
-  thread_count: number;
+  data_points_per_second: number;
+  active_connections: number;
+  error_rate: number;
+  response_time_avg: number;
+  memory_usage: number;
+  cpu_usage: number;
+  disk_usage: number;
+  network_in_bytes: number;
+  network_out_bytes: number;
 }
 
+export interface HealthCheckItem {
+  name: string;
+  status: string;
+  message?: string;
+  timestamp?: string;
+}
+
+// 与后端 /api/v1/system/health 一致：checks 是数组
 export interface HealthCheck {
   status: string;
-  checks: {
-    [key: string]: {
-      status: string;
-      message: string;
-      timestamp: string;
-    };
-  };
+  service?: string;
+  version?: string;
+  timestamp?: string;
+  checks: HealthCheckItem[];
 }
 
 export interface SystemConfig {

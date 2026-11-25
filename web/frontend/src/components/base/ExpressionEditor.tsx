@@ -3,7 +3,7 @@ import { Card, Input, Button, Typography, Space, Tag, Collapse, List } from 'ant
 import { CodeOutlined, FunctionOutlined, InfoCircleOutlined } from '@ant-design/icons';
 
 const { TextArea } = Input;
-const { Text, Paragraph } = Typography;
+const { Text  } = Typography;
 const { Panel } = Collapse;
 
 export interface ExpressionEditorProps {
@@ -148,6 +148,7 @@ const ExpressionEditor: React.FC<ExpressionEditorProps> = ({
               <List.Item
                 actions={[
                   <Button
+                    key="insert"
                     type="link"
                     size="small"
                     onClick={() => insertText(func.syntax)}
@@ -187,6 +188,7 @@ const ExpressionEditor: React.FC<ExpressionEditorProps> = ({
         <List.Item
           actions={[
             <Button
+              key="insert"
               type="link"
               size="small"
               onClick={() => insertText(variable.name)}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table,
   Card,
@@ -47,6 +47,7 @@ import type {
   PluginStats
 } from '../types/plugin';
 
+import { asHttpError } from '../utils/errors';
 const { Title, Text } = Typography;
 const { Search } = Input;
 const { Option } = Select;
@@ -73,12 +74,13 @@ const PluginsPage: React.FC = () => {
   const [configForm] = Form.useForm();
 
   // 获取插件列表
-  const fetchPlugins = async () => {
+  const { current: currentPage, pageSize } = pagination;
+  const fetchPlugins = useCallback(async () => {
     setLoading(true);
     try {
       const params: PluginListRequest = {
-        page: pagination.current,
-        page_size: pagination.pageSize,
+        page: currentPage,
+        page_size: pageSize,
         search: searchText || undefined,
         type: filterType || undefined,
         status: filterStatus || undefined
@@ -105,12 +107,13 @@ const PluginsPage: React.FC = () => {
         ...prev,
         total: response.pagination.total
       }));
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取插件列表失败：' + (error.message || '未知错误'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, pageSize, searchText, filterType, filterStatus]);
 
   // 获取插件统计
   const fetchPluginStats = async (pluginName: string) => {
@@ -119,7 +122,8 @@ const PluginsPage: React.FC = () => {
       const stats = await pluginService.getPluginStats(pluginName);
       console.log('插件统计数据:', stats);
       setPluginStats(stats);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('获取插件统计失败:', error);
       message.error('获取插件统计失败：' + (error.message || '未知错误'));
       // 设置默认统计数据以避免显示错误
@@ -148,7 +152,8 @@ const PluginsPage: React.FC = () => {
       } else {
         message.error(result.message || `${getActionText(action)}失败`);
       }
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error(`${getActionText(action)}失败：` + (error.message || '未知错误'));
     }
   };
@@ -159,7 +164,8 @@ const PluginsPage: React.FC = () => {
       await pluginService.deletePlugin(plugin.name);
       message.success('删除插件成功');
       await fetchPlugins();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('删除插件失败：' + (error.message || '未知错误'));
     }
   };
@@ -178,7 +184,8 @@ const PluginsPage: React.FC = () => {
       setSelectedPlugin(plugin);
       configForm.setFieldsValue({ config: JSON.stringify(config, null, 2) });
       setConfigModalVisible(true);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取插件配置失败：' + (error.message || '未知错误'));
     }
   };
@@ -195,7 +202,8 @@ const PluginsPage: React.FC = () => {
       message.success('配置保存成功');
       setConfigModalVisible(false);
       await fetchPlugins();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       if (error instanceof SyntaxError) {
         message.error('配置格式错误，请检查 JSON 格式');
       } else {
@@ -376,7 +384,7 @@ const PluginsPage: React.FC = () => {
   ];
 
   // 处理表格变化
-  const handleTableChange = (paginationConfig: TablePaginationConfig, filters: any) => {
+  const handleTableChange = (paginationConfig: TablePaginationConfig, filters: Record<string, (string | number | boolean)[] | null>) => {
     setPagination(prev => ({
       ...prev,
       current: paginationConfig.current || 1,
@@ -385,17 +393,17 @@ const PluginsPage: React.FC = () => {
     
     // 处理筛选
     if (filters.type) {
-      setFilterType(filters.type[0] || '');
+      setFilterType(String(filters.type[0] ?? ''));
     }
     if (filters.status) {
-      setFilterStatus(filters.status[0] || '');
+      setFilterStatus(String(filters.status[0] ?? ''));
     }
   };
 
   // 初始化和依赖更新
   useEffect(() => {
     fetchPlugins();
-  }, [pagination.current, pagination.pageSize, searchText, filterType, filterStatus]);
+  }, [fetchPlugins]);
 
   return (
     <div>

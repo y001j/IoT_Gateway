@@ -40,7 +40,7 @@ func EnsureJWTSecret(configured, dataDir string) (secret string, generated bool,
 		dataDir = "./data"
 	}
 	path := filepath.Join(dataDir, ".jwt_secret")
-	if data, rerr := os.ReadFile(path); rerr == nil {
+	if data, rerr := os.ReadFile(filepath.Clean(path)); rerr == nil {
 		s := strings.TrimSpace(string(data))
 		if !IsWeakJWTSecret(s) {
 			return s, true, nil

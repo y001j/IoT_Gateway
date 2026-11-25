@@ -4,6 +4,7 @@ import { LineChartOutlined, ReloadOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { lightweightMetricsService, type LightweightMetrics } from '../../services/lightweightMetricsService';
 
+import { asHttpError } from '../../utils/errors';
 const { Option } = Select;
 const { Text } = Typography;
 
@@ -71,7 +72,8 @@ const SystemMetricsChart: React.FC<SystemMetricsChartProps> = ({
           errors: addDataPoint(prev.errors, metrics.errors.errors_per_second),
         };
       });
-    } catch (err: any) {
+    } catch (caught) {
+      const err = asHttpError(caught);
       setError(err.message || '获取指标失败');
       console.error('Failed to fetch metrics:', err);
     }
@@ -167,7 +169,7 @@ const SystemMetricsChart: React.FC<SystemMetricsChartProps> = ({
             backgroundColor: '#6a7985',
           },
         },
-        formatter: (params: any) => {
+        formatter: (params: unknown) => {
           const point = params[0];
           const time = new Date(point.axisValue).toLocaleTimeString();
           const value = config.formatter(point.value);

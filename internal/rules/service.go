@@ -488,7 +488,7 @@ func (s *RuleEngineService) Stop(ctx context.Context) error {
 
 	// 关闭规则管理器
 	if s.manager != nil {
-		s.manager.Close()
+		_ = s.manager.Close()
 	}
 
 	return nil
@@ -1530,7 +1530,9 @@ func (h *BuiltinAlertHandler) parseChannelConfig(config map[string]interface{}) 
 
 	if channelsData, ok := config["channels"]; ok {
 		channelsBytes, _ := json.Marshal(channelsData)
-		json.Unmarshal(channelsBytes, &channels)
+		if err := json.Unmarshal(channelsBytes, &channels); err != nil {
+			log.Warn().Err(err).Msg("告警通知渠道配置格式错误，已忽略")
+		}
 	}
 
 	// 如果没有配置通道，默认添加console通道

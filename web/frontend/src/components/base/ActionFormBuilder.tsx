@@ -1,8 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Form, Select, Input, InputNumber, Button, Space, Switch, Typography, Row, Col, Divider, Alert, Tag, Tooltip } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, Form, Select, Input, InputNumber, Button, Space, Switch, Typography, Row, Col, Alert, Tag, Tooltip } from 'antd';
 import { PlusOutlined, DeleteOutlined, BellOutlined, SwapOutlined, FilterOutlined, FunctionOutlined, SendOutlined, InfoCircleOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { Action } from '../../types/rule';
 
+
+import { cfgOptNumber } from '../../utils/ruleData';
+/** 动作配置字段的值 */
+type FieldValue = string | number | boolean | string[] | Record<string, unknown>;
+
+/** 字段值显示为文本（数组按行显示） */
+const fieldText = (v: unknown): string =>
+  v == null ? '' : Array.isArray(v) ? v.join('\n') : typeof v === 'object' ? JSON.stringify(v) : String(v);
 const { Option } = Select;
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -27,11 +35,11 @@ interface ActionConfigSchema {
     required?: boolean;
     placeholder?: string;
     description?: string;
-    defaultValue?: any;
-    options?: Array<{ value: any; label: string }>;
+    defaultValue?: FieldValue;
+    options?: Array<{ value: string | number; label: string }>;
     conditionalDisplay?: {
       dependsOn: string;
-      showWhen: any[];
+      showWhen: unknown[];
     };
   };
 }
@@ -40,6 +48,31 @@ interface ActionConfigSchema {
  * 通用动作表单构建器组件
  * 支持多种动作类型的配置表单
  */
+// 旧的通用动作类型到各数据类型专用动作类型的映射（静态数据，放在组件外）
+// 动作类型映射 - 将旧的通用动作类型映射到专用动作类型
+const actionTypeMapping: { [key: string]: { [key: string]: string } } = {
+  // 视觉数据映射
+  visual: {
+    'alert': 'visual_alert',
+    'transform': 'color_transform'
+  },
+  // 向量数据映射
+  vector_generic: {
+    'alert': 'generic_vector_alert', 
+    'transform': 'generic_vector_transform'
+  },
+  // 地理数据映射
+  geospatial: {
+    'alert': 'geospatial_alert',
+    'transform': 'geospatial_transform'
+  },
+  // 3D向量数据映射
+  vector3d: {
+    'alert': 'vector3d_alert',
+    'transform': 'vector3d_transform'
+  }
+};
+
 const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
   value = [],
   onChange,
@@ -203,29 +236,6 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
     }
   ];
 
-  // 动作类型映射 - 将旧的通用动作类型映射到专用动作类型
-  const actionTypeMapping: { [key: string]: { [key: string]: string } } = {
-    // 视觉数据映射
-    visual: {
-      'alert': 'visual_alert',
-      'transform': 'color_transform'
-    },
-    // 向量数据映射
-    vector_generic: {
-      'alert': 'generic_vector_alert', 
-      'transform': 'generic_vector_transform'
-    },
-    // 地理数据映射
-    geospatial: {
-      'alert': 'geospatial_alert',
-      'transform': 'geospatial_transform'
-    },
-    // 3D向量数据映射
-    vector3d: {
-      'alert': 'vector3d_alert',
-      'transform': 'vector3d_transform'
-    }
-  };
 
   // 推断当前数据类型
   const inferDataType = (): string => {
@@ -290,6 +300,10 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
     ...customActionOptions
   ];
 
+  // 通过 ref 调用最新的 onChange：父组件每次渲染都可能传入新函数，放进依赖会反复用 props 重置本地状态
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
   // 处理传入的动作数据，应用类型转换
   useEffect(() => {
     console.log('ActionFormBuilder接收到新的value:', value);
@@ -310,7 +324,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
     if (convertedActions.some((action, index) => action.type !== value[index]?.type)) {
       console.log('ActionFormBuilder: 动作类型已转换，异步通知父组件');
       setTimeout(() => {
-        onChange?.(convertedActions);
+        onChangeRef.current?.(convertedActions);
       }, 0);
     }
   }, [value, convertActionType]);
@@ -343,8 +357,8 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
     updateActions(newActions);
   };
 
-  const renderConfigField = (fieldKey: string, fieldSchema: ActionConfigSchema[string], value: any, onChange: (value: any) => void) => {
-    const { type, label, required, placeholder, description, options, defaultValue } = fieldSchema;
+  const renderConfigField = (fieldKey: string, fieldSchema: ActionConfigSchema[string], value: FieldValue | undefined, onChange: (value: FieldValue | undefined) => void) => {
+    const { type, label, placeholder, options, defaultValue } = fieldSchema;
     
     // 调试日志
     console.log(`渲染配置字段 ${fieldKey}:`, { type, value, defaultValue });
@@ -355,7 +369,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
           return (
             <Select 
               placeholder={placeholder || `选择${label}`}
-              value={value !== undefined ? value : defaultValue}
+              value={fieldText(value !== undefined ? value : defaultValue) || undefined}
               onChange={(val) => {
                 console.log(`Select字段 ${fieldKey} 变更:`, val);
                 onChange(val);
@@ -371,7 +385,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
         return (
           <Input 
             placeholder={placeholder}
-            value={value !== undefined ? value : defaultValue}
+            value={fieldText(value !== undefined ? value : defaultValue)}
             onChange={(e) => {
               console.log(`Input字段 ${fieldKey} 变更:`, e.target.value);
               onChange(e.target.value);
@@ -385,7 +399,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
           <TextArea 
             rows={3}
             placeholder={placeholder}
-            value={value !== undefined ? value : defaultValue}
+            value={fieldText(value !== undefined ? value : defaultValue)}
             onChange={(e) => {
               console.log(`TextArea字段 ${fieldKey} 变更:`, e.target.value);
               onChange(e.target.value);
@@ -399,7 +413,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
           <InputNumber 
             style={{ width: '100%' }}
             placeholder={placeholder}
-            value={value !== undefined ? value : defaultValue}
+            value={cfgOptNumber(value !== undefined ? value : defaultValue)}
             onChange={(val) => {
               console.log(`InputNumber字段 ${fieldKey} 变更:`, val);
               onChange(val);
@@ -411,7 +425,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
       case 'boolean':
         return (
           <Switch 
-            checked={value !== undefined ? value : defaultValue}
+            checked={Boolean(value !== undefined ? value : defaultValue)}
             onChange={(checked) => {
               console.log(`Switch字段 ${fieldKey} 变更:`, checked);
               onChange(checked);
@@ -425,7 +439,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
             <Select
               mode="multiple"
               placeholder={placeholder || `选择${label}`}
-              value={value || []}
+              value={Array.isArray(value) ? value : []}
               onChange={(vals) => {
                 console.log(`多选字段 ${fieldKey} 变更:`, vals);
                 onChange(vals);
@@ -442,7 +456,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
           <TextArea 
             rows={2} 
             placeholder="每行一个值"
-            value={value !== undefined ? value : defaultValue}
+            value={fieldText(value !== undefined ? value : defaultValue)}
             onChange={(e) => {
               console.log(`数组TextArea字段 ${fieldKey} 变更:`, e.target.value);
               onChange(e.target.value);
@@ -456,7 +470,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
           <TextArea 
             rows={3}
             placeholder={placeholder || 'JSON格式的对象'}
-            value={typeof value === 'object' ? JSON.stringify(value, null, 2) : (value || '')}
+            value={typeof value === 'object' ? JSON.stringify(value, null, 2) : fieldText(value)}
             onChange={(e) => {
               try {
                 const parsed = JSON.parse(e.target.value);
@@ -475,7 +489,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
         return (
           <Input 
             placeholder={placeholder}
-            value={value !== undefined ? value : defaultValue}
+            value={fieldText(value !== undefined ? value : defaultValue)}
             onChange={(e) => {
               console.log(`默认Input字段 ${fieldKey} 变更:`, e.target.value);
               onChange(e.target.value);
@@ -487,7 +501,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
   };
 
   const getConfigFieldIcon = (fieldKey: string) => {
-    const iconMap: { [key: string]: any } = {
+    const iconMap: { [key: string]: React.ReactNode } = {
       level: <BellOutlined style={{ color: '#fa8c16' }} />,
       message: <InfoCircleOutlined style={{ color: '#1890ff' }} />,
       type: <SettingOutlined style={{ color: '#52c41a' }} />,
@@ -546,14 +560,14 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
                     <Space size="small">
                       {getConfigFieldIcon(fieldKey)}
                       <span>{fieldSchema.label}</span>
-                      {fieldSchema.required && <Tag color="red" size="small">必填</Tag>}
+                      {fieldSchema.required && <Tag color="red">必填</Tag>}
                     </Space>
                   }
                 >
                   {renderConfigField(
                     fieldKey,
                     fieldSchema,
-                    action.config?.[fieldKey],
+                    action.config?.[fieldKey] as FieldValue | undefined,
                     (value) => {
                       const updatedAction = {
                         ...action,
@@ -583,7 +597,7 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
   };
 
   const getActionTypeIcon = (actionType: string) => {
-    const iconMap: { [key: string]: any } = {
+    const iconMap: { [key: string]: React.ReactNode } = {
       alert: <BellOutlined style={{ color: '#fa8c16' }} />,
       transform: <SwapOutlined style={{ color: '#52c41a' }} />,
       filter: <FilterOutlined style={{ color: '#1890ff' }} />,
@@ -752,7 +766,6 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
             type="info"
             showIcon
             style={{ marginTop: 12, marginBottom: 8 }}
-            size="small"
           />
         )}
 
@@ -782,7 +795,6 @@ const ActionFormBuilder: React.FC<ActionFormBuilderProps> = ({
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        size="small"
       />
 
       {actions.map((action, index) => renderAction(action, index))}

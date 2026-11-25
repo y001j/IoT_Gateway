@@ -175,3 +175,12 @@ func TestOriginAllowed(t *testing.T) {
 		t.Fatalf("空 Origin 不应匹配白名单")
 	}
 }
+
+func TestSaturatingInt64(t *testing.T) {
+	if SaturatingInt64(5) != 5 {
+		t.Fatal("普通值应原样转换")
+	}
+	if SaturatingInt64(1<<63) != 1<<63-1 || SaturatingInt64(^uint64(0)) != 1<<63-1 {
+		t.Fatal("超出范围时应取 MaxInt64")
+	}
+}

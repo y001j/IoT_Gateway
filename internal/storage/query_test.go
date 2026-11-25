@@ -309,9 +309,8 @@ func TestRunnerPauseResumeSkipReplay(t *testing.T) {
 	if n := len(sink.values()); n != 10 {
 		t.Fatalf("暂停期间不应写入, got %d", n)
 	}
-	if st := r.Stats(); st.Pending != 10 {
-		t.Fatalf("暂停期间积压应为 10: %+v", st)
-	}
+	// 首批的确认可能稍有延迟，等积压统计稳定
+	testutil.WaitFor(t, 3*time.Second, func() bool { return r.Stats().Pending == 10 }, "暂停期间积压应为 10")
 	// 恢复：按顺序补发
 	r.Resume()
 	testutil.WaitFor(t, 5*time.Second, func() bool { return len(sink.values()) == 20 }, "恢复后未补发")

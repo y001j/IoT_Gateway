@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { Card, Select, Row, Col, Typography, Button, Alert, Space, Statistic } from 'antd';
 import { LineChartOutlined, ReloadOutlined, BarChartOutlined } from '@ant-design/icons';
 import * as echarts from 'echarts';
@@ -61,117 +61,8 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
   const errorChart = useRef<echarts.ECharts | null>(null);
   const deviceChart = useRef<echarts.ECharts | null>(null);
 
-  // 数据加载
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      // 优先从监控API获取真实数据流指标
-      try {
-        const metrics = await monitoringService.getDataFlowMetrics({
-          time_range: timeRange,
-          limit: 100
-        });
-        
-        if (metrics.metrics && metrics.metrics.length > 0) {
-          const processedData = processChartData(metrics.metrics);
-          setChartData(processedData);
-        } else {
-          // 如果没有真实数据流，尝试轻量级指标作为后备
-          const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
-          
-          const fallbackDataFlowMetrics: DataFlowMetrics[] = [
-            {
-              adapter_name: 'system_metrics',
-              device_id: 'gateway',
-              key: 'throughput',
-              data_points_per_sec: lightweightMetrics.data.data_points_per_second,
-              bytes_per_sec: lightweightMetrics.data.bytes_per_second,
-              latency_ms: lightweightMetrics.data.average_latency_ms,
-              error_rate: lightweightMetrics.errors.error_rate,
-              last_value: lightweightMetrics.data.data_points_per_second,
-              last_timestamp: new Date().toISOString()
-            }
-          ];
-          
-          const processedData = processChartData(fallbackDataFlowMetrics);
-          setChartData(processedData);
-        }
-        
-      } catch (monitoringError) {
-        console.warn('监控API不可用:', monitoringError);
-        
-        // 如果监控API失败，尝试轻量级指标
-        const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
-        
-        const fallbackDataFlowMetrics: DataFlowMetrics[] = [
-          {
-            adapter_name: 'system_metrics',
-            device_id: 'gateway',
-            key: 'throughput',
-            data_points_per_sec: lightweightMetrics.data.data_points_per_second,
-            bytes_per_sec: lightweightMetrics.data.bytes_per_second,
-            latency_ms: lightweightMetrics.data.average_latency_ms,
-            error_rate: lightweightMetrics.errors.error_rate,
-            last_value: lightweightMetrics.data.data_points_per_second,
-            last_timestamp: new Date().toISOString()
-          }
-        ];
-        
-        const processedData = processChartData(fallbackDataFlowMetrics);
-        setChartData(processedData);
-      }
-      
-    } catch (err: unknown) {
-      console.error('获取数据流指标失败:', err);
-      setError(err instanceof Error ? err.message : '未知错误');
-      
-      // 设置空数据
-      setChartData({
-        time: [],
-        throughput: [],
-        latency: [],
-        errorRate: [],
-        devices: []
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 计算实时统计数据
-  const realtimeStats = useMemo(() => {
-    if (!chartData || chartData.throughput.length === 0) {
-      return { currentThroughput: 0, currentLatency: 0, currentErrorRate: 0, deviceCount: 0 };
-    }
-    
-    // 取最新的实时值（应该是数组最后几个值的平均）
-    const recentValues = 3; // 取最近3个值求平均
-    const throughputValues = chartData.throughput.slice(-recentValues);
-    const latencyValues = chartData.latency.slice(-recentValues);
-    const errorRateValues = chartData.errorRate.slice(-recentValues);
-    
-    const currentThroughput = throughputValues.length > 0 
-      ? throughputValues.reduce((sum, val) => sum + val, 0) / throughputValues.length 
-      : 0;
-    const currentLatency = latencyValues.length > 0 
-      ? latencyValues.reduce((sum, val) => sum + val, 0) / latencyValues.length 
-      : 0;
-    const currentErrorRate = errorRateValues.length > 0 
-      ? errorRateValues.reduce((sum, val) => sum + val, 0) / errorRateValues.length 
-      : 0;
-    
-    return {
-      currentThroughput,
-      currentLatency,
-      currentErrorRate,
-      deviceCount: chartData.devices.length
-    };
-  }, [chartData]);
-
   // 处理图表数据
-  const processChartData = (metrics: DataFlowMetrics[]) => {
+  const processChartData = useCallback((metrics: DataFlowMetrics[]) => {
     const now = new Date();
     const timePoints = [];
     const throughputData = [];
@@ -264,7 +155,117 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
       errorRate: errorRateData,
       devices
     };
-  };
+  }, []);
+
+  // 数据加载
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // 优先从监控API获取真实数据流指标
+      try {
+        const metrics = await monitoringService.getDataFlowMetrics({
+          time_range: timeRange,
+          limit: 100
+        });
+        
+        if (metrics.metrics && metrics.metrics.length > 0) {
+          const processedData = processChartData(metrics.metrics);
+          setChartData(processedData);
+        } else {
+          // 如果没有真实数据流，尝试轻量级指标作为后备
+          const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
+          
+          const fallbackDataFlowMetrics: DataFlowMetrics[] = [
+            {
+              adapter_name: 'system_metrics',
+              device_id: 'gateway',
+              key: 'throughput',
+              data_points_per_sec: lightweightMetrics.data.data_points_per_second,
+              bytes_per_sec: lightweightMetrics.data.bytes_per_second,
+              latency_ms: lightweightMetrics.data.average_latency_ms,
+              error_rate: lightweightMetrics.errors.error_rate,
+              last_value: lightweightMetrics.data.data_points_per_second,
+              last_timestamp: new Date().toISOString()
+            }
+          ];
+          
+          const processedData = processChartData(fallbackDataFlowMetrics);
+          setChartData(processedData);
+        }
+        
+      } catch (monitoringError) {
+        console.warn('监控API不可用:', monitoringError);
+        
+        // 如果监控API失败，尝试轻量级指标
+        const lightweightMetrics = await lightweightMetricsService.getLightweightMetrics();
+        
+        const fallbackDataFlowMetrics: DataFlowMetrics[] = [
+          {
+            adapter_name: 'system_metrics',
+            device_id: 'gateway',
+            key: 'throughput',
+            data_points_per_sec: lightweightMetrics.data.data_points_per_second,
+            bytes_per_sec: lightweightMetrics.data.bytes_per_second,
+            latency_ms: lightweightMetrics.data.average_latency_ms,
+            error_rate: lightweightMetrics.errors.error_rate,
+            last_value: lightweightMetrics.data.data_points_per_second,
+            last_timestamp: new Date().toISOString()
+          }
+        ];
+        
+        const processedData = processChartData(fallbackDataFlowMetrics);
+        setChartData(processedData);
+      }
+      
+    } catch (err: unknown) {
+      console.error('获取数据流指标失败:', err);
+      setError(err instanceof Error ? err.message : '未知错误');
+      
+      // 设置空数据
+      setChartData({
+        time: [],
+        throughput: [],
+        latency: [],
+        errorRate: [],
+        devices: []
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [timeRange, processChartData]);
+
+  // 计算实时统计数据
+  const realtimeStats = useMemo(() => {
+    if (!chartData || chartData.throughput.length === 0) {
+      return { currentThroughput: 0, currentLatency: 0, currentErrorRate: 0, deviceCount: 0 };
+    }
+    
+    // 取最新的实时值（应该是数组最后几个值的平均）
+    const recentValues = 3; // 取最近3个值求平均
+    const throughputValues = chartData.throughput.slice(-recentValues);
+    const latencyValues = chartData.latency.slice(-recentValues);
+    const errorRateValues = chartData.errorRate.slice(-recentValues);
+    
+    const currentThroughput = throughputValues.length > 0 
+      ? throughputValues.reduce((sum, val) => sum + val, 0) / throughputValues.length 
+      : 0;
+    const currentLatency = latencyValues.length > 0 
+      ? latencyValues.reduce((sum, val) => sum + val, 0) / latencyValues.length 
+      : 0;
+    const currentErrorRate = errorRateValues.length > 0 
+      ? errorRateValues.reduce((sum, val) => sum + val, 0) / errorRateValues.length 
+      : 0;
+    
+    return {
+      currentThroughput,
+      currentLatency,
+      currentErrorRate,
+      deviceCount: chartData.devices.length
+    };
+  }, [chartData]);
+
 
   // 初始化图表
   const initCharts = () => {
@@ -283,7 +284,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
   };
 
   // 更新图表
-  const updateCharts = () => {
+  const updateCharts = useCallback(() => {
     // 吞吐量图表
     if (throughputChart.current) {
       const option = {
@@ -440,7 +441,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
       };
       deviceChart.current.setOption(option);
     }
-  };
+  }, [chartData, chartType]);
 
   // 窗口大小变化时调整图表
   const handleResize = () => {
@@ -453,7 +454,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
   // 组件挂载和卸载
   useEffect(() => {
     initCharts();
-    loadData();
+    // 首次加载由下面依赖 loadData 的 effect 负责（以前这里会和它重复加载一次）
 
     window.addEventListener('resize', handleResize);
     
@@ -469,12 +470,12 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
   // 数据变化时更新图表
   useEffect(() => {
     updateCharts();
-  }, [chartData, chartType]);
+  }, [updateCharts]);
 
   // 时间范围变化时重新加载数据
   useEffect(() => {
     loadData();
-  }, [timeRange]);
+  }, [loadData]);
 
   // 自动刷新
   useEffect(() => {
@@ -482,7 +483,7 @@ const DataFlowChart: React.FC<DataFlowChartProps> = ({
 
     const interval = setInterval(loadData, refreshInterval);
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshInterval, timeRange]);
+  }, [autoRefresh, refreshInterval, loadData]);
 
   // 计算总体指标
   // 统计信息现在使用 realtimeStats

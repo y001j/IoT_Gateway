@@ -60,7 +60,7 @@ export interface DataFlowMetrics {
   bytes_per_sec: number;
   latency_ms: number;
   error_rate: number;
-  last_value: any; // 实际数据值
+  last_value: unknown; // 实际数据值
   last_timestamp: string; // 时间戳字符串
 }
 

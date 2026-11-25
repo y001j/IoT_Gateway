@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/y001j/iot-gateway/internal/utils"
 	"net/http"
 	"runtime"
 	"sync"
@@ -281,9 +282,9 @@ func (m *LightweightMetrics) UpdateSystemMetrics() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	m.SystemMetrics.MemoryUsageBytes = int64(memStats.Alloc)
-	m.SystemMetrics.HeapSizeBytes = int64(memStats.HeapSys)
-	m.SystemMetrics.HeapInUseBytes = int64(memStats.HeapInuse)
+	m.SystemMetrics.MemoryUsageBytes = utils.SaturatingInt64(memStats.Alloc)
+	m.SystemMetrics.HeapSizeBytes = utils.SaturatingInt64(memStats.HeapSys)
+	m.SystemMetrics.HeapInUseBytes = utils.SaturatingInt64(memStats.HeapInuse)
 	m.SystemMetrics.GCPauseMS = float64(memStats.PauseNs[(memStats.NumGC+255)%256]) / 1e6
 	m.SystemMetrics.GoroutineCount = runtime.NumGoroutine()
 
@@ -294,14 +295,14 @@ func (m *LightweightMetrics) UpdateSystemMetrics() {
 			m.SystemMetrics.CPUUsagePercent = systemMetrics.CPUUsage
 			m.SystemMetrics.DiskUsagePercent = systemMetrics.DiskUsage
 			m.SystemMetrics.SystemMemoryPercent = systemMetrics.MemoryUsage
-			m.SystemMetrics.SystemMemoryUsedBytes = int64(systemMetrics.MemoryUsageBytes)
-			m.SystemMetrics.SystemMemoryTotalBytes = int64(systemMetrics.MemoryTotalBytes)
+			m.SystemMetrics.SystemMemoryUsedBytes = utils.SaturatingInt64(systemMetrics.MemoryUsageBytes)
+			m.SystemMetrics.SystemMemoryTotalBytes = utils.SaturatingInt64(systemMetrics.MemoryTotalBytes)
 
 			// 网络累计流量指标
-			m.SystemMetrics.NetworkInBytes = int64(systemMetrics.NetworkInBytes)
-			m.SystemMetrics.NetworkOutBytes = int64(systemMetrics.NetworkOutBytes)
-			m.SystemMetrics.NetworkInPackets = int64(systemMetrics.NetworkInPackets)
-			m.SystemMetrics.NetworkOutPackets = int64(systemMetrics.NetworkOutPackets)
+			m.SystemMetrics.NetworkInBytes = utils.SaturatingInt64(systemMetrics.NetworkInBytes)
+			m.SystemMetrics.NetworkOutBytes = utils.SaturatingInt64(systemMetrics.NetworkOutBytes)
+			m.SystemMetrics.NetworkInPackets = utils.SaturatingInt64(systemMetrics.NetworkInPackets)
+			m.SystemMetrics.NetworkOutPackets = utils.SaturatingInt64(systemMetrics.NetworkOutPackets)
 
 			// 网络实时速率指标
 			m.SystemMetrics.NetworkInBytesPerSec = systemMetrics.NetworkInBytesPerSec

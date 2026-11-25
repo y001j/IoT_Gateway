@@ -101,7 +101,7 @@
 | 事项 | 原因 / 建议 |
 |---|---|
 | 本地暂存的少数设计项 | 三个阶段均已实现，积压告警、指标和补发限速见第 8 节。未实现：死信流及其管理接口、每个 Sink 多个过滤主题、运维审计日志。详见 `docs/design_local_storage.md` 附录。 |
-| ARMv7（32 位）实机压测 | 已在 Linux/ARM64 虚拟机上运行全部测试和端到端压测（第 7.1 节）。Apple 芯片不支持 32 位 ARM 指令，ARMv7 只做了交叉编译和对齐检查，实机数据需在设备上运行 `cmd/tools/benchmark`。 |
+| ARMv7（32 位）实机性能 | 已用 QEMU 用户态模拟在 ARMv7 上运行全部测试和端到端压测（第 9.1 节），功能正确性已验证；模拟运行的吞吐不代表真机性能，实机数据需在设备上运行 `cmd/tools/benchmark`。 |
 | 部分包的行覆盖率 | 所有包的主要功能都有测试，覆盖率见第 7.4 节。仍在 50% 左右的是 `rules/actions`（`transform.go` 4500 行复合数据转换分支）、`plugin`（sidecar 进程管理）、`metrics`。 |
 
 ---
@@ -294,3 +294,90 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 
 ### 8.5 验证
 `go test -race ./...` 26 个包全部通过（storage 89.7%、core 72.4%、web/services 70.4%）；Linux/ARM64 上 26 个包全部通过；`go vet` 无报错；`gofmt -s -l .` 无输出；ARMv7/ARM64 交叉编译和 32 位对齐检查通过；前端 9 项测试通过，构建成功。
+
+---
+
+## 9. 第六轮：ARMv7 实测、CI、剩余低覆盖率模块、前端类型与 lint
+
+### 9.1 ARMv7（32 位 ARM）
+- 方法：在 ARM64 虚拟机中解压 `qemu-user` 软件包（不安装），用 `qemu-arm` 运行 `GOARCH=arm GOARM=7` 编译的测试二进制。
+- **发现严重问题**：`northbound.BaseSink` 中被原子操作访问的 int64 计数器位于偏移 20，ARMv7 上**所有北向连接器写数据时都会 `panic: unaligned 64-bit atomic operation`**。以前的"32 位对齐修复"只调整了 `SinkStats` 内部字段顺序，`scripts/verify_alignment.go` 只检查结构体顶层字段，未能发现。修复：`stats` 移到 `BaseSink` 第一个字段。
+- **第二个只在 32 位平台出现的问题**：分片聚合用 `int(hash.Sum32()) % numShards` 计算分片，32 位平台上 `int` 只有 32 位，哈希值大于 2^31 时变为负数，得到负下标——开启优化聚合（`IOT_GATEWAY_ENABLE_OPTIMIZED_AGGREGATE=true`）时 ARMv7 上约一半的序列会 panic。改为先在 `uint32` 上取模。
+- 修复后 26 个测试包在 ARMv7 上全部通过；端到端压测在模拟下完整运行（采集 → 规则引擎 → 连接器、本地暂存），无 panic、无丢弃。
+- CI 新增 **ARMv7 Tests (QEMU)** 任务（`docker/setup-qemu-action` + `GOARCH=arm go test ./...`），防止再次出现此类问题。
+
+### 9.2 CI 配置
+- `actions/upload-artifact`、`download-artifact` v3 → v4（v3 已被 GitHub 停用，任务启动即失败）。
+- `securecodewarrior/github-action-gosec`（仓库已不存在）→ `securego/gosec@v2.22.4`；`codeql-action/upload-sarif` v2 → v3。
+- 修复后仍会失败的两项属于项目原有问题，（已在第 10 节清零）：前端 lint 要求零警告（约 230 个 `any`/hooks 依赖警告）；gosec 报告 220 项（90 个 G404 `math/rand`、65 个 G104 未处理错误、46 个 G115 整数转换等）。其中真实问题已修：WebSocket 连接器 HTTP 服务缺少 `ReadHeaderTimeout`（Slowloris）、数据目录权限 0755 → 0750。
+
+### 9.3 补测试中发现并修复的问题
+| 模块 | 问题 | 修复 |
+|---|---|---|
+| 增量统计 | `GetStdDev` 在缓存失效时持有写锁调用 `GetVariance`（再加读锁），**调用方永久卡死** | 内部 `varianceLocked` |
+| 增量统计 | `GetNullRate/GetChange/GetVolatility/GetAboveCount` 等 10 个导出方法不加锁，与 `AddValue` 数据竞争 | 导出方法加读锁，内部实现供 `GetStats` 使用 |
+| 分片聚合 | `UpdatePerformanceConfig` 与批处理协程并发读写 `batchSize/flushInterval` | 原子类型 |
+| 插件管理器 | `StartPlugin` 把实例名当作类型查找：配置中 `name: mock1, type: mock` 的实例停止后无法再启动，`RestartPlugin`（含 Web 的"重启适配器"）会把运行中的实例停掉；单独启动的连接器配置格式与启动时不一致 | 按配置中的实例启动；连接器配置生成提取为 `sinkConfigData` 共用 |
+| 告警动作（actions） | 邮件、短信渠道什么也不做却返回发送成功 | 返回 `ErrChannelNotImplemented` |
+
+覆盖率：metrics 41.5% → 88.3%，northbound/jetstream 57.7% → 77.5%，plugin 49.6% → 65.4%，rules/actions 48.5% → 58.2%。
+
+### 9.4 前端
+- 能访问到的页面：TypeScript 错误 0、ESLint 错误 0（以前 tsc 95 个、lint 141 个错误）。修复中包括：缺少 `vite-env.d.ts`；`SystemStatus/SystemMetrics/HealthCheck` 类型与后端不一致（系统页显示 undefined 的字段）；连接监控页把网关总数据点数**平均分给每个适配器/连接器**冒充各自的数量，改为插件统计接口的真实值；规则编辑器保存时把不完整的规则直接提交；`websocketService` 的 async Promise 执行器（异常不会使 Promise 失败）；`<style jsx global>`（Vite 不支持）；列表缺少 key；以及约 90 个未使用的变量/导入。
+- **设置模块未接入**：`SettingsPage` 及 11 个设置组件没有挂到路由上，调用的约 30 个接口（`/settings/*`、`/roles`、`/users`、`/audit-logs`）后端均未实现；剩余 15 个 tsc 错误和 29 个 lint 错误都在这里。修复了其中会导致渲染崩溃的 `Text` 未定义、不存在的图标 `TestOutlined`。（已在第 10 节删除。）
+
+### 9.5 验证
+本机 `go test -race ./...` 26 个包全部通过；ARMv7（QEMU）26 个包全部通过；`go vet`、`gofmt -s -l .` 无输出；前端 `npm test` 9 项通过、`npm run build` 成功。
+
+## 10. 第七轮：删除设置模块、前端 lint 清零、gosec 清零
+
+### 10.1 前端
+- **删除未接入的设置模块**：`SettingsPage`、`components/settings/*`（11 个文件）、`settingsService`、`types/settings`。它们没有挂到路由上，调用的接口后端均未实现。
+- **ESLint 警告 229 → 0**（CI 的 `--max-warnings 0` 规则不变）：
+  - `any` 全部换成具体类型。新增 `types/realtime.ts`、`utils/errors.ts`（`asHttpError`，用于 catch 块）、`utils/ruleData.ts`（读取自由格式的动作配置）、`utils/compositeData.ts`，均有单元测试。
+  - hooks 依赖逐个审查：数据加载函数改为 `useCallback` 并列出真实依赖；只需在挂载时或认证完成后执行一次的加载，用 ref 调用最新的函数；列表页只依赖 `current/pageSize`，不依赖 `total`，避免"更新 total → 重新请求"的循环。
+- **类型收紧过程中发现的问题**：
+  - 5 个规则编辑器的 `writeRuleJson` 读到的是过期的条件和动作（闭包陈旧），改为通过 ref 读取。
+  - 插件详情弹窗的 8 个请求混用了显示名和插件名，统一使用 `plugin.name`。
+  - 切换插件时日志不会重新加载。
+  - 图表 CSV 导出的 subject 字段取错。
+  - 复合数据选择器只读 `values`，读不到 `elements`。
+  - 系统监控图表读取不存在的 `network_*_per_sec` 字段。
+  - 规则列表"清空筛选"的语义改为传 undefined（不再传 false）。
+- 前端单元测试 9 → 14 项。
+
+### 10.2 gosec（220 → 0，标注 29 处）
+- **G104 未处理错误（65）**：
+  - 有实际影响的已改为处理错误：
+    - Web WebSocket 的 NATS 订阅失败会被静默忽略，现在记录日志。
+    - 设置写超时失败时退出写协程。
+    - WebSocket 连接器写入失败时关闭客户端。
+    - JetStream 的 Ack/Nak 失败现在记录。
+    - 告警 ID 的 `crypto/rand` 失败时会生成全零 ID，改为回退到时间戳。
+    - 告警通知渠道配置格式错误现在记录警告。
+    - benchmark 工具写文件失败时直接退出。
+    - modbus sidecar 发送响应失败时记录日志。
+  - 其余的 Close/Disconnect 调用显式写成 `_ =`。
+- **G404（90）**：只出现在模拟适配器中，用来生成演示用的传感器数据。随机数集中到各自包的 `simrand.go`，并加注 `#nosec`。
+- **G115 整数转换（47）**：
+  - 字节数、包数计数器用 `utils.SaturatingInt64` 做饱和转换。
+  - `validateMin/validateMax` 遇到负的 min/max 且字段是无符号类型时，以前会得到错误结果，已修正。
+  - 端口号为无符号类型时检查是否超过 65535。
+  - `ToInt64(uint)` 溢出时返回失败。
+  - Modbus 有符号寄存器的补码解释、哈希取模等确认安全的转换，加注 `#nosec` 并写明理由。
+- **G301/G306**：规则目录、配置目录、插件目录改为 0750，规则文件改为 0600。
+- **G304**：路径来自配置，统一做 `filepath.Clean`。
+- **G402**：`skip_verify` 只在用户显式配置时生效，加注说明。
+- **modbus sidecar 原来无法编译**：`go.sum` 缺少 gopsutil 依赖，已执行 `go mod tidy`。
+
+### 10.3 验证
+- 后端：
+  - 本机 `go test -race ./...` 26 个包全部通过。
+  - `go vet`、`gofmt -s -l .` 无输出。
+  - ARMv7 交叉编译通过。
+  - gosec（Go 1.24）`Issues: 0`。
+- 前端：
+  - `npm run lint` 0 警告。
+  - `tsc --noEmit` 0 错误。
+  - `npm test` 14 项通过。
+  - `npm run build` 成功。

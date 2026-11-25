@@ -11,7 +11,7 @@ import {
   Badge,
   Statistic,
   Progress,
-  Divider,
+  
   List,
   Alert as AntAlert,
   Tabs
@@ -66,7 +66,6 @@ const Dashboard: React.FC = () => {
     memoryUsage: 0
   });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [recentAlerts, setRecentAlerts] = useState<Alert[]>([]);
   const [metricsData, setMetricsData] = useState<LightweightMetrics | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
@@ -142,9 +141,9 @@ const Dashboard: React.FC = () => {
       setStats(prevStats => {
         const newStats = {
           uptime: uptime,
-          activeDevices: systemStatus.active_connections || systemStatus.active_plugins || 0,
+          activeDevices: Number(systemStatus.active_connections ?? systemStatus.active_plugins ?? 0),
           dataPoints: realtimeData.iotData?.length || 0,
-          errorRate: systemStatus.error_rate || 0,
+          errorRate: Number(systemStatus.error_rate ?? 0),
           cpuUsage: systemStatus.cpu_usage || 0,
           memoryUsage: systemStatus.memory_usage || 0
         };
@@ -175,28 +174,32 @@ const Dashboard: React.FC = () => {
     }
   }, []);
 
-  // 初始化数据加载
+  // 初始化数据加载：只在挂载时执行一次。fetchStats 随实时数据变化，
+  // 通过 ref 调用最新的加载函数，避免每条实时消息都触发整页重新加载
+  const loadersRef = useRef({ fetchPlugins, fetchStats, fetchAlerts, fetchLightweightMetrics });
+  loadersRef.current = { fetchPlugins, fetchStats, fetchAlerts, fetchLightweightMetrics };
   useEffect(() => {
+    const loaders = loadersRef.current;
     const loadData = async () => {
       setLoading(true);
       await Promise.all([
-        fetchPlugins(), 
-        fetchStats(), 
-        fetchAlerts(),
-        fetchLightweightMetrics(true) // 第一次显示loading
+        loaders.fetchPlugins(),
+        loaders.fetchStats(),
+        loaders.fetchAlerts(),
+        loaders.fetchLightweightMetrics(true) // 第一次显示loading
       ]);
       setLoading(false);
     };
 
     loadData();
-  }, []); // 只在组件挂载时执行一次
+  }, []);
 
   // 监听实时数据变化 - 使用防抖
   useEffect(() => {
     if (realtimeData?.systemStatus || realtimeData?.iotData) {
       fetchStats();
     }
-  }, [fetchStats]); // 依赖fetchStats而不是具体的实时数据
+  }, [fetchStats, realtimeData?.systemStatus, realtimeData?.iotData]);
 
   // 定期更新轻量级指标 - 优化版本，避免频繁创建定时器
   useEffect(() => {
@@ -256,19 +259,19 @@ const Dashboard: React.FC = () => {
     setLoading(false);
   }, [fetchPlugins, fetchStats, fetchAlerts, fetchLightweightMetrics, isConnected, reconnect]);
 
-  const testWebSocketConnection = async () => {
+  const testWebSocketConnection = useCallback(async () => {
     
     try {
       // 测试API连接
       const response = await fetch('/api/v1/system/status');
-      const data = await response.json();
+      await response.json();
     } catch (error) {
       console.error('❌ API连接失败:', error);
     }
     
     // 手动重连WebSocket
     reconnect();
-  };
+  }, [reconnect]);
 
   const clearAuthAndReload = () => {
     const { logout } = useAuthStore.getState();
@@ -308,7 +311,7 @@ const Dashboard: React.FC = () => {
     }, 5000); // 5秒后如果还没连接就测试
 
     return () => clearTimeout(timer);
-  }, [isConnected, reconnect]);
+  }, [isConnected, testWebSocketConnection]);
 
   // 使用useMemo缓存计算结果，避免每次渲染都重新计算
   const formattedMetrics = useMemo(() => {
@@ -500,7 +503,7 @@ const Dashboard: React.FC = () => {
                       avatar={getAlertIcon(alert.level)}
                       title={
                         <Space>
-                          <Tag size="small" color={getAlertColor(alert.level)}>{alert.level.toUpperCase()}</Tag>
+                          <Tag color={getAlertColor(alert.level)}>{alert.level.toUpperCase()}</Tag>
                           <Text style={{ fontSize: '13px' }}>{alert.title || alert.description}</Text>
                         </Space>
                       }
@@ -632,7 +635,7 @@ const Dashboard: React.FC = () => {
         refreshInterval={3000}
       />
     }
-  ], [formattedMetrics, metricsLoading, stats, isConnected, connectionState, currentTime, plugins, loading, recentAlerts]);
+  ], [formattedMetrics, metricsLoading, stats, isConnected, connectionState, currentTime, plugins, loading, recentAlerts, refreshData]);
 
       if (loading) {
     return (
@@ -684,7 +687,6 @@ const Dashboard: React.FC = () => {
           type="warning"
           showIcon
           closable
-          size="small"
           style={{ marginBottom: 12 }}
         />
       )}

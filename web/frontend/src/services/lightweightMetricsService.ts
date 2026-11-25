@@ -189,7 +189,7 @@ class LightweightMetricsService {
   /**
    * 解析纯文本格式的指标数据
    */
-  private parseTextMetrics(text: string): LightweightMetrics {
+  private parseTextMetrics(_text: string): LightweightMetrics {
     // 这里实现简单的文本解析，实际项目中可能需要更复杂的解析逻辑
     // 由于实现复杂，这里返回默认值
     return {

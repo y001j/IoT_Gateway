@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, Card, Form, Input, Select, Space, Typography, Row, Col, Divider, Button, InputNumber, Switch, Tag, Tabs, Alert } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Modal, Card, Form, Input, Select, Space, Typography, Row, Col, Button, InputNumber, Switch, Tag, Tabs, Alert } from 'antd';
 import { DatabaseOutlined, InfoCircleOutlined, FunctionOutlined, EyeOutlined, EditOutlined, CodeOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import { useBaseRuleEditor } from './base/BaseRuleEditor';
+import { useBaseRuleEditor } from './base/useBaseRuleEditor';
 import ConditionBuilder from './base/ConditionBuilder';
 import ActionFormBuilder from './base/ActionFormBuilder';
 import ExpressionEditor from './base/ExpressionEditor';
 import { Rule, Condition, Action } from '../types/rule';
 
+import { dataTypeName } from '../utils/ruleData';
 const { Option } = Select;
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -34,7 +35,7 @@ const ComplexDataRuleEditor: React.FC<ComplexDataRuleEditorProps> = ({
   const inferDataTypeFromRule = (rule: Rule): string => {
     // 1. 从rule的data_type字段推断
     if (rule.data_type) {
-      return rule.data_type;
+      return dataTypeName(rule.data_type);
     }
     
     // 2. 从tags推断
@@ -129,18 +130,20 @@ const ComplexDataRuleEditor: React.FC<ComplexDataRuleEditorProps> = ({
       console.log('加载的动作配置:', rule.actions);
       setConditions(rule.conditions);
       setActions(rule.actions || []);
-      updateJsonValue();
+      // 以前此处读到的是上一次渲染的 conditions/actions（刚调用的 setState 尚未生效），
+      // JSON 视图显示的是上一条规则的内容
+      writeRuleJsonRef.current(rule.conditions, rule.actions || []);
     }
   }, [visible, rule]);
 
   // 监听actions变化，同步更新JSON
   useEffect(() => {
     if (activeTab === 'json' || activeTab === 'preview') {
-      updateJsonValue();
+      writeRuleJsonRef.current(conditions, actions);
     }
   }, [actions, conditions, activeTab]);
 
-  const updateJsonValue = () => {
+  const writeRuleJson = (conds: typeof conditions, acts: typeof actions) => {
     try {
       const currentRule = {
         id: rule?.id || '',
@@ -149,8 +152,8 @@ const ComplexDataRuleEditor: React.FC<ComplexDataRuleEditorProps> = ({
         priority: form.getFieldValue('priority') || 50,
         enabled: form.getFieldValue('enabled') !== false,
         data_type: finalDataType,
-        conditions: conditions,
-        actions: actions,
+        conditions: conds,
+        actions: acts,
         tags: {
           ...rule?.tags,
           data_type: finalDataType,
@@ -166,6 +169,11 @@ const ComplexDataRuleEditor: React.FC<ComplexDataRuleEditorProps> = ({
       setJsonError('JSON生成失败');
     }
   };
+  const updateJsonValue = () => writeRuleJson(conditions, actions);
+  // effect 中通过 ref 调用最新的函数（不放进依赖数组，避免用户编辑时被重置）
+  const writeRuleJsonRef = useRef(writeRuleJson);
+  writeRuleJsonRef.current = writeRuleJson;
+
 
   const handleJsonChange = (value: string) => {
     setJsonValue(value);

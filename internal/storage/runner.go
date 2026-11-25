@@ -407,7 +407,7 @@ func (r *SinkRunner) Stats() RunnerStats {
 	if err != nil {
 		return st
 	}
-	st.Pending = ci.NumPending + uint64(ci.NumAckPending)
+	st.Pending = ci.NumPending + uint64(ci.NumAckPending) // #nosec G115 -- 待确认数为非负数
 	si, err := r.store.js.StreamInfo(r.store.cfg.Stream)
 	if err == nil {
 		// 流中最早的消息序号已经超过消费者确认到的位置：中间的消息在被写入目标之前就被淘汰了

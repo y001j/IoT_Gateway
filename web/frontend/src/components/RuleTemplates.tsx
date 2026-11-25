@@ -166,7 +166,7 @@ const RuleTemplates: React.FC<RuleTemplatesProps> = ({ visible, onClose, onSelec
           type: 'simple',
           field: 'key',
           operator: 'in',
-          value: ['temperature', 'humidity', 'pressure'] as any
+          value: ['temperature', 'humidity', 'pressure']
         } as Condition,
         actions: [
           {

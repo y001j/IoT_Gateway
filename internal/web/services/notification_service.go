@@ -255,7 +255,7 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 				log.Error().Err(err).Str("phone", phone).Msg("发送短信失败")
 				continue
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			log.Info().
 				Str("channel_id", channel.ID).

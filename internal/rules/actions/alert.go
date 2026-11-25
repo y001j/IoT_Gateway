@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -190,7 +191,9 @@ func (h *AlertHandler) parseConfig(config map[string]interface{}) (*AlertConfig,
 	// 解析channels
 	if channelsData, ok := config["channels"]; ok {
 		channelsBytes, _ := json.Marshal(channelsData)
-		json.Unmarshal(channelsBytes, &alertConfig.Channels)
+		if err := json.Unmarshal(channelsBytes, &alertConfig.Channels); err != nil {
+			log.Warn().Err(err).Msg("告警通知渠道配置格式错误，已忽略")
+		}
 	}
 
 	// 解析tags
@@ -569,7 +572,10 @@ func toFloat64(v interface{}) (float64, bool) {
 // generateAlertID 生成报警ID
 func (h *AlertHandler) generateAlertID() string {
 	bytes := make([]byte, 8)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		// 以前忽略错误：失败时所有告警都会得到全零 ID
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	return hex.EncodeToString(bytes)
 }
 
@@ -895,30 +901,18 @@ func (h *AlertHandler) sendWebhookAlert(ctx context.Context, alert *rules.Alert,
 	return nil
 }
 
-// sendEmailAlert 发送邮件报警（占位符实现）
-func (h *AlertHandler) sendEmailAlert(alert *rules.Alert, config map[string]interface{}) error {
-	// 这里是邮件发送的占位符实现
-	// 在实际实现中，应该集成SMTP客户端
-	log.Info().
-		Str("alert_id", alert.ID).
-		Str("type", "email").
-		Interface("config", rules.RedactConfig(config)).
-		Msg("邮件报警发送（占位符实现）")
+// ErrChannelNotImplemented 渠道尚未实现
+var ErrChannelNotImplemented = errors.New("该通知渠道尚未实现，请使用 webhook/nats 渠道或 Web 告警的通知渠道")
 
-	return nil
+// sendEmailAlert 邮件渠道尚未实现。以前什么也不做却返回成功，规则执行结果显示"已发送"，
+// 实际上从未发出任何邮件；现在如实返回错误。
+func (h *AlertHandler) sendEmailAlert(alert *rules.Alert, config map[string]interface{}) error {
+	return fmt.Errorf("email: %w", ErrChannelNotImplemented)
 }
 
-// sendSMSAlert 发送短信报警（占位符实现）
+// sendSMSAlert 短信渠道尚未实现（同上）
 func (h *AlertHandler) sendSMSAlert(alert *rules.Alert, config map[string]interface{}) error {
-	// 这里是短信发送的占位符实现
-	// 在实际实现中，应该集成短信服务提供商API
-	log.Info().
-		Str("alert_id", alert.ID).
-		Str("type", "sms").
-		Interface("config", rules.RedactConfig(config)).
-		Msg("短信报警发送（占位符实现）")
-
-	return nil
+	return fmt.Errorf("sms: %w", ErrChannelNotImplemented)
 }
 
 // publishAlertToNATS 发布告警到NATS

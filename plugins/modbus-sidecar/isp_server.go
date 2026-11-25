@@ -203,9 +203,9 @@ func (conn *ModbusLongConnection) Close() {
 	if conn.handler != nil {
 		switch conn.config.Mode {
 		case "tcp":
-			conn.handler.(*modbus.TCPClientHandler).Close()
+			_ = conn.handler.(*modbus.TCPClientHandler).Close()
 		case "rtu":
-			conn.handler.(*modbus.RTUClientHandler).Close()
+			_ = conn.handler.(*modbus.RTUClientHandler).Close()
 		}
 	}
 	conn.connected = false
@@ -325,7 +325,7 @@ func (s *ISPServer) Stop() error {
 
 	// 关闭监听器
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 
 	// 停止数据定时器
@@ -346,7 +346,7 @@ func (s *ISPServer) Stop() error {
 	// 关闭所有客户端连接
 	s.clientsMu.Lock()
 	for _, client := range s.clients {
-		client.conn.Close()
+		_ = client.conn.Close()
 	}
 	s.clients = make(map[string]*ISPClientConn)
 	s.clientsMu.Unlock()
@@ -402,7 +402,7 @@ func (s *ISPServer) acceptLoop() {
 // handleConnection 处理客户端连接
 func (c *ISPClientConn) handleConnection() {
 	defer func() {
-		c.conn.Close()
+		_ = c.conn.Close()
 
 		// 从客户端列表中移除
 		c.server.clientsMu.Lock()
@@ -812,7 +812,9 @@ func (c *ISPClientConn) sendSuccessResponse(id string, data interface{}) {
 		Payload:   payload,
 	}
 
-	c.sendMessage(msg)
+	if err := c.sendMessage(msg); err != nil {
+		log.Warn().Err(err).Str("id", id).Msg("发送响应失败")
+	}
 }
 
 // sendErrorResponse 发送错误响应
@@ -830,7 +832,9 @@ func (c *ISPClientConn) sendErrorResponse(id string, errMsg string) {
 		Payload:   payload,
 	}
 
-	c.sendMessage(msg)
+	if err := c.sendMessage(msg); err != nil {
+		log.Warn().Err(err).Str("id", id).Msg("发送响应失败")
+	}
 }
 
 // 指标收集辅助方法

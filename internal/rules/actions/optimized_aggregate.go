@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -346,11 +347,16 @@ func (h *OptimizedAggregateHandler) GetPerformanceConfig() *PerformanceConfig {
 // UpdatePerformanceConfig 更新性能配置
 func (h *OptimizedAggregateHandler) UpdatePerformanceConfig(config *PerformanceConfig) {
 	if config.BatchSize > 0 {
-		h.shardedManager.batchProcessor.batchSize = int32(config.BatchSize)
+		bs := config.BatchSize
+		if bs > math.MaxInt32 {
+			bs = math.MaxInt32
+		}
+		h.shardedManager.batchProcessor.batchSize.Store(int32(bs)) // #nosec G115 -- 已限制在 int32 范围内
 	}
 
 	if config.FlushInterval > 0 {
-		h.shardedManager.batchProcessor.flushInterval = config.FlushInterval
+		// 刷新间隔对之后启动的批处理协程生效
+		h.shardedManager.batchProcessor.flushInterval.Store(int64(config.FlushInterval))
 	}
 
 	log.Info().

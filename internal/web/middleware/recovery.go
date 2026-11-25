@@ -26,7 +26,7 @@ func Recovery() func(http.Handler) http.Handler {
 						"error":   "Internal Server Error",
 					}
 
-					json.NewEncoder(w).Encode(response)
+					_ = json.NewEncoder(w).Encode(response) // 已在返回错误响应，写入失败无法再处理
 				}
 			}()
 

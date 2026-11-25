@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form,
+  
   Select,
   InputNumber,
   Input,
@@ -9,8 +9,8 @@ import {
   Row,
   Col,
   Typography,
-  Tooltip,
-  Switch
+  
+ 
 } from 'antd';
 import { 
   EnvironmentOutlined,
@@ -20,7 +20,7 @@ import {
 } from '@ant-design/icons';
 import GpsFieldEditor from './GpsFieldEditor';
 
-const { Text, Title } = Typography;
+const { Text  } = Typography;
 const { Option } = Select;
 
 interface GpsActionConfig {
@@ -50,7 +50,7 @@ export const GpsActionEditor: React.FC<GpsActionEditorProps> = ({
   },
   onChange
 }) => {
-  const handleChange = (field: keyof GpsActionConfig, newValue: any) => {
+  const handleChange = (field: keyof GpsActionConfig, newValue: unknown) => {
     if (onChange) {
       onChange({
         ...value,

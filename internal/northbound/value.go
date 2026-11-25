@@ -26,7 +26,10 @@ func ToInt64(v interface{}) (int64, bool) {
 	case int64:
 		return n, true
 	case uint:
-		return int64(n), true
+		if uint64(n) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(n), true // #nosec G115 -- 上面已检查范围
 	case uint8:
 		return int64(n), true
 	case uint16:

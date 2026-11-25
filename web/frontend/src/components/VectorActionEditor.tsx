@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form,
+  
   Select,
   InputNumber,
   Input,
@@ -19,7 +19,7 @@ import {
   FunctionOutlined
 } from '@ant-design/icons';
 
-const { Text, Title } = Typography;
+const { Text  } = Typography;
 const { Option } = Select;
 
 interface Vector3DInput {
@@ -50,7 +50,7 @@ export const VectorActionEditor: React.FC<VectorActionEditorProps> = ({
   },
   onChange
 }) => {
-  const handleChange = (field: keyof VectorActionConfig, newValue: any) => {
+  const handleChange = (field: keyof VectorActionConfig, newValue: unknown) => {
     if (onChange) {
       onChange({
         ...value,

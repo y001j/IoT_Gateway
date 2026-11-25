@@ -332,7 +332,7 @@ func (p *ISPAdapterProxy) reconnect(ctx context.Context) error {
 	p.mu.Lock()
 	old := p.client
 	p.mu.Unlock()
-	old.Disconnect()
+	_ = old.Disconnect()
 
 	// 创建新的ISP客户端
 	newClient := NewISPClient(p.address)
@@ -346,11 +346,11 @@ func (p *ISPAdapterProxy) reconnect(ctx context.Context) error {
 	if p.config != nil {
 		configMsg, err := NewConfigMessage("config-reconnect-"+fmt.Sprintf("%d", time.Now().Unix()), *p.config)
 		if err != nil {
-			newClient.Disconnect()
+			_ = newClient.Disconnect()
 			return fmt.Errorf("创建重连配置消息失败: %w", err)
 		}
 		if _, err := newClient.SendRequest(configMsg, 10*time.Second); err != nil {
-			newClient.Disconnect()
+			_ = newClient.Disconnect()
 			return fmt.Errorf("重新发送配置失败: %w", err)
 		}
 	}
@@ -579,7 +579,7 @@ func (p *ISPAdapterProxy) Close() error {
 
 	// 断开ISP客户端连接
 	if p.client != nil {
-		p.client.Disconnect()
+		_ = p.client.Disconnect()
 	}
 
 	p.SetHealthStatus("healthy", "ISP adapter proxy closed")

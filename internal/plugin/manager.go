@@ -220,36 +220,7 @@ func (m *Manager) initSinks() error {
 		// 调试输出原始sink映射
 		log.Debug().Str("name", name).Interface("sink_map", sinkMap).Msg("原始连接器映射")
 
-		var configData []byte
-		var err error
-
-		// 检查是否使用新格式（扁平化配置）还是旧格式（嵌套config）
-		if configField, hasConfig := sinkMap["config"]; hasConfig {
-			// 旧格式：使用嵌套的config字段
-			log.Debug().Str("name", name).Interface("config_field", configField).Msg("使用遗留连接器配置格式（嵌套config字段）")
-			configData, err = json.Marshal(configField)
-		} else {
-			// 新格式：使用扁平化配置，移除控制字段但保留必需字段
-			log.Debug().Str("name", name).Msg("使用新连接器配置格式（扁平化结构）")
-
-			// 创建配置副本，移除控制字段但保留必需字段
-			configMap := make(map[string]interface{})
-			for k, v := range sinkMap {
-				// 只跳过enabled字段，保留name和type字段
-				if k != "enabled" {
-					configMap[k] = v
-				}
-			}
-
-			// 确保必需字段存在
-			configMap["name"] = name
-			configMap["type"] = sinkType
-
-			// 调试输出配置映射
-			log.Debug().Str("name", name).Interface("config_map", configMap).Msg("构建的连接器配置映射")
-
-			configData, err = json.Marshal(configMap)
-		}
+		configData, err := sinkConfigData(sinkMap, name, sinkType)
 
 		if err != nil {
 			log.Error().Err(err).Str("name", name).Msg("序列化连接器配置失败，跳过该连接器")
@@ -634,7 +605,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 			}
 		}
 		// 关闭插件加载器
-		m.loader.Close()
+		_ = m.loader.Close()
 	}
 
 	return nil
@@ -691,7 +662,7 @@ func ensureDir(dir string) error {
 	_, err := os.Stat(dir)
 	if os.IsNotExist(err) {
 		// 目录不存在，创建
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 	}
@@ -1012,12 +983,20 @@ func (m *Manager) StartPlugin(name string) error {
 		return m.startExternalPlugin(name, meta)
 	}
 
-	// 如果没找到外部插件，尝试启动内置适配器
+	// 配置文件中按名称定义的实例（例如 name: mock1, type: mock）。
+	// 以前只把 name 当作类型去注册表里查，实例名与类型不同时停止后无法再启动，
+	// RestartPlugin（停止 + 启动）会把正在运行的实例停掉。
+	if _, found := m.findPluginConfigMap(name, string(TypeAdapter)); found {
+		return m.startBuiltinAdapter(name)
+	}
+	if _, found := m.findPluginConfigMap(name, string(TypeSink)); found {
+		return m.startBuiltinSink(name)
+	}
+
+	// 没有配置时，把名称当作内置类型启动（使用默认配置）
 	if _, exists := southbound.Registry[name]; exists {
 		return m.startBuiltinAdapter(name)
 	}
-
-	// 如果没找到内置适配器，尝试启动内置连接器
 	if _, exists := northbound.Registry[name]; exists {
 		return m.startBuiltinSink(name)
 	}
@@ -1093,32 +1072,25 @@ func (m *Manager) startExternalPlugin(name string, meta *Meta) error {
 
 // startBuiltinAdapter 启动内置适配器
 func (m *Manager) startBuiltinAdapter(name string) error {
-	// 从全局Registry创建适配器实例
-	adapter, ok := southbound.Create(name)
-	if !ok {
-		return fmt.Errorf("failed to create builtin adapter '%s'", name)
-	}
-
-	// 获取配置（如果有的话）
-	pluginConfigMap, found := m.findPluginConfigMap(name, "adapter")
-	var pluginConfig map[string]interface{}
-	if found {
-		if cfg, ok := pluginConfigMap["config"].(map[string]interface{}); ok {
-			pluginConfig = cfg
+	// 配置中有同名实例时使用它的类型和配置（与网关启动时 initAdapters 的方式一致）
+	adapterType := name
+	var configData []byte
+	var err error
+	if cfgMap, found := m.findPluginConfigMap(name, string(TypeAdapter)); found {
+		if t, ok := cfgMap["type"].(string); ok && t != "" {
+			adapterType = t
 		}
+		configData, err = adapterConfigData(cfgMap, name, adapterType)
+	} else {
+		configData, err = json.Marshal(map[string]interface{}{"name": name, "type": adapterType})
 	}
-	if pluginConfig == nil {
-		pluginConfig = make(map[string]interface{})
-	}
-
-	// 为内置适配器设置基本配置
-	if pluginConfig["name"] == nil {
-		pluginConfig["name"] = name
-	}
-
-	configData, err := json.Marshal(pluginConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal builtin adapter config for %s: %w", name, err)
+		return fmt.Errorf("failed to build builtin adapter config for %s: %w", name, err)
+	}
+
+	adapter, ok := southbound.Create(adapterType)
+	if !ok {
+		return fmt.Errorf("failed to create builtin adapter '%s' (type %s)", name, adapterType)
 	}
 
 	if err := adapter.Init(configData); err != nil {
@@ -1139,34 +1111,26 @@ func (m *Manager) startBuiltinAdapter(name string) error {
 
 // startBuiltinSink 启动内置连接器
 func (m *Manager) startBuiltinSink(name string) error {
-	// 从全局Registry创建连接器实例
-	sink, ok := northbound.Create(name)
-	if !ok {
-		return fmt.Errorf("failed to create builtin sink '%s'", name)
-	}
-
-	// 获取配置（如果有的话）
-	pluginConfigMap, found := m.findPluginConfigMap(name, "sink")
-	var pluginConfig map[string]interface{}
-	if found {
-		if cfg, ok := pluginConfigMap["config"].(map[string]interface{}); ok {
-			pluginConfig = cfg
+	// 配置中有同名实例时使用它的类型和配置（与网关启动时 initSinks 的方式一致）
+	sinkType := name
+	var cfgMap map[string]interface{}
+	if c, found := m.findPluginConfigMap(name, string(TypeSink)); found {
+		cfgMap = c
+		if t, ok := c["type"].(string); ok && t != "" {
+			sinkType = t
 		}
+	} else {
+		cfgMap = map[string]interface{}{"name": name, "type": sinkType}
 	}
-	if pluginConfig == nil {
-		pluginConfig = make(map[string]interface{})
-	}
-
-	// 为内置连接器设置基本配置
-	if pluginConfig["name"] == nil {
-		pluginConfig["name"] = name
-	}
-
-	configData, err := json.Marshal(pluginConfig)
+	configData, err := sinkConfigData(cfgMap, name, sinkType)
 	if err != nil {
-		return fmt.Errorf("failed to marshal builtin sink config for %s: %w", name, err)
+		return fmt.Errorf("failed to build builtin sink config for %s: %w", name, err)
 	}
 
+	sink, ok := northbound.Create(sinkType)
+	if !ok {
+		return fmt.Errorf("failed to create builtin sink '%s' (type %s)", name, sinkType)
+	}
 	if err := sink.Init(configData); err != nil {
 		return fmt.Errorf("failed to init builtin sink '%s': %w", name, err)
 	}
@@ -1177,6 +1141,12 @@ func (m *Manager) startBuiltinSink(name string) error {
 	}
 	if nameSetter, ok := sink.(interface{ SetName(string) }); ok {
 		nameSetter.SetName(name)
+	}
+	if natsAwareSink, ok := sink.(northbound.NATSAwareSink); ok {
+		natsAwareSink.SetNATSConnection(m.bus)
+	}
+	if bc := storage.ParseBufferConfig(cfgMap["buffer"]); bc.Enabled {
+		m.bufferConfigs[name] = bc
 	}
 
 	if err := sink.Start(m.ctx); err != nil {
@@ -1191,6 +1161,23 @@ func (m *Manager) startBuiltinSink(name string) error {
 	m.invalidatePluginCache()
 
 	return nil
+}
+
+// sinkConfigData 生成连接器的初始化配置：旧格式使用嵌套的 config 字段，
+// 新格式使用扁平化配置（去掉 enabled，确保 name/type 存在）
+func sinkConfigData(sinkMap map[string]interface{}, name, sinkType string) ([]byte, error) {
+	if configField, hasConfig := sinkMap["config"]; hasConfig {
+		return json.Marshal(configField)
+	}
+	configMap := make(map[string]interface{}, len(sinkMap)+2)
+	for k, v := range sinkMap {
+		if k != "enabled" {
+			configMap[k] = v
+		}
+	}
+	configMap["name"] = name
+	configMap["type"] = sinkType
+	return json.Marshal(configMap)
 }
 
 // findPluginConfigMap finds the full configuration map for a plugin from viper.

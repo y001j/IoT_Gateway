@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Modal,
   Tabs,
@@ -37,6 +37,7 @@ import Editor from '@monaco-editor/react';
 import { pluginService } from '../services/pluginService';
 import type { Plugin } from '../types/plugin';
 
+import { asHttpError } from '../utils/errors';
 const { Option } = Select;
 const { Text } = Typography;
 
@@ -66,7 +67,7 @@ interface PluginStats {
   cpuUsage: number;
   networkRx: number;
   networkTx: number;
-  customMetrics: Record<string, any>;
+  customMetrics: Record<string, unknown>;
 }
 
 export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
@@ -77,66 +78,91 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('info');
-  const [config, setConfig] = useState<any>(null);
+  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [configEditing, setConfigEditing] = useState(false);
   const [logs, setLogs] = useState<PluginLog[]>([]);
   const [stats, setStats] = useState<PluginStats | null>(null);
   const [configForm] = Form.useForm();
 
   // 获取插件配置
-  const fetchConfig = async () => {
+  const fetchConfig = useCallback(async () => {
     if (!plugin) return;
     try {
-      const configData = await pluginService.getPluginConfig(String(plugin.id));
+      // 后端插件接口按名称查找（返回的插件 id 都是 0），以前按 id 请求，弹窗里的所有操作都会失败
+      const configData = await pluginService.getPluginConfig(plugin.name);
       setConfig(configData);
       configForm.setFieldsValue(configData);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取插件配置失败: ' + error.message);
     }
-  };
+  }, [plugin, configForm]);
 
   // 获取插件日志
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     if (!plugin) return;
     try {
-      const response = await pluginService.getPluginLogs(String(plugin.id), {
+      const response = await pluginService.getPluginLogs(plugin.name, {
         page: 1,
         page_size: 50,
         level: '',
       });
       // 转换日志数据类型
-      const convertedLogs = response.data.map((log: any) => ({
-        ...log,
+      // 接口返回的 id 是数字、timestamp 是字符串，转换为本组件使用的格式
+      setLogs(response.data.map((log) => ({
         id: String(log.id),
-      }));
-      setLogs(convertedLogs);
-    } catch (error: any) {
+        level: log.level,
+        message: log.message,
+        source: log.source,
+        timestamp: new Date(log.timestamp),
+      })));
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取插件日志失败: ' + error.message);
     }
-  };
+  }, [plugin]);
 
   // 获取插件统计
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     if (!plugin) return;
     try {
-      const statsData = await pluginService.getPluginStats(String(plugin.id));
-      // 类型转换以确保兼容性
-      setStats(statsData as any);
-    } catch (error: any) {
+      const statsData = await pluginService.getPluginStats(plugin.name);
+      // 接口字段（data_points_total 等）映射到本组件的显示格式。
+      // 以前直接 as any 塞入，字段名对不上，统计数字全部显示为空
+      setStats({
+        name: plugin.name,
+        status: plugin.status,
+        uptime: statsData.uptime_seconds,
+        dataPointsCount: statsData.data_points_total,
+        errorCount: statsData.errors_total,
+        lastActivity: new Date(statsData.last_update),
+        memoryUsage: statsData.memory_usage,
+        cpuUsage: statsData.cpu_usage,
+        networkRx: 0,
+        networkTx: 0,
+        customMetrics: {
+          average_latency: statsData.average_latency,
+          data_points_hour: statsData.data_points_hour,
+          errors_hour: statsData.errors_hour,
+        },
+      });
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取插件统计失败: ' + error.message);
     }
-  };
+  }, [plugin]);
 
   // 启动插件
   const handleStart = async () => {
     if (!plugin) return;
     try {
       setLoading(true);
-      await pluginService.startPlugin(String(plugin.id));
+      await pluginService.startPlugin(plugin.name);
       message.success('插件启动成功');
       onUpdate();
       await fetchStats();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('启动插件失败: ' + error.message);
     } finally {
       setLoading(false);
@@ -148,11 +174,12 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
     if (!plugin) return;
     try {
       setLoading(true);
-      await pluginService.stopPlugin(String(plugin.id));
+      await pluginService.stopPlugin(plugin.name);
       message.success('插件停止成功');
       onUpdate();
       await fetchStats();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('停止插件失败: ' + error.message);
     } finally {
       setLoading(false);
@@ -164,11 +191,12 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
     if (!plugin) return;
     try {
       setLoading(true);
-      await pluginService.restartPlugin(String(plugin.id));
+      await pluginService.restartPlugin(plugin.name);
       message.success('插件重启成功');
       onUpdate();
       await fetchStats();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('重启插件失败: ' + error.message);
     } finally {
       setLoading(false);
@@ -183,18 +211,19 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
       setLoading(true);
       
       // 验证配置
-      const validation = await pluginService.validatePluginConfig(String(plugin.id), values);
+      const validation = await pluginService.validatePluginConfig(plugin.name, values);
       if (!validation.valid) {
         message.error('配置验证失败: ' + (validation.errors || []).join(', '));
         return;
       }
 
       // 保存配置
-      await pluginService.updatePluginConfig(String(plugin.id), values);
+      await pluginService.updatePluginConfig(plugin.name, values);
       message.success('配置保存成功');
       setConfigEditing(false);
       setConfig(values);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('保存配置失败: ' + error.message);
     } finally {
       setLoading(false);
@@ -281,7 +310,7 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
       fetchLogs();
       fetchStats();
     }
-  }, [visible, plugin]);
+  }, [visible, plugin, fetchConfig, fetchLogs, fetchStats]);
 
   if (!plugin) return null;
 

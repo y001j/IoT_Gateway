@@ -2,8 +2,10 @@ package services
 
 import (
 	"fmt"
+	"github.com/y001j/iot-gateway/internal/utils"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -84,8 +86,8 @@ func (s *systemService) GetStatus() (*models.SystemStatus, error) {
 			status.CPUUsage = metrics.CPUUsage
 			status.MemoryUsage = metrics.MemoryUsage
 			status.DiskUsage = metrics.DiskUsage
-			status.NetworkIn = int64(metrics.NetworkInBytes)
-			status.NetworkOut = int64(metrics.NetworkOutBytes)
+			status.NetworkIn = utils.SaturatingInt64(metrics.NetworkInBytes)
+			status.NetworkOut = utils.SaturatingInt64(metrics.NetworkOutBytes)
 		} else {
 			// 如果获取指标失败，使用默认值
 			var m runtime.MemStats
@@ -136,8 +138,8 @@ func (s *systemService) GetMetrics() (*models.SystemMetrics, error) {
 				metrics.CPUUsage = sysMetrics.CPUUsage
 				metrics.MemoryUsage = sysMetrics.MemoryUsage
 				metrics.DiskUsage = sysMetrics.DiskUsage
-				metrics.NetworkInBytes = int64(sysMetrics.NetworkInBytes)
-				metrics.NetworkOutBytes = int64(sysMetrics.NetworkOutBytes)
+				metrics.NetworkInBytes = utils.SaturatingInt64(sysMetrics.NetworkInBytes)
+				metrics.NetworkOutBytes = utils.SaturatingInt64(sysMetrics.NetworkOutBytes)
 			}
 		}
 
@@ -156,8 +158,8 @@ func (s *systemService) GetMetrics() (*models.SystemMetrics, error) {
 				MemoryUsage:         sysMetrics.MemoryUsage,
 				CPUUsage:            sysMetrics.CPUUsage,
 				DiskUsage:           sysMetrics.DiskUsage,
-				NetworkInBytes:      int64(sysMetrics.NetworkInBytes),
-				NetworkOutBytes:     int64(sysMetrics.NetworkOutBytes),
+				NetworkInBytes:      utils.SaturatingInt64(sysMetrics.NetworkInBytes),
+				NetworkOutBytes:     utils.SaturatingInt64(sysMetrics.NetworkOutBytes),
 			}, nil
 		}
 	}
@@ -313,7 +315,7 @@ func (s *systemService) loadMainConfigForSystem() (*MainConfigForSystem, error) 
 
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
-			data, err := ioutil.ReadFile(path)
+			data, err := ioutil.ReadFile(filepath.Clean(path))
 			if err != nil {
 				if s.mainConfigPath != "" {
 					// 如果是指定的主配置文件路径，读取失败应该返回错误

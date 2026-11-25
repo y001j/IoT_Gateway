@@ -233,12 +233,12 @@ func buildReadGroups(regs []config.ModbusRegister, merge bool, maxGap uint16) []
 					newEnd = curEnd
 				}
 				if uint32(r.Address) <= curEnd+uint32(maxGap) && newEnd-uint32(cur.start) <= limit {
-					cur.count = uint16(newEnd - uint32(cur.start))
+					cur.count = uint16(newEnd - uint32(cur.start)) // #nosec G115 -- 受 limit（≤2000）约束
 					cur.members = append(cur.members, r)
 					continue
 				}
 			}
-			groups = append(groups, readGroup{regType: t, start: r.Address, count: uint16(w), members: []config.ModbusRegister{r}})
+			groups = append(groups, readGroup{regType: t, start: r.Address, count: uint16(w), members: []config.ModbusRegister{r}}) // #nosec G115 -- 寄存器宽度最多 4
 			cur = &groups[len(groups)-1]
 		}
 	}
@@ -393,7 +393,7 @@ func extractValue(raw []byte, g readGroup, reg config.ModbusRegister) (interface
 		if byteIdx >= len(raw) {
 			return nil, "", fmt.Errorf("数据长度不足")
 		}
-		return raw[byteIdx]&(1<<(uint(offset)%8)) != 0, model.TypeBool, nil
+		return raw[byteIdx]&(1<<(uint(offset)%8)) != 0, model.TypeBool, nil // #nosec G115 -- offset 为非负的位偏移
 	}
 	start := offset * 2
 	width := int(getRegisterCount(reg.DataType)) * 2
@@ -457,17 +457,17 @@ func parseRegisterData(data []byte, reg config.ModbusRegister) (interface{}, mod
 		uintVal = uint64(binary.BigEndian.Uint16(b))
 		isUnsigned = true
 	case "int16":
-		intVal = int64(int16(binary.BigEndian.Uint16(b)))
+		intVal = int64(int16(binary.BigEndian.Uint16(b))) // #nosec G115 -- 按补码解释有符号寄存器
 	case "uint32":
 		uintVal = uint64(binary.BigEndian.Uint32(b))
 		isUnsigned = true
 	case "int32":
-		intVal = int64(int32(binary.BigEndian.Uint32(b)))
+		intVal = int64(int32(binary.BigEndian.Uint32(b))) // #nosec G115 -- 按补码解释有符号寄存器
 	case "uint64":
 		uintVal = binary.BigEndian.Uint64(b)
 		isUnsigned = true
 	case "int64":
-		intVal = int64(binary.BigEndian.Uint64(b))
+		intVal = int64(binary.BigEndian.Uint64(b)) // #nosec G115 -- 按补码解释有符号寄存器
 	case "float32":
 		raw = float64(math.Float32frombits(binary.BigEndian.Uint32(b)))
 		isFloat = true

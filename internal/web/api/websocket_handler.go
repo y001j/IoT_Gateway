@@ -356,7 +356,7 @@ func (h *WebSocketHandler) registerClient(client *WebSocketClient) {
 	// 检查连接数限制
 	if len(h.clients) >= h.config.MaxClients {
 		log.Warn().Int("current_clients", len(h.clients)).Int("max_clients", h.config.MaxClients).Msg("达到最大连接数限制，拒绝新连接")
-		client.Conn.Close()
+		_ = client.Conn.Close()
 		return
 	}
 
@@ -571,8 +571,8 @@ func (h *WebSocketHandler) subscribeToNATSData() {
 		return
 	}
 
-	// 订阅规则引擎事件
-	h.natsConn.Subscribe("iot.rules.>", func(msg *nats.Msg) {
+	// 订阅规则引擎事件（以前不检查订阅错误，失败时前端静默收不到事件）
+	if _, err := h.natsConn.Subscribe("iot.rules.>", func(msg *nats.Msg) {
 		var data map[string]interface{}
 		if err := json.Unmarshal(msg.Data, &data); err == nil {
 			h.mutex.RLock()
@@ -589,10 +589,12 @@ func (h *WebSocketHandler) subscribeToNATSData() {
 				}
 			}
 		}
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("订阅规则引擎事件失败")
+	}
 
 	// 订阅系统事件
-	h.natsConn.Subscribe("iot.system.>", func(msg *nats.Msg) {
+	if _, err := h.natsConn.Subscribe("iot.system.>", func(msg *nats.Msg) {
 		var data map[string]interface{}
 		if err := json.Unmarshal(msg.Data, &data); err == nil {
 			h.mutex.RLock()
@@ -606,7 +608,9 @@ func (h *WebSocketHandler) subscribeToNATSData() {
 				})
 			}
 		}
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("订阅系统事件失败")
+	}
 
 }
 
@@ -737,7 +741,7 @@ func (h *WebSocketHandler) cleanupInactiveClients() {
 	// 清理不活跃的客户端
 	for _, client := range inactiveClients {
 		log.Info().Str("client_id", client.ID).Msg("清理不活跃的WebSocket连接")
-		client.Conn.Close()
+		_ = client.Conn.Close()
 		delete(h.clients, client.ID)
 		close(client.Send)
 
@@ -765,14 +769,14 @@ func (h *WebSocketHandler) resetMessageCounters() {
 func (c *WebSocketClient) readPump() {
 	defer func() {
 		c.Hub.unregisterClient(c)
-		c.Conn.Close()
+		_ = c.Conn.Close()
 	}()
 
 	// 设置读取限制和超时 - 增加到8KB
 	c.Conn.SetReadLimit(8192)
-	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.Conn.SetPongHandler(func(string) error {
-		c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		c.touch() // 更新活动时间
 		return nil
 	})
@@ -798,15 +802,17 @@ func (c *WebSocketClient) writePump() {
 	ticker := time.NewTicker(54 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.Conn.Close()
+		_ = c.Conn.Close()
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.Send:
-			c.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second)) // 增加写入超时
+			if err := c.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+				return // 连接已不可用
+			}
 			if !ok {
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.Conn.WriteMessage(websocket.CloseMessage, []byte{}) // 关闭前的通知，失败无需处理
 				return
 			}
 
@@ -819,7 +825,9 @@ func (c *WebSocketClient) writePump() {
 			c.touch() // 更新活动时间
 
 		case <-ticker.C:
-			c.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
+			if err := c.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+				return
+			}
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				log.Error().Err(err).Str("client_id", c.ID).Msg("发送心跳失败")
 				return

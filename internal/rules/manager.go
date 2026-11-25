@@ -78,7 +78,7 @@ func (m *Manager) LoadRules() error {
 	defer m.mu.Unlock()
 
 	// 确保规则目录存在
-	if err := os.MkdirAll(m.rulesDir, 0755); err != nil {
+	if err := os.MkdirAll(m.rulesDir, 0o750); err != nil {
 		return fmt.Errorf("创建规则目录失败: %w", err)
 	}
 
@@ -127,7 +127,7 @@ func (m *Manager) LoadRules() error {
 
 // loadRuleFile 加载单个规则文件
 func (m *Manager) loadRuleFile(filePath string) ([]*Rule, error) {
-	data, err := ioutil.ReadFile(filePath)
+	data, err := ioutil.ReadFile(filepath.Clean(filePath))
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
@@ -462,7 +462,7 @@ func (m *Manager) saveRuleToFile(rule *Rule, filePath string) error {
 		return fmt.Errorf("序列化规则失败: %w", err)
 	}
 
-	return ioutil.WriteFile(filePath, data, 0644)
+	return ioutil.WriteFile(filePath, data, 0o600)
 }
 
 // DeleteRule 删除规则
@@ -636,7 +636,7 @@ func (m *Manager) startFileWatcher() error {
 
 	// 监控规则目录
 	if err := m.watcher.Add(m.rulesDir); err != nil {
-		m.watcher.Close()
+		_ = m.watcher.Close()
 		m.watcher = nil
 		return fmt.Errorf("添加目录监控失败: %w", err)
 	}
@@ -821,7 +821,7 @@ func (m *Manager) cleanupDuplicateInArrayFiles(ruleID string) error {
 		}
 
 		// 读取文件内容
-		data, err := ioutil.ReadFile(path)
+		data, err := ioutil.ReadFile(filepath.Clean(path))
 		if err != nil {
 			log.Error().Err(err).Str("file", path).Msg("读取文件失败")
 			return nil // 继续处理其他文件
@@ -850,7 +850,7 @@ func (m *Manager) cleanupDuplicateInArrayFiles(ruleID string) error {
 				}
 			} else {
 				// 写回更新的内容
-				if err := ioutil.WriteFile(path, newData, 0644); err != nil {
+				if err := ioutil.WriteFile(path, newData, 0o600); err != nil {
 					log.Error().Err(err).Str("file", path).Msg("写回数组文件失败")
 				} else {
 					log.Info().Str("file", path).Str("rule_id", ruleID).Msg("从数组文件中移除重复规则")
@@ -976,7 +976,7 @@ func (m *Manager) removeSingleRuleFiles(ruleID string) {
 		if ext != ".json" && ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
-		data, rerr := os.ReadFile(path)
+		data, rerr := os.ReadFile(filepath.Clean(path))
 		if rerr != nil {
 			return nil
 		}

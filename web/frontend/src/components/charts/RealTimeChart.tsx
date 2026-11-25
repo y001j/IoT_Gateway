@@ -2,10 +2,18 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { Card, Empty, Spin } from 'antd';
 import * as echarts from 'echarts';
 
+
+/** ECharts 坐标轴 tooltip 的参数 */
+interface TooltipParam {
+  axisValue: number | string;
+  color: string;
+  seriesName: string;
+  value: [number | string, number | string];
+}
 export interface DataPoint {
   timestamp: Date | string;
   value: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ChartSeries {
@@ -147,13 +155,13 @@ export const RealTimeChart: React.FC<RealTimeChartProps> = ({
             backgroundColor: '#6a7985'
           }
         },
-        formatter: function (params: any) {
-          if (!Array.isArray(params)) params = [params];
+        formatter: function (raw: unknown) {
+          const params = (Array.isArray(raw) ? raw : [raw]) as TooltipParam[];
           
           const time = new Date(params[0].axisValue).toLocaleTimeString();
           let content = `时间: ${time}<br/>`;
           
-          params.forEach((param: any) => {
+          params.forEach((param) => {
             const color = param.color;
             const value = typeof param.value[1] === 'number' 
               ? param.value[1].toFixed(2) 

@@ -76,7 +76,7 @@ export const ruleService = {
   },
 
   // 获取规则模板
-  async getRuleTemplates(): Promise<any[]> {
+  async getRuleTemplates(): Promise<unknown[]> {
     const response = await api.get('/plugins/rules/templates');
     return response.data.data;
   }

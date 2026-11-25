@@ -148,7 +148,9 @@ func main() {
 	defer ns.Shutdown()
 
 	rulesDir := filepath.Join(dir, "rules")
-	os.MkdirAll(rulesDir, 0o755)
+	if err := os.MkdirAll(rulesDir, 0o750); err != nil {
+		panic(err)
+	}
 	var ruleList []*rules.Rule
 	for i := 0; i < *nRules; i++ {
 		ruleList = append(ruleList, &rules.Rule{ID: fmt.Sprintf("simple-%d", i), Name: "simple", Enabled: true,
@@ -164,7 +166,9 @@ func main() {
 			Actions:    []rules.Action{{Type: "filter", Config: map[string]interface{}{"type": "null"}}}})
 	}
 	data, _ := json.Marshal(ruleList)
-	os.WriteFile(filepath.Join(rulesDir, "bench.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(rulesDir, "bench.json"), data, 0o600); err != nil {
+		panic(err)
+	}
 
 	buffer := ""
 	storageCfg := "storage:\n  enabled: false\n"
@@ -201,7 +205,9 @@ northbound:
   enabled: false
 `, ns.ClientURL(), freePort(), filepath.Join(dir, "plugins"), storageCfg, *nRules+*nExpr > 0, rulesDir, buffer)
 	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(cfg), 0o644)
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		panic(err)
+	}
 
 	rt, err := core.NewRuntime(cfgPath)
 	if err != nil {

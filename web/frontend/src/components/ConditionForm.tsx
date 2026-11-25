@@ -19,6 +19,10 @@ import {
 } from '@ant-design/icons';
 import type { Condition } from '../types/rule';
 
+
+import { cfgOptNumber } from '../utils/ruleData';
+/** 条件比较值（与 types/rule 的 Condition.value 一致） */
+type ConditionValue = Condition['value'];
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -30,7 +34,7 @@ interface ConditionFormProps {
 interface SimpleCondition {
   field: string;
   operator: string;
-  value: any;
+  value: ConditionValue;
 }
 
 interface ConditionItem {
@@ -38,7 +42,7 @@ interface ConditionItem {
   // Simple condition fields
   field?: string;
   operator?: string;
-  value?: any;
+  value?: ConditionValue;
   // Expression condition field
   expression?: string;
 }
@@ -76,34 +80,9 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
     { value: 'exists', label: '字段存在', description: '检查字段是否存在' }
   ];
 
-  // 常用字段（包含复合数据类型支持）
-  const commonFields = [
-    // 基础数据字段
-    'device_id', 'key', 'value', 'timestamp', 'quality', 'unit',
-    'temperature', 'humidity', 'pressure', 'status',
-    
-    // 复合数据字段 - GPS/地理位置
-    'latitude', 'longitude', 'altitude', 'accuracy', 'speed', 'heading',
-    'elevation_category', 'speed_category',
-    
-    // 复合数据字段 - 三轴向量
-    'x', 'y', 'z', 'magnitude', 'x_ratio', 'y_ratio', 'z_ratio', 'dominant_axis',
-    
-    // 复合数据字段 - 颜色
-    'r', 'g', 'b', 'a', 'hue', 'saturation', 'lightness',
-    
-    // 复合数据字段 - 通用向量
-    'dimension', 'norm', 'dominant_dimension', 'dominant_value',
-    
-    // 复合数据字段 - 数组/矩阵
-    'size', 'length', 'rows', 'cols', 'data_type', 'numeric_count', 'null_count',
-    
-    // 复合数据字段 - 时间序列
-    'duration', 'avg_interval', 'trend', 'trend_slope'
-  ];
 
   // 深度比较函数
-  const deepEqual = useCallback((obj1: any, obj2: any): boolean => {
+  const deepEqual = useCallback((obj1: unknown, obj2: unknown): boolean => {
     if (obj1 === obj2) return true;
     if (!obj1 || !obj2) return obj1 === obj2;
     if (typeof obj1 !== typeof obj2) return false;
@@ -113,7 +92,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
     const keys2 = Object.keys(obj2);
     if (keys1.length !== keys2.length) return false;
     
-    for (let key of keys1) {
+    for (const key of keys1) {
       if (!keys2.includes(key)) return false;
       if (!deepEqual(obj1[key], obj2[key])) return false;
     }
@@ -326,7 +305,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
   // 渲染简单条件表单
   const renderSimpleCondition = (
     condition: SimpleCondition,
-    onChange: ((index: number, field: keyof SimpleCondition, value: any) => void) | ((field: keyof SimpleCondition, value: any) => void),
+    onChange: ((index: number, field: keyof SimpleCondition, value: ConditionValue) => void) | ((field: keyof SimpleCondition, value: ConditionValue) => void),
     index: number = 0
   ) => (
     <Row gutter={8} key={index}>
@@ -337,10 +316,10 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
           onChange={(value) => {
             if (onChange.length === 3) {
               // 处理 (index, field, value) 形式
-              (onChange as (index: number, field: keyof SimpleCondition, value: any) => void)(index, 'field', value);
+              (onChange as (index: number, field: keyof SimpleCondition, value: ConditionValue) => void)(index, 'field', value);
             } else {
               // 处理 (field, value) 形式  
-              (onChange as (field: keyof SimpleCondition, value: any) => void)('field', value);
+              (onChange as (field: keyof SimpleCondition, value: ConditionValue) => void)('field', value);
             }
           }}
           style={{ width: '100%' }}
@@ -421,9 +400,9 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
           value={condition.operator}
           onChange={(value) => {
             if (onChange.length === 3) {
-              (onChange as (index: number, field: keyof SimpleCondition, value: any) => void)(index, 'operator', value);
+              (onChange as (index: number, field: keyof SimpleCondition, value: ConditionValue) => void)(index, 'operator', value);
             } else {
-              (onChange as (field: keyof SimpleCondition, value: any) => void)('operator', value);
+              (onChange as (field: keyof SimpleCondition, value: ConditionValue) => void)('operator', value);
             }
           }}
           style={{ width: '100%' }}
@@ -445,9 +424,9 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
             value={Array.isArray(condition.value) ? condition.value : []}
             onChange={(value) => {
               if (onChange.length === 3) {
-                (onChange as (index: number, field: keyof SimpleCondition, value: any) => void)(index, 'value', value);
+                (onChange as (index: number, field: keyof SimpleCondition, value: ConditionValue) => void)(index, 'value', value);
               } else {
-                (onChange as (field: keyof SimpleCondition, value: any) => void)('value', value);
+                (onChange as (field: keyof SimpleCondition, value: ConditionValue) => void)('value', value);
               }
             }}
             style={{ width: '100%' }}
@@ -455,12 +434,12 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
         ) : ['gt', 'gte', 'lt', 'lte'].includes(condition.operator) ? (
           <InputNumber
             placeholder="数值"
-            value={condition.value}
+            value={cfgOptNumber(condition.value)}
             onChange={(value) => {
               if (onChange.length === 3) {
-                (onChange as (index: number, field: keyof SimpleCondition, value: any) => void)(index, 'value', value);
+                (onChange as (index: number, field: keyof SimpleCondition, value: ConditionValue) => void)(index, 'value', value);
               } else {
-                (onChange as (field: keyof SimpleCondition, value: any) => void)('value', value);
+                (onChange as (field: keyof SimpleCondition, value: ConditionValue) => void)('value', value);
               }
             }}
             style={{ width: '100%' }}
@@ -468,12 +447,12 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
         ) : (
           <Input
             placeholder="比较值"
-            value={condition.value}
+            value={condition.value == null ? '' : String(condition.value)}
             onChange={(e) => {
               if (onChange.length === 3) {
-                (onChange as (index: number, field: keyof SimpleCondition, value: any) => void)(index, 'value', e.target.value);
+                (onChange as (index: number, field: keyof SimpleCondition, value: ConditionValue) => void)(index, 'value', e.target.value);
               } else {
-                (onChange as (field: keyof SimpleCondition, value: any) => void)('value', e.target.value);
+                (onChange as (field: keyof SimpleCondition, value: ConditionValue) => void)('value', e.target.value);
               }
             }}
           />
@@ -485,7 +464,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
   // 渲染复合条件表单（支持简单条件和表达式条件）
   const renderCompoundCondition = (
     condition: ConditionItem,
-    onChange: (index: number, field: keyof SimpleCondition | 'type' | 'expression', value: any) => void,
+    onChange: (index: number, field: keyof SimpleCondition | 'type' | 'expression', value: ConditionValue) => void,
     index: number,
     onDelete?: () => void
   ) => (
@@ -500,13 +479,13 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
           >
             <Option key="simple" value="simple">
               <Space>
-                <Tag color="blue" size="small">简单</Tag>
+                <Tag color="blue">简单</Tag>
                 字段条件
               </Space>
             </Option>
             <Option key="expression" value="expression">
               <Space>
-                <Tag color="purple" size="small">表达式</Tag>
+                <Tag color="purple">表达式</Tag>
                 自定义表达式
               </Space>
             </Option>
@@ -591,14 +570,14 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
                 ) : ['gt', 'gte', 'lt', 'lte'].includes(condition.operator || '') ? (
                   <InputNumber
                     placeholder="数值"
-                    value={condition.value}
+                    value={cfgOptNumber(condition.value)}
                     onChange={(value) => onChange(index, 'value', value)}
                     style={{ width: '100%' }}
                   />
                 ) : (
                   <Input
                     placeholder="比较值"
-                    value={condition.value}
+                    value={condition.value == null ? '' : String(condition.value)}
                     onChange={(e) => onChange(index, 'value', e.target.value)}
                   />
                 )}
@@ -633,7 +612,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
   );
 
   // 处理简单条件变更
-  const handleSimpleConditionChange = useCallback((field: keyof SimpleCondition, value: any) => {
+  const handleSimpleConditionChange = useCallback((field: keyof SimpleCondition, value: ConditionValue) => {
     const newState: ConditionState = { ...currentState };
     newState.simpleCondition = { ...newState.simpleCondition, [field]: value };
     
@@ -643,7 +622,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
   }, [currentState, buildCondition, onChange]);
 
   // 处理AND条件变更
-  const handleAndConditionChange = useCallback((index: number, field: keyof SimpleCondition | 'type' | 'expression', value: any) => {
+  const handleAndConditionChange = useCallback((index: number, field: keyof SimpleCondition | 'type' | 'expression', value: ConditionValue) => {
     const newState: ConditionState = { ...currentState };
     newState.andConditions = [...newState.andConditions];
     
@@ -672,7 +651,7 @@ const ConditionForm: React.FC<ConditionFormProps> = ({ value, onChange }) => {
   }, [currentState, buildCondition, onChange]);
 
   // 处理OR条件变更
-  const handleOrConditionChange = useCallback((index: number, field: keyof SimpleCondition | 'type' | 'expression', value: any) => {
+  const handleOrConditionChange = useCallback((index: number, field: keyof SimpleCondition | 'type' | 'expression', value: ConditionValue) => {
     const newState: ConditionState = { ...currentState };
     newState.orConditions = [...newState.orConditions];
     

@@ -48,18 +48,18 @@ export const pluginService = {
   },
 
   // 获取插件配置
-  async getPluginConfig(name: string): Promise<Record<string, any>> {
+  async getPluginConfig(name: string): Promise<Record<string, unknown>> {
     const response = await api.get(`/plugins/${name}/config`);
     return response.data.data || response.data;
   },
 
   // 更新插件配置
-  async updatePluginConfig(name: string, config: Record<string, any>): Promise<void> {
+  async updatePluginConfig(name: string, config: Record<string, unknown>): Promise<void> {
     await api.put(`/plugins/${name}/config`, { config });
   },
 
   // 验证插件配置
-  async validatePluginConfig(name: string, config: Record<string, any>): Promise<PluginConfigValidationResponse> {
+  async validatePluginConfig(name: string, config: Record<string, unknown>): Promise<PluginConfigValidationResponse> {
     const response = await api.post(`/plugins/${name}/config/validate`, { config });
     return response.data.data || response.data;
   },

@@ -10,7 +10,7 @@ on:
 
 env:
   GO_VERSION: '1.24'
-  NODE_VERSION: '18'
+  NODE_VERSION: '22' # vite 7 需要 Node 20.19+
 
 jobs:
   # Go后端测试
@@ -114,7 +114,7 @@ jobs:
       run: npm run build
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: frontend-build
         path: web/frontend/dist/
@@ -165,6 +165,34 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+  # 32 位 ARM（ARMv7）测试：通过 QEMU 用户态模拟运行全部单元测试。
+  # 64 位原子操作在 ARMv7 上要求 8 字节对齐，未对齐时运行到那里才会 panic，只能实际运行才能发现
+  armv7-test:
+    name: ARMv7 Tests (QEMU)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm
+
+    - name: Run tests on linux/arm (GOARM=7)
+      env:
+        GOOS: linux
+        GOARCH: arm
+        GOARM: '7'
+        CGO_ENABLED: '0'
+      run: go test -count=1 -timeout 20m ./...
+
   # 安全扫描
   security-scan:
     name: Security Scan
@@ -180,12 +208,15 @@ jobs:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Run gosec Security Scanner
-      uses: securecodewarrior/github-action-gosec@master
-      with:
-        args: '-fmt sarif -out gosec.sarif ./...'
+      # 官方 action 的 Docker 镜像内置的 Go 版本低于 go.mod 要求，加载包失败且不输出原因；
+      # 改为用 setup-go 的 Go 安装同一版本 gosec。发现问题时同样失败，并在日志中列出问题。
+      run: |
+        go install github.com/securego/gosec/v2/cmd/gosec@v2.22.4
+        gosec -fmt sarif -out gosec.sarif -stdout -verbose text ./...
 
     - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v2
+      if: always() && hashFiles('gosec.sarif') != ''
+      uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: gosec.sarif
 
@@ -210,7 +241,7 @@ jobs:
         go test -bench=. -benchmem -count=3 ./internal/plugin/... >> benchmark.txt
 
     - name: Upload benchmark results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: benchmark-results
         path: benchmark.txt
@@ -232,7 +263,7 @@ jobs:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Download frontend build
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: frontend-build
         path: web/frontend/dist/

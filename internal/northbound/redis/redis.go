@@ -121,7 +121,7 @@ func (s *RedisSink) Start(ctx context.Context) error {
 
 		// 关闭Redis客户端
 		if s.client != nil {
-			s.client.Close()
+			_ = s.client.Close()
 		}
 
 		log.Info().Str("name", s.Name()).Msg("Redis连接器上下文取消")
@@ -319,7 +319,7 @@ func (s *RedisSink) Stop() error {
 
 	// 关闭Redis客户端
 	if s.client != nil {
-		s.client.Close()
+		_ = s.client.Close()
 	}
 
 	log.Info().Str("name", s.Name()).Msg("Redis连接器停止")

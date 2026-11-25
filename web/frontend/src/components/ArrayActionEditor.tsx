@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form,
+  
   Select,
   InputNumber,
   Input,
@@ -9,12 +9,12 @@ import {
   Row,
   Col,
   Typography,
-  Tooltip,
-  Switch,
-  Slider
+  
+  
+ 
 } from 'antd';
 import { 
-  OrderedListOutlined,
+  
   BarChartOutlined,
   FilterOutlined,
   SortAscendingOutlined,
@@ -24,7 +24,7 @@ import {
   BorderOutlined
 } from '@ant-design/icons';
 
-const { Text, Title } = Typography;
+const { Text  } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -61,7 +61,7 @@ export const ArrayActionEditor: React.FC<ArrayActionEditorProps> = ({
   },
   onChange
 }) => {
-  const handleChange = (field: keyof ArrayActionConfig, newValue: any) => {
+  const handleChange = (field: keyof ArrayActionConfig, newValue: unknown) => {
     if (onChange) {
       onChange({
         ...value,

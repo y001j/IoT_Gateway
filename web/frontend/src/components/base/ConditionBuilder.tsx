@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Select, Input, InputNumber, Button, Space, Row, Col, Switch, Typography, Alert, Divider, Tag, Tooltip } from 'antd';
+import { Card, Form, Select, Input, InputNumber, Button, Space, Row, Col, Typography, Alert, Divider, Tag, Tooltip } from 'antd';
 import { PlusOutlined, DeleteOutlined, InfoCircleOutlined, FilterOutlined, FunctionOutlined } from '@ant-design/icons';
 import { Condition } from '../../types/rule';
 
@@ -15,10 +15,6 @@ export interface ConditionBuilderProps {
   allowedOperators?: string[];
   supportExpressions?: boolean;
   dataTypeName?: string;
-}
-
-interface ConditionBuilderState {
-  condition?: Condition;
 }
 
 /**
@@ -70,7 +66,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   }
 
   // 合并字段选项
-  const allFieldOptions = [
+  const allFieldOptions: { value: string; label: string; description?: string }[] = [
     ...availableFields.map(field => ({ value: field, label: field })),
     ...customFieldOptions
   ];
@@ -123,7 +119,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
     updateCondition(newCondition);
   };
 
-  const handleSimpleConditionChange = (field: keyof Condition, value: any) => {
+  const handleSimpleConditionChange = (field: keyof Condition, value: unknown) => {
     if (!condition) return;
     
     const updated = { ...condition, [field]: value };
@@ -238,7 +234,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
               {currentCondition.operator === 'regex' ? (
                 <Input
                   placeholder="输入正则表达式"
-                  value={currentCondition.value}
+                  value={String(currentCondition.value ?? '')}
                   onChange={(e) => handleUpdate({ ...currentCondition, value: e.target.value })}
                   size="large"
                   style={{ fontFamily: 'Monaco, Consolas, monospace' }}
@@ -255,7 +251,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
               ) : (
                 <Input
                   placeholder="输入比较值"
-                  value={currentCondition.value}
+                  value={String(currentCondition.value ?? '')}
                   onChange={(e) => handleUpdate({ ...currentCondition, value: e.target.value })}
                   size="large"
                 />
@@ -276,7 +272,6 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             type="info"
             showIcon
             style={{ marginTop: 8 }}
-            size="small"
           />
         )}
       </Card>
@@ -302,7 +297,7 @@ const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
               </Tag>
               <span>{description}</span>
               {supportExpressions && (
-                <Tag color="green" size="small">支持表达式</Tag>
+                <Tag color="green">支持表达式</Tag>
               )}
             </Space>
           }

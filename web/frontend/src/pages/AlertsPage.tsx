@@ -46,6 +46,7 @@ import type {
   AlertListRequest
 } from '../types/alert';
 
+import { asHttpError } from '../utils/errors';
 // Constants that were imported as types
 const ALERT_LEVELS = [
   { value: 'info', label: '信息', color: 'blue' },
@@ -208,12 +209,13 @@ export const AlertsPage: React.FC = () => {
   }, [activeTab, refreshAlerts]);
 
   // 处理实时告警数据
+  const realtimeAlerts = realTimeData?.alerts;
   useEffect(() => {
-    if (realTimeData && realTimeData.alerts && realTimeData.alerts.length > 0 && activeTab === 'alerts') {
+    if (realtimeAlerts && realtimeAlerts.length > 0 && activeTab === 'alerts') {
       // 使用防抖刷新，避免频繁请求
       debouncedRefresh();
     }
-  }, [realTimeData?.alerts, activeTab, debouncedRefresh]);
+  }, [realtimeAlerts, activeTab, debouncedRefresh]);
 
   // 清理定时器
   useEffect(() => {
@@ -251,7 +253,8 @@ export const AlertsPage: React.FC = () => {
       await alertService.acknowledgeAlert(alertId, '手动确认');
       message.success('告警确认成功');
       refreshAlerts();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('确认告警失败: ' + error.message);
     }
   };
@@ -262,7 +265,8 @@ export const AlertsPage: React.FC = () => {
       await alertService.resolveAlert(alertId, '手动解决');
       message.success('告警解决成功');
       refreshAlerts();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('解决告警失败: ' + error.message);
     }
   };
@@ -273,7 +277,8 @@ export const AlertsPage: React.FC = () => {
       await alertService.deleteAlert(alertId);
       message.success('告警删除成功');
       refreshAlerts();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('删除告警失败: ' + error.message);
     }
   };
@@ -295,7 +300,8 @@ export const AlertsPage: React.FC = () => {
       setCreateAlertModalVisible(false);
       createAlertForm.resetFields();
       refreshAlerts();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('创建告警失败: ' + error.message);
     }
   };
@@ -323,7 +329,8 @@ export const AlertsPage: React.FC = () => {
       setCreateRuleModalVisible(false);
       createRuleForm.resetFields();
       refreshRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('创建告警规则失败: ' + error.message);
     }
   };
@@ -344,7 +351,8 @@ export const AlertsPage: React.FC = () => {
       setCreateChannelModalVisible(false);
       createChannelForm.resetFields();
       refreshChannels();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('创建通知渠道失败: ' + error.message);
     }
   };
@@ -354,7 +362,8 @@ export const AlertsPage: React.FC = () => {
     try {
       await alertService.testNotificationChannel(channelId);
       message.success('测试通知发送成功');
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('测试通知失败: ' + error.message);
     }
   };
@@ -431,7 +440,7 @@ export const AlertsPage: React.FC = () => {
       title: '设备/键值',
       key: 'device_key',
       width: 150,
-      render: (_: any, record: Alert) => (
+      render: (_: unknown, record: Alert) => (
         <div>
           {record.device_id && (
             <div style={{ fontSize: '12px', color: '#666' }}>
@@ -469,7 +478,7 @@ export const AlertsPage: React.FC = () => {
       title: '操作',
       key: 'actions',
       width: 200,
-      render: (_: any, record: Alert) => (
+      render: (_: unknown, record: Alert) => (
         <Space size="small">
           {record.status === 'active' && (
             <Tooltip title="确认告警">
@@ -537,7 +546,7 @@ export const AlertsPage: React.FC = () => {
     {
       title: '条件',
       key: 'condition',
-      render: (_: any, record: AlertRule) => (
+      render: (_: unknown, record: AlertRule) => (
         <Text code>
           {record.condition.field} {record.condition.operator} {record.condition.value}
         </Text>
@@ -555,7 +564,7 @@ export const AlertsPage: React.FC = () => {
       title: '操作',
       key: 'actions',
       width: 150,
-      render: (_: any) => (
+      render: (_: unknown) => (
         <Space size="small">
           <Button size="small">测试</Button>
           <Button size="small">编辑</Button>
@@ -613,7 +622,7 @@ export const AlertsPage: React.FC = () => {
       title: '操作',
       key: 'actions',
       width: 150,
-      render: (_: any, record: NotificationChannel) => (
+      render: (_: unknown, record: NotificationChannel) => (
         <Space size="small">
           <Button 
             size="small" 

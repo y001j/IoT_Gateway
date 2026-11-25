@@ -1,14 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, Card, Form, Input, Select, Space, Typography, Row, Col, Divider, Button, InputNumber, Switch, ColorPicker, Slider, Tabs, Alert, Tag } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Modal, Card, Form, Input, Space, Row, Col, Button, InputNumber, Switch, Tabs, Alert, Tag } from 'antd';
 import { BgColorsOutlined, InfoCircleOutlined, EyeOutlined, EditOutlined, CodeOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import { useBaseRuleEditor } from './base/BaseRuleEditor';
+import { useBaseRuleEditor } from './base/useBaseRuleEditor';
 import ConditionBuilder from './base/ConditionBuilder';
 import ActionFormBuilder from './base/ActionFormBuilder';
 import ExpressionEditor from './base/ExpressionEditor';
 import { Rule, Condition, Action } from '../types/rule';
-
-const { Option } = Select;
-const { Text } = Typography;
 const { TextArea } = Input;
 
 export interface VisualRuleEditorProps {
@@ -18,12 +15,6 @@ export interface VisualRuleEditorProps {
   rule?: Rule;
 }
 
-interface ColorData {
-  r: number;
-  g: number;
-  b: number;
-  a?: number;
-}
 
 /**
  * 视觉规则编辑器
@@ -106,11 +97,13 @@ const VisualRuleEditor: React.FC<VisualRuleEditorProps> = ({
     if (visible && rule) {
       setConditions(rule.conditions);
       setActions(rule.actions || []);
-      updateJsonValue();
+      // 以前此处读到的是上一次渲染的 conditions/actions（刚调用的 setState 尚未生效），
+      // JSON 视图显示的是上一条规则的内容
+      writeRuleJsonRef.current(rule.conditions, rule.actions || []);
     }
   }, [visible, rule]);
 
-  const updateJsonValue = () => {
+  const writeRuleJson = (conds: typeof conditions, acts: typeof actions) => {
     try {
       const currentRule = {
         id: rule?.id || '',
@@ -119,8 +112,8 @@ const VisualRuleEditor: React.FC<VisualRuleEditorProps> = ({
         priority: form.getFieldValue('priority') || 50,
         enabled: form.getFieldValue('enabled') !== false,
         data_type: finalDataType,
-        conditions: conditions,
-        actions: actions,
+        conditions: conds,
+        actions: acts,
         tags: rule?.tags || {},
         version: rule?.version || 1,
         created_at: rule?.created_at || new Date().toISOString(),
@@ -132,6 +125,11 @@ const VisualRuleEditor: React.FC<VisualRuleEditorProps> = ({
       setJsonError('JSON生成失败');
     }
   };
+  const updateJsonValue = () => writeRuleJson(conditions, actions);
+  // effect 中通过 ref 调用最新的函数（不放进依赖数组，避免用户编辑时被重置）
+  const writeRuleJsonRef = useRef(writeRuleJson);
+  writeRuleJsonRef.current = writeRuleJson;
+
 
   const handleJsonChange = (value: string) => {
     setJsonValue(value);
@@ -441,74 +439,6 @@ const VisualRuleEditor: React.FC<VisualRuleEditorProps> = ({
     }
   };
 
-  // 颜色选择器组件
-  const renderColorPicker = (label: string, color: ColorData, onChange: (color: ColorData) => void) => (
-    <Card size="small" style={{ marginBottom: 16 }}>
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Text strong>{label}</Text>
-        <Row gutter={16}>
-          <Col span={12}>
-            <ColorPicker
-              value={{
-                r: color.r,
-                g: color.g,
-                b: color.b,
-                a: color.a || 1
-              }}
-              onChange={(value) => {
-                const rgba = value.toRgb();
-                onChange({
-                  r: rgba.r,
-                  g: rgba.g,
-                  b: rgba.b,
-                  a: rgba.a
-                });
-              }}
-              showText
-              style={{ width: '100%' }}
-            />
-          </Col>
-          <Col span={12}>
-            <Space direction="vertical" size="small" style={{ width: '100%' }}>
-              <div>
-                <Text style={{ fontSize: 12 }}>R: </Text>
-                <InputNumber
-                  value={color.r}
-                  onChange={(val) => onChange({ ...color, r: val || 0 })}
-                  style={{ width: 60 }}
-                  min={0}
-                  max={255}
-                  size="small"
-                />
-              </div>
-              <div>
-                <Text style={{ fontSize: 12 }}>G: </Text>
-                <InputNumber
-                  value={color.g}
-                  onChange={(val) => onChange({ ...color, g: val || 0 })}
-                  style={{ width: 60 }}
-                  min={0}
-                  max={255}
-                  size="small"
-                />
-              </div>
-              <div>
-                <Text style={{ fontSize: 12 }}>B: </Text>
-                <InputNumber
-                  value={color.b}
-                  onChange={(val) => onChange({ ...color, b: val || 0 })}
-                  style={{ width: 60 }}
-                  min={0}
-                  max={255}
-                  size="small"
-                />
-              </div>
-            </Space>
-          </Col>
-        </Row>
-      </Space>
-    </Card>
-  );
 
   const renderVisualConfig = () => (
     <Card title={<Space><BgColorsOutlined />视觉数据配置</Space>} style={{ marginTop: 16 }}>
