@@ -1,12 +1,17 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { Row, Col, Card, Select, Table, Tag, Button, Space, Statistic, message, Alert, Divider, Switch } from 'antd';
-import { RealTimeChart, ChartSeries } from './RealTimeChart';
-import { CompositeDataSelector, parseCompositeData, type CompositeDataItem } from './CompositeDataSelector';
+import { Row, Col, Card, Select, Table, Tag, Button, Space, Statistic, message, Alert, Switch } from 'antd';
+import { RealTimeChart, ChartSeries, type DataPoint } from './RealTimeChart';
+import { CompositeDataSelector } from './CompositeDataSelector';
+import { parseCompositeData, type CompositeDataItem } from '../../utils/compositeData';
 import { useRealTimeData } from '../../hooks/useRealTimeData';
 import { monitoringService } from '../../services/monitoringService';
-import { ClearOutlined, PauseOutlined, PlayCircleOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined, ApiOutlined, WifiOutlined, SettingOutlined } from '@ant-design/icons';
+import { ClearOutlined, PauseOutlined, PlayCircleOutlined, DownloadOutlined, ReloadOutlined, ApiOutlined, WifiOutlined  } from '@ant-design/icons';
 import type { DataFlowMetrics } from '../../types/monitoring';
 
+import type { IoTDataPoint } from '../../types/realtime';
+
+/** 图表/表格中的一条数据（复合数据展开后会带上 _expanded_id） */
+type ChartItem = IoTDataPoint & { _expanded_id?: string };
 const { Option } = Select;
 
 export interface IoTDataChartProps {
@@ -27,7 +32,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
   maxTableRows = 50,
   autoRefresh = true,
   refreshInterval = 3000,
-  preferWebSocket = false,
+  preferWebSocket: _preferWebSocket = false,
   enableCompositeDataViewer = true,
 }) => {
   const { data: wsData, isConnected } = useRealTimeData();
@@ -79,8 +84,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
 
   // 转换API数据为WebSocket格式 - 增强版本，支持复合数据类型检测
   const convertApiToWebSocketFormat = useCallback((metrics: DataFlowMetrics[]) => {
-    const now = new Date();
-    return metrics.map((metric, index) => {
+    return metrics.map((metric, _index) => {
       // 智能检测数据类型
       let detectedDataType = 'unknown';
       let parsedValue = metric.last_value;
@@ -115,17 +119,18 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
       } else if (typeof metric.last_value === 'number') {
         detectedDataType = 'float';
       } else if (typeof metric.last_value === 'object' && metric.last_value !== null) {
-        parsedValue = metric.last_value;
+        const obj = metric.last_value as Record<string, unknown>;
+        parsedValue = obj;
         // 检测已经是对象格式的复合数据
-        if (metric.last_value.latitude !== undefined && metric.last_value.longitude !== undefined) {
+        if (obj.latitude !== undefined && obj.longitude !== undefined) {
           detectedDataType = 'location';
-        } else if (metric.last_value.x !== undefined && metric.last_value.y !== undefined && metric.last_value.z !== undefined) {
+        } else if (obj.x !== undefined && obj.y !== undefined && obj.z !== undefined) {
           detectedDataType = 'vector3d';
-        } else if (metric.last_value.r !== undefined && metric.last_value.g !== undefined && metric.last_value.b !== undefined) {
+        } else if (obj.r !== undefined && obj.g !== undefined && obj.b !== undefined) {
           detectedDataType = 'color';
-        } else if (metric.last_value.values && Array.isArray(metric.last_value.values)) {
+        } else if (obj.values && Array.isArray(obj.values)) {
           detectedDataType = 'vector';
-        } else if (metric.last_value.elements && Array.isArray(metric.last_value.elements)) {
+        } else if (obj.elements && Array.isArray(obj.elements)) {
           detectedDataType = 'array';
         } else {
           detectedDataType = 'object';
@@ -187,20 +192,15 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
     }
     
     return [];
-  }, [wsData.iotData, apiData, dataSource, preferWebSocket, isConnected, convertApiToWebSocketFormat]);
+  }, [wsData.iotData, apiData, dataSource, isConnected, convertApiToWebSocketFormat]);
 
   // 解析复合数据类型
   const compositeData = useMemo(() => {
 
-    // 先筛选出可能的复合数据
-    const potentialCompositeData = effectiveData.filter(item => {
-      const dataType = item.data?.data_type;
-      return ['location', 'vector3d', 'color', 'vector', 'array', 'object'].includes(dataType);
-    });
 
 
     const parsed = effectiveData
-      .map((item, index) => {
+      .map((item, _index) => {
         const result = parseCompositeData(item);
         return result;
       })
@@ -243,7 +243,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
   }, [effectiveData, selectedDevice]);
 
   // 过滤数据 - 添加暂停功能支持
-  const [frozenData, setFrozenData] = useState<any[]>([]);
+  const [frozenData, setFrozenData] = useState<ChartItem[]>([]);
   
   const filteredData = useMemo(() => {
     const sourceData = isPaused ? frozenData : effectiveData;
@@ -252,11 +252,11 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
       const keyMatch = selectedKey === 'all' || item.data?.key === selectedKey;
       return deviceMatch && keyMatch;
     });
-  }, [isPaused ? frozenData : effectiveData, selectedDevice, selectedKey, isPaused, frozenData]);
+  }, [effectiveData, frozenData, isPaused, selectedDevice, selectedKey]);
 
   // 扩展数据 - 包含复合数据分量的展开数据
   const expandedData = useMemo(() => {
-    const expanded: any[] = [];
+    const expanded: ChartItem[] = [];
     
     filteredData.forEach(item => {
       const dataType = item.data?.data_type;
@@ -302,7 +302,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
     
     
     return expanded;
-  }, [filteredData, showCompositeViewer, parseCompositeData]);
+  }, [filteredData, showCompositeViewer]);
 
   // 当暂停/恢复时更新冻结的数据
   React.useEffect(() => {
@@ -322,7 +322,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
 
   // 准备图表数据 - 增强支持复合数据类型分量
   const chartSeries: ChartSeries[] = useMemo(() => {
-    const seriesMap = new Map<string, { data: any[], color: string }>();
+    const seriesMap = new Map<string, { data: DataPoint[], color: string }>();
     const colors = ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16'];
     let colorIndex = 0;
 
@@ -503,15 +503,15 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
       dataIndex: ['data', 'key'],
       key: 'key',
       width: 120,
-      render: (key: string, record: any) => {
+      render: (key: string, record: ChartItem) => {
         const isComponent = record.data?.data_type?.endsWith('_component');
         const componentInfo = record.data?.component_info;
         
         if (isComponent && componentInfo) {
           return (
             <div>
-              <Tag color="green" size="small">{componentInfo.parent_key}</Tag>
-              <Tag color="cyan" size="small">{componentInfo.component_label}</Tag>
+              <Tag color="green">{componentInfo.parent_key}</Tag>
+              <Tag color="cyan">{componentInfo.component_label}</Tag>
             </div>
           );
         }
@@ -524,7 +524,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
       dataIndex: ['data', 'data_type'],
       key: 'data_type',
       width: 100,
-      render: (dataType: string, record: any) => {
+      render: (dataType: string, _record: ChartItem) => {
         const typeColors = {
           'float': 'blue',
           'int': 'cyan', 
@@ -549,7 +549,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
         const displayType = isComponent ? dataType.replace('_component', '') + '分量' : dataType;
         
         return (
-          <Tag color={typeColors[dataType as keyof typeof typeColors] || 'default'} size="small">
+          <Tag color={typeColors[dataType as keyof typeof typeColors] || 'default'}>
             {displayType || 'unknown'}
           </Tag>
         );
@@ -560,7 +560,7 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
       dataIndex: ['data'],
       key: 'value',
       width: 150,
-      render: (data: any, record: any) => {
+      render: (data: ChartItem['data'], _record: ChartItem) => {
         const dataType = data?.data_type || 'unknown';
         const derivedValues = data?.derived_values;
         const originalValue = data?.value;
@@ -670,7 +670,8 @@ export const IoTDataChart: React.FC<IoTDataChartProps> = ({
           `"${originalValueStr.replace(/"/g, '""')}"`, // 转义CSV中的引号
           displayValue,
           `"${summary.replace(/"/g, '""')}"`, // 转义CSV中的引号
-          item.data?.subject || ''
+          // subject 在数据项上（以前读 item.data.subject，导出的主题列始终为空）
+          item.subject || ''
         ].join(',');
       });
 

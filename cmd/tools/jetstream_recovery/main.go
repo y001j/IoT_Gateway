@@ -187,7 +187,7 @@ func main() {
 			var point model.Point
 			if err := json.Unmarshal(msg.Data, &point); err != nil {
 				log.Error().Err(err).Msg("解析数据点失败")
-				msg.Ack() // 确认消息以避免无限重试
+				_ = msg.Ack() // 确认消息以避免无限重试
 				mu.Lock()
 				failed++
 				mu.Unlock()
@@ -202,7 +202,7 @@ func main() {
 					log.Error().Err(err).Int("count", len(batch)).Msg("发布数据点到sink失败")
 					// 不确认消息，让JetStream重新投递
 					for _, m := range msgs {
-						m.Nak()
+						_ = m.Nak()
 					}
 					mu.Lock()
 					failed += int64(len(batch))
@@ -210,7 +210,7 @@ func main() {
 				} else {
 					// 确认所有消息
 					for _, m := range msgs {
-						m.Ack()
+						_ = m.Ack()
 					}
 					mu.Lock()
 					processed += int64(len(batch))
@@ -226,7 +226,7 @@ func main() {
 				log.Error().Err(err).Int("count", len(batch)).Msg("发布数据点到sink失败")
 				// 不确认消息，让JetStream重新投递
 				for _, m := range msgs[len(msgs)-len(batch):] {
-					m.Nak()
+					_ = m.Nak()
 				}
 				mu.Lock()
 				failed += int64(len(batch))
@@ -234,7 +234,7 @@ func main() {
 			} else {
 				// 确认所有消息
 				for _, m := range msgs[len(msgs)-len(batch):] {
-					m.Ack()
+					_ = m.Ack()
 				}
 				mu.Lock()
 				processed += int64(len(batch))

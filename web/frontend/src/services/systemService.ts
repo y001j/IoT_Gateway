@@ -7,6 +7,7 @@ import type {
   ConfigValidationResponse
 } from '../types/system';
 
+import type { LightweightMetrics } from './lightweightMetricsService';
 export const systemService = {
   // 获取系统状态
   async getStatus(): Promise<SystemStatus> {
@@ -49,19 +50,15 @@ export const systemService = {
   },
 
   // 获取轻量级指标 (代理到Gateway主服务)
-  async getLightweightMetrics(format: 'json' | 'text' = 'json'): Promise<any> {
+  async getLightweightMetrics(): Promise<LightweightMetrics> {
     try {
       // 使用环境变量中配置的Gateway URL
       const gatewayUrl = import.meta.env.VITE_GATEWAY_URL || 'http://localhost:8080';
-      const response = await fetch(`${gatewayUrl}/metrics${format === 'text' ? '?format=text' : ''}`);
+      const response = await fetch(`${gatewayUrl}/metrics`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      if (format === 'text') {
-        return await response.text();
-      } else {
-        return await response.json();
-      }
+      return await response.json() as LightweightMetrics;
     } catch (error) {
       console.error('Failed to fetch lightweight metrics:', error);
       throw error;

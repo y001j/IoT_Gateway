@@ -123,6 +123,8 @@ func (s *WebSocketSink) Init(cfg json.RawMessage) error {
 	s.server = &http.Server{
 		Addr:    address,
 		Handler: mux,
+		// 防止慢速请求头耗尽连接（Slowloris）；WebSocket 升级后的长连接不受影响
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	log.Info().
@@ -179,7 +181,7 @@ func (s *WebSocketSink) Start(ctx context.Context) error {
 		// 关闭所有客户端连接
 		s.mu.Lock()
 		for client := range s.clients {
-			client.Close()
+			_ = client.Close()
 		}
 		s.mu.Unlock()
 
@@ -202,7 +204,7 @@ func (s *WebSocketSink) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 	select {
 	case s.register <- conn:
 	case <-s.ctx.Done():
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -218,7 +220,7 @@ func (s *WebSocketSink) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 			case s.unregister <- conn:
 			case <-s.ctx.Done():
 			}
-			conn.Close()
+			_ = conn.Close()
 		}()
 
 		for {
@@ -273,14 +275,20 @@ func (s *WebSocketSink) broadcastLoop() {
 				w, err := client.NextWriter(websocket.TextMessage)
 				if err != nil {
 					s.HandleError(err, "WebSocket写入器")
-					client.Close()
+					_ = client.Close()
 					delete(s.clients, client)
 					continue
 				}
-				w.Write(message)
+				if _, err := w.Write(message); err != nil {
+					s.HandleError(err, "写入WebSocket消息")
+					_ = w.Close()
+					_ = client.Close()
+					delete(s.clients, client)
+					continue
+				}
 				if err := w.Close(); err != nil {
 					s.HandleError(err, "关闭WebSocket写入器")
-					client.Close()
+					_ = client.Close()
 					delete(s.clients, client)
 				}
 			}

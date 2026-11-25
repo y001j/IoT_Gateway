@@ -30,6 +30,19 @@ import {
 } from '@ant-design/icons';
 import { lightweightMetricsService, type LightweightMetrics } from '../../services/lightweightMetricsService';
 
+import { asHttpError } from '../../utils/errors';
+
+/** 指标卡片 */
+interface MetricCard {
+  title: string;
+  value: number | string;
+  icon?: React.ReactNode;
+  color?: string;
+  valueRender?: (value: React.ReactNode) => React.ReactNode;
+  extra?: React.ReactNode;
+  suffix?: string;
+  precision?: number;
+}
 const { Title, Text } = Typography;
 
 interface RealTimeMetricsProps {
@@ -58,7 +71,8 @@ const RealTimeMetrics: React.FC<RealTimeMetricsProps> = ({
       setMetrics(data);
       setLastUpdated(new Date());
       setIsOnline(true);
-    } catch (err: any) {
+    } catch (caught) {
+      const err = asHttpError(caught);
       setError(err.message || '获取指标失败');
       setIsOnline(false);
       console.error('Failed to fetch metrics:', err);
@@ -194,7 +208,7 @@ const RealTimeMetrics: React.FC<RealTimeMetricsProps> = ({
       value: metrics.gateway.status,
       icon: getHealthIcon(metrics.gateway.status),
       color: lightweightMetricsService.getStatusColor(metrics.gateway.status),
-      valueRender: (value: any) => (
+      valueRender: (value: React.ReactNode) => (
         <Tag color={lightweightMetricsService.getStatusColor(String(value))}>
           {String(value).toUpperCase()}
         </Tag>
@@ -233,7 +247,7 @@ const RealTimeMetrics: React.FC<RealTimeMetricsProps> = ({
       value: metrics.gateway.nats_connected ? '已连接' : '未连接',
       icon: <ApiOutlined />,
       color: metrics.gateway.nats_connected ? '#52c41a' : '#f5222d',
-      valueRender: (value: any) => (
+      valueRender: (value: React.ReactNode) => (
         <Badge
           status={metrics.gateway.nats_connected ? 'success' : 'error'}
           text={String(value)}
@@ -298,7 +312,7 @@ const RealTimeMetrics: React.FC<RealTimeMetricsProps> = ({
     },
   ];
 
-  const renderMetricCard = (card: any) => (
+  const renderMetricCard = (card: MetricCard) => (
     <Card size="small" key={card.title}>
       <Statistic
         title={card.title}
@@ -311,7 +325,7 @@ const RealTimeMetrics: React.FC<RealTimeMetricsProps> = ({
     </Card>
   );
 
-  const renderSection = (title: string, cards: any[], icon: React.ReactNode) => (
+  const renderSection = (title: string, cards: MetricCard[], icon: React.ReactNode) => (
     <Card 
       title={
         <Space>

@@ -22,7 +22,7 @@ export interface Alert {
   rule_name?: string;
   device_id?: string;
   key?: string;
-  value?: any;
+  value?: unknown;
   tags?: Record<string, string>;
   notification_channels?: string[];
   priority?: number;

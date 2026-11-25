@@ -158,7 +158,7 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 					return nil, fmt.Errorf("无法找到可用的端口: %w", err)
 				}
 			}
-			ln.Close() // 关闭测试监听器
+			_ = ln.Close() // 关闭测试监听器
 
 			// 配置嵌入式 NATS 服务器
 			opts := &server.Options{

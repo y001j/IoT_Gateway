@@ -474,7 +474,11 @@ func (s *IncrementalStats) GetVariance() float64 {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.varianceLocked()
+}
 
+// varianceLocked 计算方差并写入缓存（调用方必须持有写锁）
+func (s *IncrementalStats) varianceLocked() float64 {
 	if s.cacheValid {
 		return s.varianceCached
 	}
@@ -567,7 +571,9 @@ func (s *IncrementalStats) GetStdDev() float64 {
 		return s.stdDevCached
 	}
 
-	s.stdDevCached = math.Sqrt(s.GetVariance())
+	// 以前这里在持有写锁时调用 GetVariance()，后者再加读锁：Go 的锁不可重入，
+	// 缓存失效时调用 GetStdDev 会永久卡死。改为调用不加锁的内部实现。
+	s.stdDevCached = math.Sqrt(s.varianceLocked())
 	return s.stdDevCached
 }
 
@@ -806,12 +812,12 @@ func (s *IncrementalStats) GetStats() map[string]float64 {
 		"p99": s.sanitizeFloat(s.calculatePercentile(99)),
 
 		// Phase 1: 数据质量函数
-		"null_rate":    s.sanitizeFloat(s.GetNullRate()),
-		"completeness": s.sanitizeFloat(s.GetCompleteness()),
+		"null_rate":    s.sanitizeFloat(s.nullRate()),
+		"completeness": s.sanitizeFloat(s.completeness()),
 
 		// Phase 1: 变化检测函数
-		"change":      s.sanitizeFloat(s.GetChange()),
-		"change_rate": s.sanitizeFloat(s.GetChangeRate()),
+		"change":      s.sanitizeFloat(s.change()),
+		"change_rate": s.sanitizeFloat(s.changeRate()),
 
 		// Phase 1: 异常检测函数
 		"outlier_count": s.sanitizeFloat(s.getOutlierCountInternal()),
@@ -822,19 +828,19 @@ func (s *IncrementalStats) GetStats() map[string]float64 {
 		"p75": s.sanitizeFloat(s.calculatePercentile(75)),
 
 		// Phase 2: 波动性分析
-		"volatility": s.sanitizeFloat(s.GetVolatility()),
-		"cv":         s.sanitizeFloat(s.GetCV()),
+		"volatility": s.sanitizeFloat(s.volatility()),
+		"cv":         s.sanitizeFloat(s.cv()),
 	}
 
 	// 条件性添加阈值监控函数 (Phase 2)
 	if s.upperLimit != nil {
-		result["above_count"] = s.sanitizeFloat(s.GetAboveCount())
+		result["above_count"] = s.sanitizeFloat(s.aboveCount())
 	}
 	if s.lowerLimit != nil {
-		result["below_count"] = s.sanitizeFloat(s.GetBelowCount())
+		result["below_count"] = s.sanitizeFloat(s.belowCount())
 	}
 	if s.upperLimit != nil && s.lowerLimit != nil {
-		result["in_range_count"] = s.sanitizeFloat(s.GetInRangeCount())
+		result["in_range_count"] = s.sanitizeFloat(s.inRangeCount())
 	}
 
 	if s.count == 0 {
@@ -1029,7 +1035,7 @@ func (s *IncrementalStats) normalApproximation(percentile float64) float64 {
 }
 
 // 数据质量函数
-func (s *IncrementalStats) GetNullRate() float64 {
+func (s *IncrementalStats) nullRate() float64 {
 	total := s.nullCount + s.validCount
 	if total == 0 {
 		return 0
@@ -1037,39 +1043,113 @@ func (s *IncrementalStats) GetNullRate() float64 {
 	return float64(s.nullCount) / float64(total)
 }
 
-func (s *IncrementalStats) GetCompleteness() float64 {
-	return 1.0 - s.GetNullRate()
+func (s *IncrementalStats) completeness() float64 {
+	return 1.0 - s.nullRate()
 }
 
 // 变化检测函数
-func (s *IncrementalStats) GetChange() float64 {
+func (s *IncrementalStats) change() float64 {
 	if !s.firstValueSet || s.count == 0 {
 		return 0
 	}
 	return s.lastValue - s.firstValue
 }
 
-func (s *IncrementalStats) GetChangeRate() float64 {
+func (s *IncrementalStats) changeRate() float64 {
 	if !s.firstValueSet || s.count == 0 || s.firstValue == 0 {
 		return 0
 	}
 	return (s.lastValue - s.firstValue) / math.Abs(s.firstValue) * 100
 }
 
-func (s *IncrementalStats) GetVolatility() float64 {
+func (s *IncrementalStats) volatility() float64 {
 	if s.meanCached == 0 {
 		return 0
 	}
 	return s.stdDevCached / math.Abs(s.meanCached)
 }
 
-func (s *IncrementalStats) GetCV() float64 {
-	return s.GetVolatility() // 变异系数和波动率是同一概念
+func (s *IncrementalStats) cv() float64 {
+	return s.volatility() // 变异系数和波动率是同一概念
 }
 
-// GetOutlierCount 获取异常值数量 (内部调用，不加锁)
+// GetOutlierCount 获取异常值数量
 func (s *IncrementalStats) GetOutlierCount() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.getOutlierCountInternal()
+}
+
+// GetNullRate 加读锁后读取（内部实现 nullRate 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetNullRate() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nullRate()
+}
+
+// GetCompleteness 加读锁后读取（内部实现 completeness 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetCompleteness() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.completeness()
+}
+
+// GetChange 加读锁后读取（内部实现 change 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetChange() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.change()
+}
+
+// GetChangeRate 加读锁后读取（内部实现 changeRate 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetChangeRate() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.changeRate()
+}
+
+// GetVolatility 加读锁后读取（内部实现 volatility 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetVolatility() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.volatility()
+}
+
+// GetCV 加读锁后读取（内部实现 cv 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetCV() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cv()
+}
+
+// GetAboveCount 加读锁后读取（内部实现 aboveCount 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetAboveCount() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.aboveCount()
+}
+
+// GetBelowCount 加读锁后读取（内部实现 belowCount 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetBelowCount() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.belowCount()
+}
+
+// GetInRangeCount 加读锁后读取（内部实现 inRangeCount 供已持有锁的 GetStats 使用）。
+// 以前这些导出方法不加锁，在 GetStats 之外调用时与 AddValue 存在数据竞争。
+func (s *IncrementalStats) GetInRangeCount() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.inRangeCount()
 }
 
 // getOutlierCountInternal 内部异常检测函数 (假设调用者已持有锁)
@@ -1161,7 +1241,7 @@ func interpolatePercentile(sortedValues []float64, position float64) float64 {
 }
 
 // 阈值监控函数
-func (s *IncrementalStats) GetAboveCount() float64 {
+func (s *IncrementalStats) aboveCount() float64 {
 	if s.upperLimit == nil {
 		return 0
 	}
@@ -1190,7 +1270,7 @@ func (s *IncrementalStats) GetAboveCount() float64 {
 	return count
 }
 
-func (s *IncrementalStats) GetBelowCount() float64 {
+func (s *IncrementalStats) belowCount() float64 {
 	if s.lowerLimit == nil {
 		return 0
 	}
@@ -1218,7 +1298,7 @@ func (s *IncrementalStats) GetBelowCount() float64 {
 	return count
 }
 
-func (s *IncrementalStats) GetInRangeCount() float64 {
+func (s *IncrementalStats) inRangeCount() float64 {
 	if s.upperLimit == nil || s.lowerLimit == nil {
 		return 0
 	}

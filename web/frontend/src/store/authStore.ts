@@ -210,7 +210,7 @@ const authStoreCreator: StateCreator<AuthState, [], [['zustand/persist', AuthSta
 
 
 // 尝试刷新token的辅助函数
-const attemptTokenRefresh = async (refreshToken: string, set: any) => {
+const attemptTokenRefresh = async (refreshToken: string, set: (updater: (state: AuthState) => Partial<AuthState>) => void) => {
   try {
     console.log('🔄 尝试刷新访问令牌...');
     // 后端期望字段名为 refresh_token（小写下划线）

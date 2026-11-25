@@ -53,7 +53,7 @@ func NewHighPerformanceStats(windowSize int) *HighPerformanceStats {
 	}
 
 	hps := &HighPerformanceStats{
-		windowSize: int32(windowSize),
+		windowSize: int32(windowSize), // #nosec G115 -- 调用方已把窗口大小限制在合理范围
 	}
 
 	// 初始化min/max为极值
@@ -134,10 +134,10 @@ func (hps *HighPerformanceStats) AddValue(value float64) {
 
 	// 更新首次和最后更新时间
 	if count == 1 {
-		atomic.StoreUint64(&hps.firstUpdateTime, uint64(now))
+		atomic.StoreUint64(&hps.firstUpdateTime, uint64(now)) // #nosec G115 -- UnixNano 时间戳为正数
 		atomic.StoreUint64(&hps.firstValue, valueBits)
 	}
-	atomic.StoreUint64(&hps.lastUpdateTime, uint64(now))
+	atomic.StoreUint64(&hps.lastUpdateTime, uint64(now)) // #nosec G115 -- UnixNano 时间戳为正数
 	atomic.StoreUint64(&hps.lastValue, valueBits)
 
 	// 原子更新最小值
@@ -170,7 +170,8 @@ func (hps *HighPerformanceStats) AddValue(value float64) {
 		bufferIndex := index % uint64(hps.windowSize)
 		atomic.StoreUint64(&hps.ringBuffer[bufferIndex], valueBits)
 
-		if index >= uint64(hps.windowSize-1) {
+		lastIdx := uint64(hps.windowSize - 1) // #nosec G115 -- windowSize 在构造时保证为正数
+		if index >= lastIdx {
 			atomic.StoreUint32(&hps.windowFull, 1)
 		}
 	}
@@ -211,10 +212,10 @@ func (hps *HighPerformanceStats) AddBatch(values []float64) {
 
 	// 更新时间信息
 	if count == int64(len(values)) {
-		atomic.StoreUint64(&hps.firstUpdateTime, uint64(now))
+		atomic.StoreUint64(&hps.firstUpdateTime, uint64(now)) // #nosec G115 -- UnixNano 时间戳为正数
 		atomic.StoreUint64(&hps.firstValue, math.Float64bits(values[0]))
 	}
-	atomic.StoreUint64(&hps.lastUpdateTime, uint64(now))
+	atomic.StoreUint64(&hps.lastUpdateTime, uint64(now)) // #nosec G115 -- UnixNano 时间戳为正数
 	atomic.StoreUint64(&hps.lastValue, math.Float64bits(values[len(values)-1]))
 
 	// 更新全局min/max
@@ -244,11 +245,12 @@ func (hps *HighPerformanceStats) AddBatch(values []float64) {
 	if hps.windowSize > 0 {
 		startIndex := atomic.AddUint64(&hps.writeIndex, uint64(len(values))) - uint64(len(values))
 		for i, v := range values {
-			bufferIndex := (startIndex + uint64(i)) % uint64(hps.windowSize)
+			bufferIndex := (startIndex + uint64(i)) % uint64(hps.windowSize) // #nosec G115 -- i 和 windowSize 均为非负数
 			atomic.StoreUint64(&hps.ringBuffer[bufferIndex], math.Float64bits(v))
 		}
 
-		if startIndex+uint64(len(values)) >= uint64(hps.windowSize) {
+		windowLen := uint64(hps.windowSize) // #nosec G115 -- windowSize 为正数
+		if startIndex+uint64(len(values)) >= windowLen {
 			atomic.StoreUint32(&hps.windowFull, 1)
 		}
 	}

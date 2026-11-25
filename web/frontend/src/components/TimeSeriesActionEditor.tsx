@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form,
+  
   Select,
   InputNumber,
   Input,
@@ -11,8 +11,8 @@ import {
   Typography,
   Tooltip,
   Switch,
-  DatePicker,
-  TimePicker
+  
+ 
 } from 'antd';
 import { 
   LineChartOutlined,
@@ -25,10 +25,8 @@ import {
   BorderOutlined
 } from '@ant-design/icons';
 
-const { Text, Title } = Typography;
+const { Text  } = Typography;
 const { Option } = Select;
-const { RangePicker } = DatePicker;
-
 interface TimeSeriesActionConfig {
   sub_type: 'trend_analysis' | 'seasonal_decompose' | 'moving_average' | 'diff' | 'resample' | 'anomaly_detection' | 'forecast' | 'correlation';
   window_size?: number;
@@ -60,7 +58,7 @@ export const TimeSeriesActionEditor: React.FC<TimeSeriesActionEditorProps> = ({
   },
   onChange
 }) => {
-  const handleChange = (field: keyof TimeSeriesActionConfig, newValue: any) => {
+  const handleChange = (field: keyof TimeSeriesActionConfig, newValue: unknown) => {
     if (onChange) {
       onChange({
         ...value,

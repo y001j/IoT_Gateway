@@ -178,7 +178,7 @@ func (s *configService) ApplyConfig(config *models.SystemConfig) error {
 func (s *configService) saveConfigFile(config *models.SystemConfig) error {
 	// 确保目录存在
 	dir := filepath.Dir(s.configPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("创建配置目录失败: %v", err)
 	}
 
@@ -261,7 +261,7 @@ func (s *configService) loadMainConfig() (*MainConfig, error) {
 
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
-			data, err := ioutil.ReadFile(path)
+			data, err := ioutil.ReadFile(filepath.Clean(path))
 			if err != nil {
 				if s.mainConfigPath != "" {
 					// 如果是指定的主配置文件路径，读取失败应该返回错误

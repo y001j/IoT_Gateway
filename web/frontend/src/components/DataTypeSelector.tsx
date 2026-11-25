@@ -174,7 +174,7 @@ const DataTypeSelector: React.FC<DataTypeSelectorProps> = ({
           title={
             <Space>
               {option.name}
-              <Tag color={option.color} size="small">
+              <Tag color={option.color}>
                 {option.type === 'simple' ? '简单' : '复合'}
               </Tag>
             </Space>
@@ -253,7 +253,7 @@ const DataTypeSelector: React.FC<DataTypeSelectorProps> = ({
               <Space>
                 <NumberOutlined />
                 单点数据规则
-                <Tag color="blue" size="small">简单高效</Tag>
+                <Tag color="blue">简单高效</Tag>
               </Space>
             } 
             key="simple"
@@ -276,7 +276,7 @@ const DataTypeSelector: React.FC<DataTypeSelectorProps> = ({
               <Space>
                 <BorderOutlined />
                 复合数据规则
-                <Tag color="purple" size="small">功能强大</Tag>
+                <Tag color="purple">功能强大</Tag>
               </Space>
             } 
             key="complex"
@@ -312,4 +312,3 @@ const DataTypeSelector: React.FC<DataTypeSelectorProps> = ({
 };
 
 export default DataTypeSelector;
-export { dataTypeOptions };

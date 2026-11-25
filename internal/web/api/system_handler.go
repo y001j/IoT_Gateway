@@ -289,7 +289,7 @@ func (h *SystemHandler) Restart(c *gin.Context) {
 	}
 
 	// 绑定请求参数（可选）
-	c.ShouldBindJSON(&req)
+	_ = c.ShouldBindJSON(&req) // 请求体可选（只有 delay 参数）
 
 	err := h.systemService.RestartService("system")
 	if err != nil {

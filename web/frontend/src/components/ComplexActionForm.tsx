@@ -11,14 +11,14 @@ import {
   Row,
   Col,
   Switch,
-  Tabs,
-  Tooltip,
+  
+  
   Divider,
   Alert,
   Typography
 } from 'antd';
 import {
-  PlusOutlined,
+  
   DeleteOutlined,
   FireOutlined,
   SwapOutlined,
@@ -28,7 +28,7 @@ import {
   EnvironmentOutlined,
   BorderOutlined,
   BgColorsOutlined,
-  QuestionCircleOutlined
+ 
 } from '@ant-design/icons';
 import type { Action } from '../types/rule';
 import type { DataTypeOption } from './DataTypeSelector';
@@ -38,9 +38,9 @@ import ColorActionEditor from './ColorActionEditor';
 import ArrayActionEditor from './ArrayActionEditor';
 import TimeSeriesActionEditor from './TimeSeriesActionEditor';
 
+import { cfgNumber, cfgString } from '../utils/ruleData';
 const { Option } = Select;
 const { TextArea } = Input;
-const { TabPane } = Tabs;
 const { Text } = Typography;
 
 interface ComplexActionFormProps {
@@ -52,7 +52,7 @@ interface ComplexActionFormProps {
 interface ComplexActionConfig {
   type: string;
   sub_type?: string;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   async?: boolean;
   timeout?: string;
   retry?: number;
@@ -66,7 +66,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const [actions, setActions] = useState<ComplexActionConfig[]>(
     value.length > 0 ? value.map(action => ({
       type: action.type,
-      sub_type: action.config.sub_type,
+      sub_type: typeof action.config.sub_type === 'string' ? action.config.sub_type : undefined,
       config: action.config,
       async: action.async,
       timeout: action.timeout,
@@ -230,58 +230,6 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
     }
   };
 
-  // 根据动作类型获取子类型选项
-  const getSubTypesForAction = (actionType: string) => {
-    switch (actionType) {
-      case 'geo_transform':
-        return [
-          { value: 'distance', label: '距离计算', description: '计算到参考点的距离' },
-          { value: 'bearing', label: '方位角计算', description: '计算相对于参考点的方位角' },
-          { value: 'geofence', label: '地理围栏检查', description: '检查是否在指定区域内' },
-          { value: 'coordinate_convert', label: '坐标系转换', description: 'WGS84、GCJ02等坐标系转换' },
-          { value: 'clustering', label: '位置聚类', description: '地理位置聚类分析' }
-        ];
-
-      case 'vector_transform':
-        return [
-          { value: 'normalize', label: '向量归一化', description: '将向量归一化到单位长度' },
-          { value: 'projection', label: '向量投影', description: '向量在指定方向上的投影' },
-          { value: 'cross_product', label: '向量叉积', description: '计算向量叉积' },
-          { value: 'dot_product', label: '向量点积', description: '计算向量点积' },
-          { value: 'rotation', label: '向量旋转', description: '旋转向量到指定角度' }
-        ];
-
-      case 'color_transform':
-        return [
-          { value: 'rgb_to_hsl', label: 'RGB转HSL', description: '将RGB颜色转换为HSL' },
-          { value: 'hsl_to_rgb', label: 'HSL转RGB', description: '将HSL颜色转换为RGB' },
-          { value: 'brightness', label: '亮度调整', description: '调整颜色亮度' },
-          { value: 'saturation', label: '饱和度调整', description: '调整颜色饱和度' },
-          { value: 'color_distance', label: '颜色距离', description: '计算与参考颜色的距离' }
-        ];
-
-      case 'array_transform':
-        return [
-          { value: 'statistics', label: '统计计算', description: '计算数组统计信息' },
-          { value: 'normalize', label: '数组归一化', description: '将数组归一化' },
-          { value: 'filter_outliers', label: '异常值过滤', description: '过滤数组中的异常值' },
-          { value: 'smooth', label: '数据平滑', description: '对数组数据进行平滑处理' },
-          { value: 'fft', label: '频域变换', description: '快速傅里叶变换' }
-        ];
-
-      case 'timeseries_transform':
-        return [
-          { value: 'trend_analysis', label: '趋势分析', description: '分析时间序列趋势' },
-          { value: 'seasonal_decompose', label: '季节分解', description: '分解季节性成分' },
-          { value: 'moving_average', label: '移动平均', description: '计算移动平均' },
-          { value: 'diff', label: '差分运算', description: '计算时间序列差分' },
-          { value: 'resample', label: '重采样', description: '改变时间序列采样频率' }
-        ];
-
-      default:
-        return [];
-    }
-  };
 
   // 渲染动作配置表单
   const renderActionConfig = (action: ComplexActionConfig, index: number) => {
@@ -309,19 +257,19 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const renderGeoTransformConfig = (action: ComplexActionConfig, index: number) => {
     // 将当前action配置转换为GPS编辑器格式
     const gpsConfig = {
-      sub_type: action.sub_type as any,
+      sub_type: action.sub_type,
       reference_point: {
-        latitude: action.config.reference_lat || action.config.center_lat || 0,
-        longitude: action.config.reference_lng || action.config.center_lng || 0
+        latitude: action.config.reference_lat || cfgNumber(action.config.center_lat, 0),
+        longitude: action.config.reference_lng || cfgNumber(action.config.center_lng, 0)
       },
-      target_coordinate_system: action.config.target_coordinate_system || 'WGS84',
-      source_coordinate_system: action.config.source_coordinate_system || 'WGS84',
+      target_coordinate_system: cfgString(action.config.target_coordinate_system, 'WGS84'),
+      source_coordinate_system: cfgString(action.config.source_coordinate_system, 'WGS84'),
       radius: action.config.radius,
-      unit: action.config.unit || 'meters',
-      output_key: action.config.output_key || 'gps_result'
-    };
+      unit: cfgString(action.config.unit, 'meters'),
+      output_key: cfgString(action.config.output_key, 'gps_result')
+    } as React.ComponentProps<typeof GpsActionEditor>['value'];
 
-    const handleGpsConfigChange = (newConfig: any) => {
+    const handleGpsConfigChange = (newConfig: NonNullable<React.ComponentProps<typeof GpsActionEditor>['value']>) => {
       // 更新action配置
       const updatedConfig = {
         ...action.config,
@@ -362,24 +310,24 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const renderVectorTransformConfig = (action: ComplexActionConfig, index: number) => {
     // 将当前action配置转换为向量编辑器格式
     const vectorConfig = {
-      sub_type: action.sub_type as any,
+      sub_type: action.sub_type,
       reference_vector: {
-        x: action.config.reference_x || 0,
-        y: action.config.reference_y || 0,
-        z: action.config.reference_z || 0
+        x: cfgNumber(action.config.reference_x, 0),
+        y: cfgNumber(action.config.reference_y, 0),
+        z: cfgNumber(action.config.reference_z, 0)
       },
-      rotation_axis: action.config.rotation_axis || 'z',
-      rotation_angle: action.config.rotation_angle || 0,
+      rotation_axis: cfgString(action.config.rotation_axis, 'z'),
+      rotation_angle: cfgNumber(action.config.rotation_angle, 0),
       custom_axis: {
-        x: action.config.custom_axis_x || 0,
-        y: action.config.custom_axis_y || 0,
-        z: action.config.custom_axis_z || 1
+        x: cfgNumber(action.config.custom_axis_x, 0),
+        y: cfgNumber(action.config.custom_axis_y, 0),
+        z: cfgNumber(action.config.custom_axis_z, 1)
       },
-      normalize_magnitude: action.config.normalize_magnitude || 1.0,
-      output_key: action.config.output_key || 'vector_result'
-    };
+      normalize_magnitude: cfgNumber(action.config.normalize_magnitude, 1.0),
+      output_key: cfgString(action.config.output_key, 'vector_result')
+    } as React.ComponentProps<typeof VectorActionEditor>['value'];
 
-    const handleVectorConfigChange = (newConfig: any) => {
+    const handleVectorConfigChange = (newConfig: NonNullable<React.ComponentProps<typeof VectorActionEditor>['value']>) => {
       // 更新action配置
       const updatedConfig = {
         ...action.config,
@@ -421,23 +369,23 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const renderColorTransformConfig = (action: ComplexActionConfig, index: number) => {
     // 将当前action配置转换为颜色编辑器格式
     const colorConfig = {
-      sub_type: action.sub_type as any,
-      target_color_space: action.config.target_color_space || 'HSL',
-      source_color_space: action.config.source_color_space || 'RGB',
+      sub_type: action.sub_type,
+      target_color_space: cfgString(action.config.target_color_space, 'HSL'),
+      source_color_space: cfgString(action.config.source_color_space, 'RGB'),
       reference_color: {
-        r: action.config.reference_r || 255,
-        g: action.config.reference_g || 255,
-        b: action.config.reference_b || 255,
-        a: action.config.reference_a || 1
+        r: cfgNumber(action.config.reference_r, 255),
+        g: cfgNumber(action.config.reference_g, 255),
+        b: cfgNumber(action.config.reference_b, 255),
+        a: cfgNumber(action.config.reference_a, 1)
       },
-      similarity_threshold: action.config.similarity_threshold || 0.8,
-      brightness_adjustment: action.config.brightness_adjustment || 0,
-      saturation_adjustment: action.config.saturation_adjustment || 0,
-      hue_shift_degrees: action.config.hue_shift_degrees || 0,
-      output_key: action.config.output_key || 'color_result'
-    };
+      similarity_threshold: cfgNumber(action.config.similarity_threshold, 0.8),
+      brightness_adjustment: cfgNumber(action.config.brightness_adjustment, 0),
+      saturation_adjustment: cfgNumber(action.config.saturation_adjustment, 0),
+      hue_shift_degrees: cfgNumber(action.config.hue_shift_degrees, 0),
+      output_key: cfgString(action.config.output_key, 'color_result')
+    } as React.ComponentProps<typeof ColorActionEditor>['value'];
 
-    const handleColorConfigChange = (newConfig: any) => {
+    const handleColorConfigChange = (newConfig: NonNullable<React.ComponentProps<typeof ColorActionEditor>['value']>) => {
       // 更新action配置
       const updatedConfig = {
         ...action.config,
@@ -479,27 +427,27 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const renderArrayTransformConfig = (action: ComplexActionConfig, index: number) => {
     // 将当前action配置转换为数组编辑器格式
     const arrayConfig = {
-      sub_type: action.sub_type as any,
-      operation: action.config.operation || 'mean',
+      sub_type: action.sub_type,
+      operation: cfgString(action.config.operation, 'mean'),
       filter_condition: action.config.filter_condition,
-      filter_type: action.config.filter_type || 'value_range',
+      filter_type: cfgString(action.config.filter_type, 'value_range'),
       min_value: action.config.min_value,
       max_value: action.config.max_value,
-      outlier_method: action.config.outlier_method || 'zscore',
-      outlier_threshold: action.config.outlier_threshold || 3,
-      sort_order: action.config.sort_order || 'asc',
-      sort_by: action.config.sort_by || 'value',
-      slice_start: action.config.slice_start || 0,
+      outlier_method: cfgString(action.config.outlier_method, 'zscore'),
+      outlier_threshold: cfgNumber(action.config.outlier_threshold, 3),
+      sort_order: cfgString(action.config.sort_order, 'asc'),
+      sort_by: cfgString(action.config.sort_by, 'value'),
+      slice_start: cfgNumber(action.config.slice_start, 0),
       slice_end: action.config.slice_end,
-      slice_step: action.config.slice_step || 1,
-      smooth_window: action.config.smooth_window || 5,
-      smooth_method: action.config.smooth_method || 'moving_average',
-      normalize_method: action.config.normalize_method || 'minmax',
-      fft_type: action.config.fft_type || 'magnitude',
-      output_key: action.config.output_key || 'array_result'
-    };
+      slice_step: cfgNumber(action.config.slice_step, 1),
+      smooth_window: cfgNumber(action.config.smooth_window, 5),
+      smooth_method: cfgString(action.config.smooth_method, 'moving_average'),
+      normalize_method: cfgString(action.config.normalize_method, 'minmax'),
+      fft_type: cfgString(action.config.fft_type, 'magnitude'),
+      output_key: cfgString(action.config.output_key, 'array_result')
+    } as React.ComponentProps<typeof ArrayActionEditor>['value'];
 
-    const handleArrayConfigChange = (newConfig: any) => {
+    const handleArrayConfigChange = (newConfig: NonNullable<React.ComponentProps<typeof ArrayActionEditor>['value']>) => {
       // 更新action配置
       const updatedConfig = {
         ...action.config,
@@ -531,25 +479,25 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   const renderTimeSeriesTransformConfig = (action: ComplexActionConfig, index: number) => {
     // 将当前action配置转换为时间序列编辑器格式
     const timeseriesConfig = {
-      sub_type: action.sub_type as any,
-      window_size: action.config.window_size || 10,
-      window_type: action.config.window_type || 'sliding',
-      trend_method: action.config.trend_method || 'linear',
-      seasonal_period: action.config.seasonal_period || 12,
-      decompose_model: action.config.decompose_model || 'additive',
-      diff_order: action.config.diff_order || 1,
+      sub_type: action.sub_type,
+      window_size: cfgNumber(action.config.window_size, 10),
+      window_type: cfgString(action.config.window_type, 'sliding'),
+      trend_method: cfgString(action.config.trend_method, 'linear'),
+      seasonal_period: cfgNumber(action.config.seasonal_period, 12),
+      decompose_model: cfgString(action.config.decompose_model, 'additive'),
+      diff_order: cfgNumber(action.config.diff_order, 1),
       diff_seasonal: action.config.diff_seasonal || false,
-      resample_frequency: action.config.resample_frequency || 'hour',
-      resample_method: action.config.resample_method || 'mean',
-      anomaly_method: action.config.anomaly_method || 'zscore',
-      anomaly_threshold: action.config.anomaly_threshold || 2.5,
-      forecast_steps: action.config.forecast_steps || 5,
-      forecast_method: action.config.forecast_method || 'linear',
-      correlation_lag: action.config.correlation_lag || 1,
-      output_key: action.config.output_key || 'timeseries_result'
-    };
+      resample_frequency: cfgString(action.config.resample_frequency, 'hour'),
+      resample_method: cfgString(action.config.resample_method, 'mean'),
+      anomaly_method: cfgString(action.config.anomaly_method, 'zscore'),
+      anomaly_threshold: cfgNumber(action.config.anomaly_threshold, 2.5),
+      forecast_steps: cfgNumber(action.config.forecast_steps, 5),
+      forecast_method: cfgString(action.config.forecast_method, 'linear'),
+      correlation_lag: cfgNumber(action.config.correlation_lag, 1),
+      output_key: cfgString(action.config.output_key, 'timeseries_result')
+    } as React.ComponentProps<typeof TimeSeriesActionEditor>['value'];
 
-    const handleTimeSeriesConfigChange = (newConfig: any) => {
+    const handleTimeSeriesConfigChange = (newConfig: NonNullable<React.ComponentProps<typeof TimeSeriesActionEditor>['value']>) => {
       // 更新action配置
       const updatedConfig = {
         ...action.config,
@@ -584,7 +532,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
         <Col span={12}>
           <Form.Item label="告警级别">
             <Select
-              value={action.config.level || 'warning'}
+              value={cfgString(action.config.level, 'warning')}
               onChange={(value) => updateActionConfig(index, 'level', value)}
             >
               <Option value="info">信息</Option>
@@ -597,7 +545,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
         <Col span={12}>
           <Form.Item label="限流时间">
             <Input
-              value={action.config.throttle || ''}
+              value={cfgString(action.config.throttle, '')}
               onChange={(e) => updateActionConfig(index, 'throttle', e.target.value)}
               placeholder="如 5m, 1h"
             />
@@ -608,7 +556,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
       <Form.Item label="告警消息">
         <TextArea
           rows={2}
-          value={action.config.message || ''}
+          value={cfgString(action.config.message, '')}
           onChange={(e) => updateActionConfig(index, 'message', e.target.value)}
           placeholder={`${dataType.name}数据告警: {{.field_name}}`}
         />
@@ -621,7 +569,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
     <div>
       <Form.Item label="转发目标">
         <Select
-          value={action.config.target_type || 'http'}
+          value={cfgString(action.config.target_type, 'http')}
           onChange={(value) => updateActionConfig(index, 'target_type', value)}
         >
           <Option value="http">HTTP接口</Option>
@@ -633,7 +581,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
       {action.config.target_type === 'http' && (
         <Form.Item label="URL地址">
           <Input
-            value={action.config.url}
+            value={cfgString(action.config.url)}
             onChange={(e) => updateActionConfig(index, 'url', e.target.value)}
             placeholder="https://api.example.com/complex-data"
           />
@@ -668,7 +616,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
   };
 
   // 更新动作配置
-  const updateActionConfig = (index: number, key: string, value: any) => {
+  const updateActionConfig = (index: number, key: string, value: unknown) => {
     const newActions = [...actions];
     newActions[index] = {
       ...newActions[index],
@@ -744,7 +692,7 @@ const ComplexActionForm: React.FC<ComplexActionFormProps> = ({
                   {availableActionTypes.find(t => t.type === action.type)?.name || action.type}
                 </Tag>
                 {action.sub_type && (
-                  <Tag color="green" size="small">{action.sub_type}</Tag>
+                  <Tag color="green">{action.sub_type}</Tag>
                 )}
               </Space>
             }

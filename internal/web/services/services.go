@@ -240,7 +240,7 @@ func (s *Services) Stop() error {
 // Close 关闭服务
 func (s *Services) Close() error {
 	// 先停止服务
-	s.Stop()
+	_ = s.Stop()
 
 	// 关闭数据库连接
 	if store, ok := s.store.(*SQLiteStore); ok {

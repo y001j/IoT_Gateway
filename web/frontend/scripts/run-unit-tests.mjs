@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const buildDir = path.join(root, '.test-build');
-const TEST_SOURCES = ['src/utils/format.ts', 'src/utils/history.ts'];
+const TEST_SOURCES = ['src/utils/format.ts', 'src/utils/history.ts', 'src/utils/errors.ts', 'src/utils/ruleData.ts'];
 
 async function transpiler() {
   const require = createRequire(path.join(root, 'package.json'));

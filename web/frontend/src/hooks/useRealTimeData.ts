@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { WebSocketService, WebSocketMessage } from '../services/websocketService';
 import { authService } from '../services/authService';
 
+
+import type { EnhancedIoTData, IoTDataPoint, RealtimeAlert, RealtimeSystemMetrics, RealtimeSystemStatus } from '../types/realtime';
 // 全局 WebSocket 服务实例（单例模式）
 let globalWebSocketService: WebSocketService | null = null;
 
@@ -28,11 +30,11 @@ const updateGlobalData = (updater: (prevData: RealTimeData) => RealTimeData) => 
 };
 
 interface RealTimeData {
-  iotData: any[];
-  systemStatus: any;
-  systemMetrics: any; // 添加systemMetrics字段
-  systemMetricsHistory: any[]; // 添加系统指标历史记录
-  alerts: any[];
+  iotData: IoTDataPoint[];
+  systemStatus: RealtimeSystemStatus | null;
+  systemMetrics: RealtimeSystemMetrics | null;
+  systemMetricsHistory: RealtimeSystemMetrics[];
+  alerts: RealtimeAlert[];
   connectionState: string;
   reconnectInfo: {
     attempts: number;
@@ -92,46 +94,30 @@ export const useRealTimeData = () => {
       const newData = { ...prevData };
 
       switch (message.type) {
-        case 'iot_data':
-          // 处理增强的IoT数据，包含类型信息和派生值
-          console.log('🔍 收到增强IoT数据:', message.data);
-          console.log('🔍 message.data.subject:', message.data.subject);
-          console.log('🔍 message.data.data:', message.data.data);
-          
+        case 'iot_data': {
           // 后端发送的数据格式：{ subject: "...", data: enhancedIoTData }
           // enhancedIoTData 包含: device_id, key, value, data_type, derived_values 等
-          const enhancedData = message.data.data || {};
-          console.log('🔍 提取的enhancedData:', enhancedData);
-          
-          // 检查数据是否为空
+          const enhancedData = (message.data?.data ?? {}) as EnhancedIoTData;
           if (!enhancedData.device_id || !enhancedData.key) {
-            console.warn('⚠️ 数据缺少必要字段:', {
-              device_id: enhancedData.device_id,
-              key: enhancedData.key,
-              originalData: message.data
-            });
+            console.warn('⚠️ 数据缺少必要字段:', message.data);
           }
-          
+
           const iotDataPoint = {
             timestamp: new Date(message.timestamp || Date.now()),
-            subject: message.data.subject || '',
+            subject: typeof message.data?.subject === 'string' ? message.data.subject : '',
             data: {
+              // 保留原始数据结构
+              ...enhancedData,
               device_id: enhancedData.device_id,
               key: enhancedData.key,
               value: enhancedData.value,
               data_type: enhancedData.data_type || 'unknown',
               derived_values: enhancedData.derived_values || {},
-              // 保留原始数据结构
-              ...enhancedData
             },
             // 为了向后兼容，保留原始消息
             raw_message: message.data
           };
-          
-          console.log('🔍 处理后的增强IoT数据点:', iotDataPoint);
-          console.log('📊 数据类型:', iotDataPoint.data.data_type);
-          console.log('📈 派生值:', iotDataPoint.data.derived_values);
-          
+
           // 限制 IoT 数据数组大小
           const newIotData = [...prevData.iotData, iotDataPoint];
           if (newIotData.length > 100) {
@@ -139,6 +125,7 @@ export const useRealTimeData = () => {
           }
           newData.iotData = newIotData;
           break;
+        }
 
         case 'system_status':
         case 'system_status_update':
@@ -147,15 +134,16 @@ export const useRealTimeData = () => {
           break;
 
         case 'system_metrics':
-        case 'system_metrics_update':
+        case 'system_metrics_update': {
           console.log('📈 更新系统指标:', message.data);
           
           // 字段映射：将后端字段名转换为前端期望的字段名
-          const mappedMetrics = {
-            ...message.data,
-            cpu_percent: message.data.cpu_usage || message.data.cpu_percent || 0,
-            memory_percent: message.data.memory_usage || message.data.memory_percent || 0,
-            disk_percent: message.data.disk_usage || message.data.disk_percent || 0,
+          const raw = message.data as Partial<RealtimeSystemMetrics>;
+          const mappedMetrics: RealtimeSystemMetrics = {
+            ...raw,
+            cpu_percent: raw.cpu_usage || raw.cpu_percent || 0,
+            memory_percent: raw.memory_usage || raw.memory_percent || 0,
+            disk_percent: raw.disk_usage || raw.disk_percent || 0,
             timestamp: new Date(),
           };
           
@@ -174,16 +162,17 @@ export const useRealTimeData = () => {
             newData.systemStatus = {
               ...newData.systemStatus,
               ...mappedMetrics
-            };
+            } as RealtimeSystemStatus;
           } else {
-            newData.systemStatus = mappedMetrics;
+            newData.systemStatus = { ...mappedMetrics } as RealtimeSystemStatus;
           }
           break;
+        }
 
         case 'rule_event':
           // 处理规则引擎事件（可能包含告警）
           if (message.data && typeof message.data === 'object') {
-            const eventData = message.data as any;
+            const eventData = message.data as { subject?: string; data?: Record<string, unknown> };
             if (eventData.subject && eventData.subject.includes('alert')) {
               const newAlerts = [...prevData.alerts, {
                 id: Date.now(),
@@ -202,7 +191,7 @@ export const useRealTimeData = () => {
         case 'alert_created':
           // 处理新创建的告警
           if (message.data && typeof message.data === 'object') {
-            const alertData = message.data as any;
+            const alertData = message.data as { alert_id: string; timestamp: string; alert?: Record<string, unknown> };
             console.log('📢 收到新告警:', alertData.alert);
             
             // 添加到告警列表
@@ -224,7 +213,7 @@ export const useRealTimeData = () => {
         case 'alert_resolved':
           // 处理告警解决
           if (message.data && typeof message.data === 'object') {
-            const alertData = message.data as any;
+            const alertData = message.data as { alert_id: string; timestamp: string; [field: string]: unknown };
             console.log('✅ 告警已解决:', alertData.alert_id);
             
             // 添加到告警列表
@@ -336,7 +325,7 @@ export const useRealTimeData = () => {
         // 检查当前连接状态，如果未连接才尝试连接
         if (!service.isConnected()) {
           console.log('📡 WebSocket未连接，尝试建立连接...');
-          service.connect().catch((error: any) => {
+          service.connect().catch((error: unknown) => {
             console.error('❌ WebSocket 连接失败:', error);
           });
         } else {
@@ -391,7 +380,7 @@ export const useRealTimeData = () => {
     service.resetReconnectAttempts();
     
          // 尝试连接
-     service.connect().catch((error: any) => {
+     service.connect().catch((error: unknown) => {
        console.error('❌ 手动重连失败:', error);
      });
   }, [getWebSocketService]);
@@ -404,16 +393,18 @@ export const useRealTimeData = () => {
   }, [getWebSocketService]);
 
   // 发送消息
-  const sendMessage = useCallback((type: string, data: any) => {
+  const sendMessage = useCallback((type: string, data: Record<string, unknown>) => {
     const service = getWebSocketService();
     service.send(type, data);
   }, [getWebSocketService]);
 
   // 组件卸载时的清理
   useEffect(() => {
+    // 复制 ref 对象本身（不是 .current），清理时读取的是最新的定时器
+    const timerRef = dataUpdateTimer;
     return () => {
-      if (dataUpdateTimer.current) {
-        clearTimeout(dataUpdateTimer.current);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
       }
       // 注意：我们不在这里断开全局 WebSocket 连接
       // 因为其他组件可能还在使用它

@@ -10,6 +10,7 @@ import type {
 } from '../types/monitoring';
 import type { BaseResponse } from '../types/common';
 
+import type { Plugin, PluginStats } from '../types/plugin';
 class MonitoringService {
   private baseUrl = '/monitoring';
 
@@ -44,7 +45,7 @@ class MonitoringService {
     console.log('解析出的插件数据:', plugins);
     
     if (Array.isArray(plugins)) {
-      await Promise.all(plugins.map(async (plugin: any) => {
+      await Promise.all((plugins as Array<Plugin & { error_count?: number }>).map(async (plugin) => {
         // 计算真实运行时间
         let connectionUptime = 0;
         if (plugin.status === 'running' && metrics?.gateway?.start_time) {
@@ -54,7 +55,7 @@ class MonitoringService {
         }
         
         // 获取插件统计数据
-        let pluginStats = null;
+        let pluginStats: PluginStats | null = null;
         try {
           const statsResponse = await api.get(`/plugins/${plugin.name}/stats`);
           pluginStats = statsResponse.data.data;
@@ -72,8 +73,8 @@ class MonitoringService {
         const baseInfo = {
           name: plugin.name,
           type: plugin.type,
-          status: plugin.status,
-          health: plugin.status === 'running' ? 'healthy' : plugin.status === 'stopped' ? 'degraded' : 'unhealthy',
+          status: (['running', 'stopped', 'error'].includes(plugin.status) ? plugin.status : 'error') as AdapterStatus['status'],
+          health: (plugin.status === 'running' ? 'healthy' : plugin.status === 'stopped' ? 'degraded' : 'unhealthy') as 'healthy' | 'degraded' | 'unhealthy',
           health_message: plugin.status === 'running' ? '运行正常' : plugin.status === 'stopped' ? '已停止' : '未知状态',
           connection_uptime: pluginStats?.uptime_seconds || connectionUptime,
           errors_count: errorsCount,
@@ -82,14 +83,10 @@ class MonitoringService {
         };
         
         if (plugin.type === 'adapter') {
-          // 对于适配器，只使用真实数据
-          const totalDataPoints = metrics?.data?.total_data_points || 0;
-          const runningAdapters = plugins.filter(p => p.type === 'adapter' && p.status === 'running').length;
-          
-          const dataPointsCount = plugin.status === 'running' && runningAdapters > 0
-            ? Math.floor(totalDataPoints / runningAdapters)
-            : 0;
-            
+          // 使用插件统计接口返回的该适配器的真实数据点数。
+          // 以前把网关总数据点数平均分给每个运行中的适配器，显示的是估算值
+          const dataPointsCount = plugin.status === 'running' ? (pluginStats?.data_points_total || 0) : 0;
+
           adapters.push({
             ...baseInfo,
             data_points_count: dataPointsCount,
@@ -97,14 +94,9 @@ class MonitoringService {
             tags: {},
           });
         } else if (plugin.type === 'sink') {
-          // 对于连接器，只使用真实数据
-          const totalDataPoints = metrics?.data?.total_data_points || 0;
-          const runningSinks = plugins.filter(p => p.type === 'sink' && p.status === 'running').length;
-          
-          const messagesPublished = plugin.status === 'running' && runningSinks > 0
-            ? Math.floor(totalDataPoints / runningSinks)
-            : 0;
-            
+          // 使用插件统计接口返回的该连接器的真实发送量（以前同样是平均估算）
+          const messagesPublished = plugin.status === 'running' ? (pluginStats?.data_points_total || 0) : 0;
+
           sinks.push({
             ...baseInfo,
             messages_published: messagesPublished,
@@ -206,8 +198,8 @@ class MonitoringService {
   /**
    * 测试适配器连接
    */
-  async testAdapterConnection(adapterName: string): Promise<any> {
-    const response = await api.post<BaseResponse>(
+  async testAdapterConnection(adapterName: string): Promise<BaseResponse & { error?: string }> {
+    const response = await api.post<BaseResponse & { error?: string }>(
       `${this.baseUrl}/adapters/${encodeURIComponent(adapterName)}/test-connection`
     );
     return response.data;
@@ -216,7 +208,7 @@ class MonitoringService {
   /**
    * 获取适配器性能指标
    */
-  async getAdapterPerformance(adapterName: string, period?: string): Promise<any> {
+  async getAdapterPerformance(adapterName: string, period?: string): Promise<unknown> {
     const searchParams = new URLSearchParams();
     if (period) {
       searchParams.append('period', period);
@@ -298,7 +290,7 @@ class MonitoringService {
   /**
    * 获取状态颜色
    */
-  getStatusColor(status: string): string {
+  getStatusColor(status: string): 'success' | 'default' | 'error' | 'processing' | 'warning' {
     switch (status) {
       case 'running':
         return 'success';

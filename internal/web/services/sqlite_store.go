@@ -76,13 +76,13 @@ func NewSQLiteStoreWithConfig(config *models.SQLiteConfig) (*SQLiteStore, error)
 
 	// 初始化数据库表
 	if err := store.initDatabase(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("初始化数据库失败: %v", err)
 	}
 
 	// 初始化预处理语句
 	if err := store.initPreparedStatements(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("初始化预处理语句失败: %v", err)
 	}
 
@@ -316,25 +316,25 @@ func (s *SQLiteStore) Close() error {
 	// 关闭预处理语句
 	if s.stmts != nil {
 		if s.stmts.createUser != nil {
-			s.stmts.createUser.Close()
+			_ = s.stmts.createUser.Close()
 		}
 		if s.stmts.getUserByID != nil {
-			s.stmts.getUserByID.Close()
+			_ = s.stmts.getUserByID.Close()
 		}
 		if s.stmts.getUserByUsername != nil {
-			s.stmts.getUserByUsername.Close()
+			_ = s.stmts.getUserByUsername.Close()
 		}
 		if s.stmts.updateUser != nil {
-			s.stmts.updateUser.Close()
+			_ = s.stmts.updateUser.Close()
 		}
 		if s.stmts.deleteUser != nil {
-			s.stmts.deleteUser.Close()
+			_ = s.stmts.deleteUser.Close()
 		}
 		if s.stmts.listUsers != nil {
-			s.stmts.listUsers.Close()
+			_ = s.stmts.listUsers.Close()
 		}
 		if s.stmts.countUsers != nil {
-			s.stmts.countUsers.Close()
+			_ = s.stmts.countUsers.Close()
 		}
 	}
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -170,7 +169,7 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 				CurrentLng:   dataPoint.LocationConfig.StartLongitude,
 				CurrentAlt:   (dataPoint.LocationConfig.AltitudeMin + dataPoint.LocationConfig.AltitudeMax) / 2,
 				CurrentSpeed: 0,
-				Direction:    rand.Float64() * 2 * math.Pi,
+				Direction:    simFloat64() * 2 * math.Pi,
 				LastUpdate:   time.Now(),
 			}
 		}
@@ -182,7 +181,7 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 				LastY: (dataPoint.Vector3DConfig.YMin + dataPoint.Vector3DConfig.YMax) / 2,
 				LastZ: (dataPoint.Vector3DConfig.ZMin + dataPoint.Vector3DConfig.ZMax) / 2,
 				Time:  0,
-				Phase: rand.Float64() * 2 * math.Pi,
+				Phase: simFloat64() * 2 * math.Pi,
 			}
 		}
 
@@ -204,9 +203,9 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 				if i < len(dataPoint.VectorConfig.MinValues) && i < len(dataPoint.VectorConfig.MaxValues) {
 					min := dataPoint.VectorConfig.MinValues[i]
 					max := dataPoint.VectorConfig.MaxValues[i]
-					initialValues[i] = min + rand.Float64()*(max-min)
+					initialValues[i] = min + simFloat64()*(max-min)
 				} else {
-					initialValues[i] = rand.Float64() * 100
+					initialValues[i] = simFloat64() * 100
 				}
 			}
 			dataPoint.vectorState = &VectorState{
@@ -222,13 +221,13 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 			for i := 0; i < dataPoint.ArrayConfig.Size; i++ {
 				switch dataPoint.ArrayConfig.ElementType {
 				case "float":
-					initialValues[i] = rand.Float64() * dataPoint.ArrayConfig.MaxValue
+					initialValues[i] = simFloat64() * dataPoint.ArrayConfig.MaxValue
 				case "int":
-					initialValues[i] = rand.Intn(int(dataPoint.ArrayConfig.MaxValue))
+					initialValues[i] = simIntn(int(dataPoint.ArrayConfig.MaxValue))
 				case "bool":
-					initialValues[i] = rand.Float32() > 0.5
+					initialValues[i] = simFloat32() > 0.5
 				default:
-					initialValues[i] = rand.Float64() * 100
+					initialValues[i] = simFloat64() * 100
 				}
 			}
 			dataPoint.arrayState = &ArrayState{
@@ -363,12 +362,12 @@ func (a *CompositeMockAdapter) generateLocationData(dataPoint *CompositeDataPoin
 		elapsed := time.Since(state.LastUpdate).Seconds()
 		if elapsed > 0 {
 			// 随机改变方向
-			if rand.Float32() < 0.1 { // 10%概率改变方向
-				state.Direction += (rand.Float64()*0.4 - 0.2) // ±0.2弧度变化
+			if simFloat32() < 0.1 { // 10%概率改变方向
+				state.Direction += (simFloat64()*0.4 - 0.2) // ±0.2弧度变化
 			}
 
 			// 更新速度
-			state.CurrentSpeed = config.SpeedMin + rand.Float64()*(config.SpeedMax-config.SpeedMin)
+			state.CurrentSpeed = config.SpeedMin + simFloat64()*(config.SpeedMax-config.SpeedMin)
 
 			// 计算位移
 			distance := state.CurrentSpeed * elapsed / 3600.0         // 转换为公里
@@ -397,13 +396,13 @@ func (a *CompositeMockAdapter) generateLocationData(dataPoint *CompositeDataPoin
 		}
 	} else {
 		// 静态位置，只在小范围内随机波动
-		state.CurrentLat = config.StartLatitude + (rand.Float64()-0.5)*config.LatitudeRange*0.1
-		state.CurrentLng = config.StartLongitude + (rand.Float64()-0.5)*config.LongitudeRange*0.1
-		state.CurrentSpeed = config.SpeedMin + rand.Float64()*(config.SpeedMax-config.SpeedMin)
+		state.CurrentLat = config.StartLatitude + (simFloat64()-0.5)*config.LatitudeRange*0.1
+		state.CurrentLng = config.StartLongitude + (simFloat64()-0.5)*config.LongitudeRange*0.1
+		state.CurrentSpeed = config.SpeedMin + simFloat64()*(config.SpeedMax-config.SpeedMin)
 	}
 
 	// 更新高度
-	state.CurrentAlt = config.AltitudeMin + rand.Float64()*(config.AltitudeMax-config.AltitudeMin)
+	state.CurrentAlt = config.AltitudeMin + simFloat64()*(config.AltitudeMax-config.AltitudeMin)
 
 	return map[string]interface{}{
 		"latitude":  state.CurrentLat,
@@ -435,9 +434,9 @@ func (a *CompositeMockAdapter) generateVector3DData(dataPoint *CompositeDataPoin
 		z = (config.ZMin+config.ZMax)/2 + (config.ZMax-config.ZMin)/4*math.Sin(state.Time*freq*0.7+state.Phase+1.0)
 	} else {
 		// 平滑随机变化
-		x = state.LastX + (rand.Float64()-0.5)*0.5
-		y = state.LastY + (rand.Float64()-0.5)*0.5
-		z = state.LastZ + (rand.Float64()-0.5)*0.5
+		x = state.LastX + (simFloat64()-0.5)*0.5
+		y = state.LastY + (simFloat64()-0.5)*0.5
+		z = state.LastZ + (simFloat64()-0.5)*0.5
 
 		// 边界检查
 		x = math.Max(config.XMin, math.Min(config.XMax, x))
@@ -537,7 +536,7 @@ func (a *CompositeMockAdapter) generateVectorData(dataPoint *CompositeDataPoint)
 		switch state.Pattern {
 		case "smooth":
 			// 平滑变化
-			change := (rand.Float64() - 0.5) * 5.0
+			change := (simFloat64() - 0.5) * 5.0
 			values[i] = state.LastValues[i] + change
 			values[i] = math.Max(min, math.Min(max, values[i]))
 		case "oscillate":
@@ -547,7 +546,7 @@ func (a *CompositeMockAdapter) generateVectorData(dataPoint *CompositeDataPoint)
 			freq := 0.5 + float64(i)*0.2
 			values[i] = center + amplitude*math.Sin(state.Time*freq)
 		default: // random
-			values[i] = min + rand.Float64()*(max-min)
+			values[i] = min + simFloat64()*(max-min)
 		}
 	}
 
@@ -586,31 +585,31 @@ func (a *CompositeMockAdapter) generateArrayData(dataPoint *CompositeDataPoint) 
 			if len(state.LastValues) > i {
 				if lastVal, ok := state.LastValues[i].(float64); ok {
 					// 平滑变化
-					change := (rand.Float64() - 0.5) * 10
+					change := (simFloat64() - 0.5) * 10
 					newVal := lastVal + change
 					elements[i] = math.Max(0, math.Min(config.MaxValue, newVal))
 				} else {
-					elements[i] = rand.Float64() * config.MaxValue
+					elements[i] = simFloat64() * config.MaxValue
 				}
 			} else {
-				elements[i] = rand.Float64() * config.MaxValue
+				elements[i] = simFloat64() * config.MaxValue
 			}
 		case "int":
 			if len(state.LastValues) > i {
 				if lastVal, ok := state.LastValues[i].(int); ok {
-					change := rand.Intn(21) - 10 // -10到+10的变化
+					change := simIntn(21) - 10 // -10到+10的变化
 					newVal := lastVal + change
 					elements[i] = int(math.Max(0, math.Min(config.MaxValue, float64(newVal))))
 				} else {
-					elements[i] = rand.Intn(int(config.MaxValue))
+					elements[i] = simIntn(int(config.MaxValue))
 				}
 			} else {
-				elements[i] = rand.Intn(int(config.MaxValue))
+				elements[i] = simIntn(int(config.MaxValue))
 			}
 		case "bool":
-			elements[i] = rand.Float32() > 0.5
+			elements[i] = simFloat32() > 0.5
 		default:
-			elements[i] = rand.Float64() * 100
+			elements[i] = simFloat64() * 100
 		}
 	}
 

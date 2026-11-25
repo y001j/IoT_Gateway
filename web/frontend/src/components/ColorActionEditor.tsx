@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Form,
+  
   Select,
   InputNumber,
   Input,
@@ -21,7 +21,7 @@ import {
   BorderOutlined
 } from '@ant-design/icons';
 
-const { Text, Title } = Typography;
+const { Text  } = Typography;
 const { Option } = Select;
 
 interface ColorInput {
@@ -55,7 +55,7 @@ export const ColorActionEditor: React.FC<ColorActionEditorProps> = ({
   },
   onChange
 }) => {
-  const handleChange = (field: keyof ColorActionConfig, newValue: any) => {
+  const handleChange = (field: keyof ColorActionConfig, newValue: unknown) => {
     if (onChange) {
       onChange({
         ...value,
@@ -64,7 +64,7 @@ export const ColorActionEditor: React.FC<ColorActionEditorProps> = ({
     }
   };
 
-  const handleColorChange = (color: any) => {
+  const handleColorChange = (color: { toRgb(): { r: number; g: number; b: number; a: number } }) => {
     const colorValues = color.toRgb();
     handleChange('reference_color', {
       r: Math.round(colorValues.r),

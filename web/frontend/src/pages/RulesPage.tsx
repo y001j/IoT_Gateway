@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   Table,
@@ -44,7 +44,8 @@ import type {
   Rule,
   RuleListRequest,
   Action,
-  Condition
+  Condition,
+  RuleCreateRequest
 } from '../types/rule';
 import RuleHelp from '../components/RuleHelp';
 import ConditionForm from '../components/ConditionForm';
@@ -57,6 +58,8 @@ import Vector3DRuleEditor from '../components/Vector3DRuleEditor';
 import GenericVectorRuleEditor from '../components/GenericVectorRuleEditor';
 import VisualRuleEditor from '../components/VisualRuleEditor';
 
+import { asHttpError } from '../utils/errors';
+import { dataTypeName } from '../utils/ruleData';
 const { Title, Text } = Typography;
 const { Search } = Input;
 const { Option } = Select;
@@ -168,12 +171,13 @@ const RulesPage: React.FC = () => {
   };
 
   // 获取规则列表
-  const fetchRules = async () => {
+  const { current: currentPage, pageSize } = pagination;
+  const fetchRules = useCallback(async () => {
     setLoading(true);
     try {
       const params: RuleListRequest = {
-        page: pagination.current,
-        page_size: pagination.pageSize,
+        page: currentPage,
+        page_size: pageSize,
         search: searchText || undefined,
         enabled: filterEnabled
       };
@@ -184,12 +188,13 @@ const RulesPage: React.FC = () => {
         ...prev,
         total: response.pagination.total
       }));
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('获取规则列表失败：' + (error.message || '未知错误'));
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, pageSize, searchText, filterEnabled]);
 
   // 切换规则状态
   const toggleRuleStatus = async (rule: Rule) => {
@@ -204,7 +209,8 @@ const RulesPage: React.FC = () => {
       // 添加延迟以确保状态同步
       await new Promise(resolve => setTimeout(resolve, 300));
       await fetchRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('操作失败：' + (error.message || '未知错误'));
     }
   };
@@ -217,7 +223,8 @@ const RulesPage: React.FC = () => {
       // 添加延迟以确保状态同步
       await new Promise(resolve => setTimeout(resolve, 300));
       await fetchRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       message.error('删除规则失败：' + (error.message || '未知错误'));
     }
   };
@@ -337,7 +344,7 @@ const RulesPage: React.FC = () => {
         priority: values.priority || 100,
         conditions,
         actions,
-        tags: values.tags?.reduce((acc: any, item: any) => {
+        tags: values.tags?.reduce((acc: Record<string, string>, item: { key?: string; value?: string }) => {
           if (item.key && item.value) {
             acc[item.key] = item.value;
           }
@@ -347,7 +354,8 @@ const RulesPage: React.FC = () => {
       
       setJsonPreview(JSON.stringify(preview, null, 2));
       setValidationErrors([]);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       setValidationErrors([error.message || 'JSON格式错误']);
     }
   };
@@ -390,7 +398,7 @@ const RulesPage: React.FC = () => {
           setCurrentActions(actions);
         }
         setValidationErrors([]);
-      } catch (error: any) {
+      } catch {
         message.error('JSON格式错误，无法切换到可视化模式');
         return;
       }
@@ -436,7 +444,7 @@ const RulesPage: React.FC = () => {
         return;
       }
       
-      const tags = values.tags?.reduce((acc: any, item: any) => {
+      const tags = values.tags?.reduce((acc: Record<string, string>, item: { key?: string; value?: string }) => {
         if (item.key && item.value) {
           acc[item.key] = item.value;
         }
@@ -455,12 +463,12 @@ const RulesPage: React.FC = () => {
 
       if (isEditing && selectedRule) {
         await ruleService.updateRule(selectedRule.id, {
-          ...ruleData,
+          ...toRuleRequest(ruleData),
           version: selectedRule.version
         });
         message.success('规则更新成功');
       } else {
-        await ruleService.createRule(ruleData);
+        await ruleService.createRule(toRuleRequest(ruleData));
         message.success('规则创建成功');
       }
 
@@ -468,7 +476,8 @@ const RulesPage: React.FC = () => {
       // 添加延迟以确保后端文件监控和内存状态同步
       await new Promise(resolve => setTimeout(resolve, 500));
       await fetchRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('保存规则失败:', error);
       
       if (error instanceof SyntaxError) {
@@ -513,7 +522,7 @@ const RulesPage: React.FC = () => {
   };
 
   // 处理模板选择
-  const handleTemplateSelect = (template: any) => {
+  const handleTemplateSelect = (template: { name: string; rule: Partial<Rule> }) => {
     const templateRule = template.rule;
     
     // 设置表单基本字段
@@ -546,17 +555,36 @@ const RulesPage: React.FC = () => {
     message.success(`已加载模板：${template.name}`);
   };
 
+  // 把编辑器返回的部分规则转换为请求对象；缺少必填字段时抛出明确的错误
+  const toRuleRequest = (ruleData: Partial<Rule>): RuleCreateRequest => {
+    if (!ruleData.name) {
+      throw new Error('规则名称不能为空');
+    }
+    if (!ruleData.conditions) {
+      throw new Error('规则条件不能为空');
+    }
+    return {
+      name: ruleData.name,
+      description: ruleData.description ?? '',
+      enabled: ruleData.enabled ?? true,
+      priority: ruleData.priority ?? 0,
+      conditions: ruleData.conditions,
+      actions: ruleData.actions ?? [],
+      tags: ruleData.tags,
+    };
+  };
+
   // 处理复合数据规则保存
   const handleComplexRuleSave = async (ruleData: Partial<Rule>) => {
     try {
       if (isEditing && selectedRule) {
         await ruleService.updateRule(selectedRule.id, {
-          ...ruleData,
+          ...toRuleRequest(ruleData),
           version: selectedRule.version
         });
         message.success('复合数据规则更新成功');
       } else {
-        await ruleService.createRule(ruleData);
+        await ruleService.createRule(toRuleRequest(ruleData));
         message.success('复合数据规则创建成功');
       }
 
@@ -565,7 +593,8 @@ const RulesPage: React.FC = () => {
       // 添加延迟以确保后端文件监控和内存状态同步
       await new Promise(resolve => setTimeout(resolve, 500));
       await fetchRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('保存复合数据规则失败:', error);
       
       if (error.response) {
@@ -587,29 +616,18 @@ const RulesPage: React.FC = () => {
     setIsEditing(false);
   };
 
-  // 返回数据类型选择器
-  const handleBackToDataTypeSelector = () => {
-    // 关闭所有编辑器
-    setComplexRuleEditorVisible(false);
-    setGeospatialEditorVisible(false);
-    setVector3dEditorVisible(false);
-    setGenericVectorEditorVisible(false);
-    setVisualEditorVisible(false);
-    // 重新打开数据类型选择器
-    setDataTypeSelectorVisible(true);
-  };
 
   // 专门化规则编辑器的保存处理
   const handleSpecializedRuleSave = async (ruleData: Partial<Rule>) => {
     try {
       if (isEditing && selectedRule) {
         await ruleService.updateRule(selectedRule.id, {
-          ...ruleData,
+          ...toRuleRequest(ruleData),
           version: selectedRule.version
         });
         message.success('复合数据规则更新成功');
       } else {
-        await ruleService.createRule(ruleData);
+        await ruleService.createRule(toRuleRequest(ruleData));
         message.success('复合数据规则创建成功');
       }
 
@@ -624,7 +642,8 @@ const RulesPage: React.FC = () => {
       // 添加延迟以确保后端文件监控和内存状态同步
       await new Promise(resolve => setTimeout(resolve, 500));
       await fetchRules();
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('保存专门化规则失败:', error);
       
       if (error.response) {
@@ -661,7 +680,7 @@ const RulesPage: React.FC = () => {
   const isComplexDataRule = (rule: Rule): boolean => {
     // 优先级1: 检查规则的数据类型标记 (最准确的识别方式)
     // 检查根级别data_type字段和tags中的数据类型
-    const rootDataType = rule.data_type;
+    const rootDataType = dataTypeName(rule.data_type);
     const tagDataType = rule.tags ? (rule.tags['data_type'] || rule.tags['data_category']) : null;
     const dataType = rootDataType || tagDataType;
     
@@ -771,7 +790,7 @@ const RulesPage: React.FC = () => {
   // 智能推断数据类型
   const inferDataCategory = (rule: Rule): string => {
     // 优先级0: 检查根级别data_type字段
-    const rootDataType = rule.data_type;
+    const rootDataType = dataTypeName(rule.data_type);
     if (rootDataType) {
       console.log(`规则 [${rule.name}] 检测到 data_type 字段:`, rootDataType);
       // 将具体类型映射到类别
@@ -881,9 +900,9 @@ const RulesPage: React.FC = () => {
       setIsEditing(true);
       
       // 智能推断数据类型
-      let dataCategory = inferDataCategory(rule);
-      let dataTypeName = getDataTypeFriendlyName(dataCategory);
-      let dataTypeKey = rule.tags?.['data_type'] || `${dataCategory}_data`;
+      const dataCategory = inferDataCategory(rule);
+      const dataTypeName = getDataTypeFriendlyName(dataCategory);
+      const dataTypeKey = rule.tags?.['data_type'] || `${dataCategory}_data`;
       
       // 创建临时数据类型选项
       const tempDataType: DataTypeOption = {
@@ -1023,7 +1042,6 @@ MQTT代理: ${config.broker || 'N/A'}
               <strong>{name}</strong>
               {isComplex && (
                 <Tag 
-                  size="small" 
                   color={getDataTypeColor(dataCategory!)} 
                   icon={getDataTypeIcon(dataCategory!)}
                   style={{ marginLeft: 8 }}
@@ -1159,7 +1177,7 @@ MQTT代理: ${config.broker || 'N/A'}
   ];
 
   // 处理表格变化
-  const handleTableChange = (paginationConfig: TablePaginationConfig, filters: any) => {
+  const handleTableChange = (paginationConfig: TablePaginationConfig, filters: Record<string, (boolean | string | number)[] | null>) => {
     setPagination(prev => ({
       ...prev,
       current: paginationConfig.current || 1,
@@ -1167,14 +1185,16 @@ MQTT代理: ${config.broker || 'N/A'}
     }));
     
     if (filters.enabled !== undefined) {
-      setFilterEnabled(filters.enabled?.[0]);
+      // 清除筛选时 antd 传入 null，此时不筛选（undefined）
+      const v = filters.enabled?.[0];
+      setFilterEnabled(v === undefined ? undefined : v === true || v === 'true');
     }
   };
 
   // 初始化和依赖更新
   useEffect(() => {
     fetchRules();
-  }, [pagination.current, pagination.pageSize, searchText, filterEnabled]);
+  }, [fetchRules]);
 
   return (
     <div>
@@ -1566,7 +1586,6 @@ MQTT代理: ${config.broker || 'N/A'}
       <Vector3DRuleEditor
         visible={vector3dEditorVisible}
         rule={selectedRule}
-        mode={isEditing ? 'edit' : 'create'}
         onSave={handleSpecializedRuleSave}
         onClose={() => setVector3dEditorVisible(false)}
       />
@@ -1575,7 +1594,6 @@ MQTT代理: ${config.broker || 'N/A'}
       <GenericVectorRuleEditor
         visible={genericVectorEditorVisible}
         rule={selectedRule}
-        mode={isEditing ? 'edit' : 'create'}
         onSave={handleSpecializedRuleSave}
         onClose={() => setGenericVectorEditorVisible(false)}
       />

@@ -356,7 +356,9 @@ func (s *JetStreamSink) SubscribeConsumer(consumerName string, deliverSubject st
 		if err := json.Unmarshal(msg.Data, &point); err != nil {
 			s.HandleError(err, "解析数据点")
 			// 即使解析失败，也确认消息以避免无限重试
-			msg.Ack()
+			if err := msg.Ack(); err != nil {
+				s.HandleError(err, "确认JetStream消息")
+			}
 			return
 		}
 
@@ -364,12 +366,16 @@ func (s *JetStreamSink) SubscribeConsumer(consumerName string, deliverSubject st
 		if err := handler(point); err != nil {
 			s.HandleError(err, "处理数据点")
 			// 处理失败，不确认消息，让JetStream重新投递
-			msg.Nak()
+			if err := msg.Nak(); err != nil {
+				s.HandleError(err, "确认JetStream消息")
+			}
 			return
 		}
 
 		// 处理成功，确认消息
-		msg.Ack()
+		if err := msg.Ack(); err != nil {
+			s.HandleError(err, "确认JetStream消息")
+		}
 	})
 
 	if err != nil {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useMemo, useRef, useCallback } from 'react';
 import {
   Form,
   Select,
@@ -27,6 +27,7 @@ import {
 } from '@ant-design/icons';
 import type { Action } from '../types/rule';
 
+import { cfgString, cfgNumber, cfgOptNumber, cfgObject } from '../utils/ruleData';
 const { Option } = Select;
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -38,7 +39,7 @@ interface ActionFormProps {
 
 interface ActionConfig {
   type: string;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   async?: boolean;
   timeout?: string;
   retry?: number;
@@ -87,7 +88,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   };
 
   // 深度比较函数
-  const deepEqual = useCallback((obj1: any, obj2: any): boolean => {
+  const deepEqual = useCallback((obj1: unknown, obj2: unknown): boolean => {
     if (obj1 === obj2) return true;
     if (!obj1 || !obj2) return obj1 === obj2;
     if (typeof obj1 !== typeof obj2) return false;
@@ -97,7 +98,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
     const keys2 = Object.keys(obj2);
     if (keys1.length !== keys2.length) return false;
     
-    for (let key of keys1) {
+    for (const key of keys1) {
       if (!keys2.includes(key)) return false;
       if (!deepEqual(obj1[key], obj2[key])) return false;
     }
@@ -117,7 +118,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
 
     // 深度比较，只有真正变化时才重新计算
     if (!deepEqual(value, lastValueRef.current)) {
-      const mappedActions = value.map((action, index) => {
+      const mappedActions = value.map((action, _index) => {
         // 深拷贝配置，确保数据不丢失
         const config = JSON.parse(JSON.stringify(action.config || {}));
         
@@ -198,7 +199,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   }, [currentActions, onChange, convertToCallbackFormat]);
 
   // 更新动作
-  const updateAction = useCallback((index: number, field: keyof ActionConfig, value: any) => {
+  const updateAction = useCallback((index: number, field: keyof ActionConfig, value: unknown) => {
     const newActions = [...currentActions];
     newActions[index] = { ...newActions[index], [field]: value };
     actionsRef.current = newActions;
@@ -207,7 +208,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   }, [currentActions, onChange, convertToCallbackFormat]);
 
   // 更新动作配置
-  const updateActionConfig = useCallback((index: number, key: string, value: any) => {
+  const updateActionConfig = useCallback((index: number, key: string, value: unknown) => {
     const newActions = [...currentActions];
     newActions[index] = {
       ...newActions[index],
@@ -245,7 +246,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Col span={12}>
             <Form.Item label="告警级别">
               <Select
-                value={action.config.level || 'warning'}
+                value={cfgString(action.config.level, 'warning')}
                 onChange={(value) => updateActionConfig(index, 'level', value)}
               >
                 <Option key="info" value="info">信息</Option>
@@ -259,7 +260,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="限流时间">
               <Input
                 placeholder="如 5m, 1h"
-                value={action.config.throttle || ''}
+                value={cfgString(action.config.throttle)}
                 onChange={(e) => updateActionConfig(index, 'throttle', e.target.value)}
               />
             </Form.Item>
@@ -269,7 +270,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <TextArea
             rows={2}
             placeholder="支持变量: {{.DeviceID}}, {{.Key}}, {{.Value}}"
-            value={action.config.message || ''}
+            value={cfgString(action.config.message)}
             onChange={(e) => updateActionConfig(index, 'message', e.target.value)}
           />
         </Form.Item>
@@ -295,10 +296,10 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   // 渲染转换配置
   const renderTransformConfig = (action: ActionConfig, index: number) => {
     // 标准格式：只使用 parameters 嵌套结构，但兼容旧格式
-    const transformType = action.config.type || 'scale';
+    const transformType = cfgString(action.config.type, 'scale');
     
     // 兼容旧格式：如果没有parameters但有直接的参数，则从根级别读取
-    let parameters = action.config.parameters || {};
+    let parameters: Record<string, unknown> = cfgObject(action.config.parameters);
     
     // 兼容旧的表达式格式：expression直接在config下
     if (!parameters.expression && action.config.expression) {
@@ -314,7 +315,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
     }
     
     // 更新参数的辅助函数 - 只使用标准格式
-    const updateParameter = (key: string, value: any) => {
+    const updateParameter = (key: string, value: unknown) => {
       const newParams = { ...parameters, [key]: value };
       updateActionConfig(index, 'parameters', newParams);
     };
@@ -340,7 +341,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="缩放因子">
               <InputNumber
                 placeholder="乘数，如 2.0"
-                value={parameters.factor}
+                value={cfgOptNumber(parameters.factor)}
                 onChange={(value) => updateParameter('factor', value)}
                 style={{ width: '100%' }}
                 step={0.1}
@@ -356,7 +357,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="偏移量">
               <InputNumber
                 placeholder="偏移值，如 32"
-                value={parameters.offset}
+                value={cfgOptNumber(parameters.offset)}
                 onChange={(value) => updateParameter('offset', value)}
                 style={{ width: '100%' }}
                 step={0.1}
@@ -372,7 +373,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="表达式">
               <Input
                 placeholder="数学表达式，如 x * 1.8 + 32"
-                value={parameters.expression}
+                value={cfgString(parameters.expression)}
                 onChange={(e) => updateParameter('expression', e.target.value)}
               />
               <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -389,7 +390,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
                   <Form.Item label="源单位">
                     <Select
                       placeholder="选择源单位"
-                      value={parameters.from}
+                      value={cfgString(parameters.from) || undefined}
                       onChange={(value) => updateParameter('from', value)}
                       style={{ width: '100%' }}
                     >
@@ -407,7 +408,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
                   <Form.Item label="目标单位">
                     <Select
                       placeholder="选择目标单位"
-                      value={parameters.to}
+                      value={cfgString(parameters.to) || undefined}
                       onChange={(value) => updateParameter('to', value)}
                       style={{ width: '100%' }}
                     >
@@ -425,10 +426,10 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             </>
           );
 
-        case 'lookup':
+        case 'lookup': {
           // 支持两种数据结构：parameters.table 和 顶级的 lookup_table
           const lookupTable = parameters.table || action.config.lookup_table || {};
-          const defaultValue = parameters.default || action.config.default_value || '';
+          const defaultValue = cfgString(parameters.default) || cfgString(action.config.default_value);
           
           return (
             <>
@@ -463,13 +464,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
               </Form.Item>
             </>
           );
+        }
 
         case 'round':
           return (
             <Form.Item label="小数位数">
               <InputNumber
                 placeholder="保留的小数位数"
-                value={parameters.decimals || 0}
+                value={cfgNumber(parameters.decimals, 0)}
                 onChange={(value) => updateParameter('decimals', value)}
                 min={0}
                 max={10}
@@ -485,7 +487,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
                 <Form.Item label="最小值">
                   <InputNumber
                     placeholder="数值下限"
-                    value={parameters.min}
+                    value={cfgOptNumber(parameters.min)}
                     onChange={(value) => updateParameter('min', value)}
                     style={{ width: '100%' }}
                   />
@@ -495,7 +497,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
                 <Form.Item label="最大值">
                   <InputNumber
                     placeholder="数值上限"
-                    value={parameters.max}
+                    value={cfgOptNumber(parameters.max)}
                     onChange={(value) => updateParameter('max', value)}
                     style={{ width: '100%' }}
                   />
@@ -509,7 +511,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="格式字符串">
               <Input
                 placeholder="格式化模板，如 %.2f"
-                value={parameters.format}
+                value={cfgString(parameters.format)}
                 onChange={(e) => updateParameter('format', e.target.value)}
               />
               <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -578,7 +580,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         >
           <Input
             placeholder="转换后的字段名，如 temperature_fahrenheit（推荐设置）"
-            value={action.config.output_key || ''}
+            value={cfgString(action.config.output_key)}
             onChange={(e) => updateActionConfig(index, 'output_key', e.target.value)}
           />
           <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -609,7 +611,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <Form.Item label="数值精度">
           <InputNumber
             placeholder="小数位数（仅对数值类型有效）"
-            value={action.config.precision !== undefined ? action.config.precision : undefined}
+            value={cfgOptNumber(action.config.precision)}
             onChange={(value) => updateActionConfig(index, 'precision', value)}
             min={0}
             max={10}
@@ -623,7 +625,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <Form.Item label="错误处理策略">
           <Select
             placeholder="转换出错时的处理方式"
-            value={action.config.error_action || 'error'}
+            value={cfgString(action.config.error_action, 'error')}
             onChange={(value) => updateActionConfig(index, 'error_action', value)}
           >
             <Option key="error-handling" value="error">抛出错误</Option>
@@ -683,7 +685,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <Form.Item label="发布主题">
           <Input
             placeholder="NATS发布主题（可选），如 iot.data.transformed"
-            value={action.config.publish_subject || ''}
+            value={cfgString(action.config.publish_subject)}
             onChange={(e) => updateActionConfig(index, 'publish_subject', e.target.value)}
           />
           <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -697,15 +699,15 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   // 渲染过滤配置
   const renderFilterConfig = (action: ActionConfig, index: number) => {
     // 处理后端数据结构兼容
-    const filterType = action.config.type || (action.config.parameters?.type) || 'range';
-    const parameters = action.config.parameters || {};
+    const parameters = cfgObject(action.config.parameters);
+    const filterType = cfgString(action.config.type) || cfgString(parameters.type) || 'range';
     
     // 兼容旧的数据结构，将根级别的配置迁移到parameters中
     const getParameterValue = (key: string) => {
       return parameters[key] !== undefined ? parameters[key] : action.config[key];
     };
     
-    const updateFilterConfig = (key: string, value: any) => {
+    const updateFilterConfig = (key: string, value: unknown) => {
       // 更新parameters对象结构
       const newParameters = { ...parameters, [key]: value };
       updateActionConfig(index, 'parameters', newParameters);
@@ -744,7 +746,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="过滤字段">
             <Input
               placeholder="要过滤的数据字段，如 value 或 temperature"
-              value={getParameterValue('field') || ''}
+              value={cfgString(getParameterValue('field'))}
               onChange={(e) => updateFilterConfig('field', e.target.value)}
             />
             <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -806,7 +808,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
               <Col span={12}>
                 <Input
                   placeholder="时间窗口，如 1m, 30s, 1h"
-                  value={getParameterValue('window') || ''}
+                  value={cfgString(getParameterValue('window'))}
                   onChange={(e) => updateFilterConfig('window', e.target.value)}
                 />
               </Col>
@@ -823,14 +825,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="去重字段">
             <Input
               placeholder="用于去重的字段名，留空则使用完整数据进行去重"
-              value={getParameterValue('field') || ''}
+              value={cfgString(getParameterValue('field'))}
               onChange={(e) => updateFilterConfig('field', e.target.value)}
             />
           </Form.Item>
           <Form.Item label="去重时间窗口">
             <Input
               placeholder="时间窗口，如 5m, 1h，在此时间内的重复数据将被过滤"
-              value={getParameterValue('window') || getParameterValue('ttl') || ''}
+              value={cfgString(getParameterValue('window')) || cfgString(getParameterValue('ttl'))}
               onChange={(e) => {
                 updateFilterConfig('window', e.target.value);
                 updateFilterConfig('ttl', e.target.value);
@@ -848,14 +850,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="匹配模式">
             <Input
               placeholder="正则表达式或字符串模式"
-              value={getParameterValue('pattern') || ''}
+              value={cfgString(getParameterValue('pattern'))}
               onChange={(e) => updateFilterConfig('pattern', e.target.value)}
             />
           </Form.Item>
           <Form.Item label="匹配字段">
             <Input
               placeholder="要匹配的字段名，默认为value"
-              value={getParameterValue('field') || ''}
+              value={cfgString(getParameterValue('field'))}
               onChange={(e) => updateFilterConfig('field', e.target.value)}
             />
           </Form.Item>
@@ -881,7 +883,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
             <Form.Item label="默认值">
               <Input
                 placeholder="空值时的填充值"
-                value={getParameterValue('default_value') || ''}
+                value={cfgString(getParameterValue('default_value'))}
                 onChange={(e) => updateFilterConfig('default_value', e.target.value)}
               />
             </Form.Item>
@@ -904,7 +906,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
               <Col span={12}>
                 <Select
                   placeholder="比较方式"
-                  value={getParameterValue('operator') || 'gt'}
+                  value={cfgString(getParameterValue('operator'), 'gt')}
                   onChange={(value) => updateFilterConfig('operator', value)}
                 >
                   <Option key="gt" value="gt">大于 (&gt;)</Option>
@@ -925,7 +927,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="时间窗口">
             <Input
               placeholder="时间窗口大小，如 5m, 1h, 30s"
-              value={getParameterValue('window') || ''}
+              value={cfgString(getParameterValue('window'))}
               onChange={(e) => updateFilterConfig('window', e.target.value)}
             />
           </Form.Item>
@@ -969,14 +971,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
               min={0}
               max={100}
               formatter={value => `${value}%`}
-              parser={value => value.replace('%', '')}
+              parser={value => Number((value ?? '').replace('%', '')) || 0}
               style={{ width: '100%' }}
             />
           </Form.Item>
           <Form.Item label="时间窗口">
             <Input
               placeholder="计算变化率的时间窗口，如 1m"
-              value={getParameterValue('window') || ''}
+              value={cfgString(getParameterValue('window'))}
               onChange={(e) => updateFilterConfig('window', e.target.value)}
             />
           </Form.Item>
@@ -987,7 +989,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <div>
           <Form.Item label="异常检测方法">
             <Select
-              value={getParameterValue('method') || 'z_score'}
+              value={cfgString(getParameterValue('method'), 'z_score')}
               onChange={(value) => updateFilterConfig('method', value)}
             >
               <Option key="z_score" value="z_score">Z-Score (标准差)</Option>
@@ -1034,7 +1036,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="异常条件">
             <Input
               placeholder="定义异常的条件表达式"
-              value={getParameterValue('condition') || ''}
+              value={cfgString(getParameterValue('condition'))}
               onChange={(e) => updateFilterConfig('condition', e.target.value)}
             />
             <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
@@ -1053,14 +1055,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
   const renderAggregateConfig = (action: ActionConfig, index: number) => {
     
     // 兼容后端配置字段映射 - 支持多种数据结构
-    const windowSize = action.config.size || action.config.window_size;
+    const windowSize = cfgOptNumber(action.config.size) ?? cfgOptNumber(action.config.window_size);
     
     // 处理输出字段名的多种数据结构
-    let outputKey = action.config.output_key || action.config.output_field;
+    let outputKey = cfgString(action.config.output_key) || cfgString(action.config.output_field);
     
     // 检查是否存在 output 对象结构（后端存储格式）
-    if (!outputKey && action.config.output && typeof action.config.output === 'object') {
-      outputKey = action.config.output.key_template;
+    if (!outputKey) {
+      outputKey = cfgString(cfgObject(action.config.output).key_template);
     }
     
     return (
@@ -1221,7 +1223,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
 
       <Form.Item label="窗口类型" tooltip="计数窗口：基于数据点数量；时间窗口：基于时间范围">
         <Select
-          value={action.config.window_type || 'count'}
+          value={cfgString(action.config.window_type, 'count')}
           onChange={(value) => updateActionConfig(index, 'window_type', value)}
         >
           <Option value="count">计数窗口</Option>
@@ -1236,7 +1238,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         >
           <Input
             placeholder="如: 1m, 30s, 1h"
-            value={action.config.window || ''}
+            value={cfgString(action.config.window)}
             onChange={(e) => updateActionConfig(index, 'window', e.target.value)}
           />
         </Form.Item>
@@ -1250,7 +1252,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <InputNumber
           style={{ width: '100%' }}
           placeholder="可选，用于阈值监控函数"
-          value={action.config.upper_limit}
+          value={cfgOptNumber(action.config.upper_limit)}
           onChange={(value) => updateActionConfig(index, 'upper_limit', value)}
         />
       </Form.Item>
@@ -1262,7 +1264,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <InputNumber
           style={{ width: '100%' }}
           placeholder="可选，用于阈值监控函数"
-          value={action.config.lower_limit}
+          value={cfgOptNumber(action.config.lower_limit)}
           onChange={(value) => updateActionConfig(index, 'lower_limit', value)}
         />
       </Form.Item>
@@ -1276,7 +1278,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           step={0.1}
           style={{ width: '100%' }}
           placeholder="如：2.0表示2倍标准差"
-          value={action.config.outlier_threshold}
+          value={cfgOptNumber(action.config.outlier_threshold)}
           onChange={(value) => updateActionConfig(index, 'outlier_threshold', value)}
         />
       </Form.Item>
@@ -1303,7 +1305,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
     <div>
       <Form.Item label="转发目标">
         <Select
-          value={action.config.target_type || 'http'}
+          value={cfgString(action.config.target_type, 'http')}
           onChange={(value) => updateActionConfig(index, 'target_type', value)}
         >
           <Option key="http" value="http">HTTP接口</Option>
@@ -1318,13 +1320,13 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="URL地址">
             <Input
               placeholder="https://api.example.com/data"
-              value={action.config.url}
+              value={cfgString(action.config.url)}
               onChange={(e) => updateActionConfig(index, 'url', e.target.value)}
             />
           </Form.Item>
           <Form.Item label="HTTP方法">
             <Select
-              value={action.config.method || 'POST'}
+              value={cfgString(action.config.method, 'POST')}
               onChange={(value) => updateActionConfig(index, 'method', value)}
             >
               <Option key="POST" value="POST">POST</Option>
@@ -1354,7 +1356,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
         <Form.Item label="文件路径">
           <Input
             placeholder="/var/log/iot_data.log"
-            value={action.config.path}
+            value={cfgString(action.config.path)}
             onChange={(e) => updateActionConfig(index, 'path', e.target.value)}
           />
         </Form.Item>
@@ -1365,14 +1367,14 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="MQTT代理">
             <Input
               placeholder="tcp://localhost:1883"
-              value={action.config.broker}
+              value={cfgString(action.config.broker)}
               onChange={(e) => updateActionConfig(index, 'broker', e.target.value)}
             />
           </Form.Item>
           <Form.Item label="主题模板">
             <Input
               placeholder="iot/{{.DeviceID}}/{{.Key}}"
-              value={action.config.topic}
+              value={cfgString(action.config.topic)}
               onChange={(e) => updateActionConfig(index, 'topic', e.target.value)}
             />
           </Form.Item>
@@ -1384,7 +1386,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="批处理大小">
             <InputNumber
               placeholder="1"
-              value={action.config.batch_size || 1}
+              value={cfgNumber(action.config.batch_size, 1)}
               onChange={(value) => updateActionConfig(index, 'batch_size', value)}
               min={1}
               style={{ width: '100%' }}
@@ -1395,7 +1397,7 @@ const ActionForm: React.FC<ActionFormProps> = ({ value, onChange }) => {
           <Form.Item label="超时时间">
             <Input
               placeholder="30s"
-              value={action.config.timeout}
+              value={cfgString(action.config.timeout)}
               onChange={(e) => updateActionConfig(index, 'timeout', e.target.value)}
             />
           </Form.Item>

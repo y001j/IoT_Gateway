@@ -20,7 +20,7 @@ func StartNATSWithMQTT(t testing.TB) (*nats.Conn, string) {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 	opts := &server.Options{
 		ServerName:         "test-mqtt",
 		Host:               "127.0.0.1",

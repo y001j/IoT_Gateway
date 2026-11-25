@@ -24,7 +24,7 @@ import {
   BorderOutlined,
   EyeOutlined,
   CheckCircleOutlined,
-  BookOutlined,
+  
   FunctionOutlined,
   AimOutlined,
   SwapOutlined,
@@ -34,7 +34,9 @@ import type { Rule, Action, Condition } from '../types/rule';
 import type { DataTypeOption } from './DataTypeSelector';
 import VectorActionEditor from './VectorActionEditor';
 
-const { Title, Text } = Typography;
+import { asHttpError } from '../utils/errors';
+import { cfgEnum, cfgNumber, cfgString } from '../utils/ruleData';
+const { Text } = Typography;
 const { TextArea } = Input;
 const { TabPane } = Tabs;
 
@@ -81,6 +83,8 @@ interface VectorCondition {
   // Advanced
   coordinate_system?: '3d' | '2d_xy' | '2d_xz' | '2d_yz';
 }
+
+const VECTOR_ACTION_SUBTYPES = ['magnitude', 'normalize', 'projection', 'rotation', 'cross_product', 'dot_product'] as const;
 
 const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
   visible,
@@ -147,7 +151,7 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
       setConditionType('magnitude_based');
       setCurrentCondition({
         type: 'magnitude_based',
-        magnitude_operator: condition.operator as any || 'gt',
+        magnitude_operator: cfgEnum(condition.operator, ['gt', 'gte', 'lt', 'lte', 'eq', 'range'] as const, 'gt'),
         magnitude_value: typeof condition.value === 'number' ? condition.value : 1.0,
         coordinate_system: '3d'
       });
@@ -202,12 +206,13 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
           value: currentCondition.component_value || 0
         };
         
-      case 'direction_based':
+      case 'direction_based': {
         const ref = currentCondition.reference_vector || { x: 1, y: 0, z: 0 };
         return {
           type: 'expression',
           expression: `vector_angle(x, y, z, ${ref.x}, ${ref.y}, ${ref.z}) ${currentCondition.angle_operator || '<'} ${currentCondition.angle_threshold || 45}`
         };
+      }
         
       case 'angle_based':
         return {
@@ -563,7 +568,7 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
       conditions: condition,
       actions: currentActions,
       tags: {
-        ...formData.tags?.reduce((acc: any, item: any) => {
+        ...formData.tags?.reduce((acc: Record<string, string>, item: { key?: string; value?: string }) => {
           if (item.key && item.value) {
             acc[item.key] = item.value;
           }
@@ -598,7 +603,7 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
         conditions: condition,
         actions: currentActions,
         tags: {
-          ...formData.tags?.reduce((acc: any, item: any) => {
+          ...formData.tags?.reduce((acc: Record<string, string>, item: { key?: string; value?: string }) => {
             if (item.key && item.value) {
               acc[item.key] = item.value;
             }
@@ -609,7 +614,8 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
       };
 
       await onSave(ruleData);
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('保存向量数据规则失败:', error);
     } finally {
       setLoading(false);
@@ -717,7 +723,7 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
             </Card>
 
             {/* 条件和动作配置 */}
-            <Tabs activeKey={activeTab} onChange={(key) => setActiveTab(key as any)}>
+            <Tabs activeKey={activeTab} onChange={(key) => setActiveTab(key as 'conditions' | 'actions' | 'preview')}>
               <TabPane tab={<><AimOutlined /> 触发条件</> } key="conditions">
                 <Card size="small" title="向量条件类型选择" style={{ marginBottom: 16 }}>
                   <Space wrap>
@@ -770,21 +776,21 @@ const VectorRuleEditor: React.FC<VectorRuleEditorProps> = ({
               <TabPane tab={<><CheckCircleOutlined /> 执行动作</> } key="actions">
                 <VectorActionEditor
                   value={currentActions.length > 0 ? {
-                    sub_type: currentActions[0].config.sub_type,
+                    sub_type: cfgEnum(currentActions[0].config.sub_type, VECTOR_ACTION_SUBTYPES, 'magnitude'),
                     reference_vector: {
-                      x: currentActions[0].config.reference_x || 0,
-                      y: currentActions[0].config.reference_y || 0,
-                      z: currentActions[0].config.reference_z || 0
+                      x: cfgNumber(currentActions[0].config.reference_x),
+                      y: cfgNumber(currentActions[0].config.reference_y),
+                      z: cfgNumber(currentActions[0].config.reference_z)
                     },
-                    rotation_axis: currentActions[0].config.rotation_axis,
-                    rotation_angle: currentActions[0].config.rotation_angle,
+                    rotation_axis: cfgEnum(currentActions[0].config.rotation_axis, ['x', 'y', 'z', 'custom'] as const, 'z'),
+                    rotation_angle: cfgNumber(currentActions[0].config.rotation_angle),
                     custom_axis: {
-                      x: currentActions[0].config.custom_axis_x || 0,
-                      y: currentActions[0].config.custom_axis_y || 0,
-                      z: currentActions[0].config.custom_axis_z || 1
+                      x: cfgNumber(currentActions[0].config.custom_axis_x),
+                      y: cfgNumber(currentActions[0].config.custom_axis_y),
+                      z: cfgNumber(currentActions[0].config.custom_axis_z, 1)
                     },
-                    normalize_magnitude: currentActions[0].config.normalize_magnitude,
-                    output_key: currentActions[0].config.output_key
+                    normalize_magnitude: cfgNumber(currentActions[0].config.normalize_magnitude, 1),
+                    output_key: cfgString(currentActions[0].config.output_key)
                   } : undefined}
                   onChange={(config) => {
                     const action: Action = {

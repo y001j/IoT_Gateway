@@ -4,6 +4,37 @@ import { RealTimeChart, ChartSeries } from './RealTimeChart';
 import { useRealTimeData } from '../../hooks/useRealTimeData';
 import { lightweightMetricsService, type LightweightMetrics } from '../../services/lightweightMetricsService';
 import { authService } from '../../services/authService';
+import type { SystemMetrics } from '../../types/system';
+
+/** 历史曲线的数据点 */
+interface MetricsHistoryPoint {
+  timestamp: Date;
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  [field: string]: unknown;
+}
+
+/** 当前显示的系统指标 */
+interface CurrentSystemMetrics {
+  cpu_percent: number;
+  memory_percent: number;
+  disk_percent: number;
+  network_rx: number;
+  network_tx: number;
+  network_rx_rate: number;
+  network_tx_rate: number;
+  process_count: number;
+  thread_count: number;
+  heap_used: number;
+  heap_total: number;
+  heap_usage_percent: number;
+  status: string;
+  memory_used: number;
+  memory_total: number;
+  disk_used: number;
+  disk_total: number;
+}
 
 export interface SystemMonitorChartProps {
   height?: number;
@@ -16,9 +47,36 @@ export const SystemMonitorChart: React.FC<SystemMonitorChartProps> = ({
 }) => {
   const { data, isConnected } = useRealTimeData();
   const [metricsData, setMetricsData] = useState<LightweightMetrics | null>(null);
-  const [systemMetrics, setSystemMetrics] = useState<any>(null); // 真正的系统指标
-  const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null); // 真正的系统指标
+  const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
   
+  // 获取真正的系统指标
+  const fetchSystemMetrics = useCallback(async (): Promise<SystemMetrics | null> => {
+    try {
+      const token = authService.getToken();
+      if (!token) {
+        throw new Error('No auth token available');
+      }
+      
+      const response = await fetch('/api/v1/system/metrics', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const result = await response.json() as { data?: SystemMetrics };
+      return result.data ?? null;
+    } catch (error) {
+      console.error('❌ 获取系统指标失败:', error);
+      return null;
+    }
+  }, []);
+
   // 获取系统指标数据
   const fetchMetrics = useCallback(async () => {
     try {
@@ -68,34 +126,8 @@ export const SystemMonitorChart: React.FC<SystemMonitorChartProps> = ({
     } catch (error) {
       console.error('❌ SystemMonitor获取指标失败:', error);
     }
-  }, []);
+  }, [fetchSystemMetrics]);
   
-  // 获取真正的系统指标
-  const fetchSystemMetrics = useCallback(async () => {
-    try {
-      const token = authService.getToken();
-      if (!token) {
-        throw new Error('No auth token available');
-      }
-      
-      const response = await fetch('/api/v1/system/metrics', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-      return result.data;
-    } catch (error) {
-      console.error('❌ 获取系统指标失败:', error);
-      return null;
-    }
-  }, []);
   
   // 定期获取指标数据
   useEffect(() => {
@@ -130,7 +162,7 @@ export const SystemMonitorChart: React.FC<SystemMonitorChartProps> = ({
   }, [metricsHistory, data.systemMetricsHistory]);
   
   // 当前系统指标 - 使用真正的系统指标
-  const currentSystemMetrics = useMemo(() => {
+  const currentSystemMetrics = useMemo((): CurrentSystemMetrics | null => {
     if (systemMetrics && metricsData) {
       return {
         // 使用真正的系统资源使用率
@@ -143,8 +175,9 @@ export const SystemMonitorChart: React.FC<SystemMonitorChartProps> = ({
         network_tx: metricsData.system.network_out_bytes || systemMetrics.network_out_bytes || 0,
         
         // 网络实时速率（字节/秒）
-        network_rx_rate: metricsData.system.network_in_bytes_per_sec || systemMetrics.network_in_bytes_per_sec || 0,
-        network_tx_rate: metricsData.system.network_out_bytes_per_sec || systemMetrics.network_out_bytes_per_sec || 0,
+        // 后端 /system/metrics 不提供速率，只使用轻量级指标
+        network_rx_rate: metricsData.system.network_in_bytes_per_sec || 0,
+        network_tx_rate: metricsData.system.network_out_bytes_per_sec || 0,
         
         // Go程序指标
         process_count: metricsData.system.goroutine_count || 0,
@@ -169,7 +202,15 @@ export const SystemMonitorChart: React.FC<SystemMonitorChartProps> = ({
     }
     
     // 备选：使用WebSocket数据
-    return data.systemMetrics || null;
+    const ws = data.systemMetrics;
+    if (!ws) return null;
+    return {
+      cpu_percent: ws.cpu_percent, memory_percent: ws.memory_percent, disk_percent: ws.disk_percent,
+      network_rx: ws.network_in_bytes || 0, network_tx: ws.network_out_bytes || 0,
+      network_rx_rate: 0, network_tx_rate: 0, process_count: 0, thread_count: 0,
+      heap_used: 0, heap_total: 0, heap_usage_percent: 0, status: 'unknown',
+      memory_used: 0, memory_total: 0, disk_used: 0, disk_total: 0,
+    };
   }, [systemMetrics, metricsData, data.systemMetrics]);
 
   // CPU 使用率图表数据

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -284,7 +285,7 @@ func (s *pluginService) readPluginLogs(name string, req *models.PluginLogRequest
 
 // parseLogFile 解析日志文件
 func (s *pluginService) parseLogFile(logPath, pluginName string, logID *int) ([]models.PluginLog, error) {
-	file, err := os.Open(logPath)
+	file, err := os.Open(filepath.Clean(logPath))
 	if err != nil {
 		return nil, err
 	}

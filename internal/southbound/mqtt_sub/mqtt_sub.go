@@ -417,7 +417,7 @@ func (a *MQTTSubAdapter) configureTLS(opts *mqtt.ClientOptions, tlsConfig *confi
 
 	// 创建TLS配置
 	config := &tls.Config{
-		InsecureSkipVerify: tlsConfig.SkipVerify,
+		InsecureSkipVerify: tlsConfig.SkipVerify, // #nosec G402 -- 仅在用户显式配置 skip_verify 时跳过证书校验（例如自签名证书的测试环境）
 	}
 
 	// 加载CA证书

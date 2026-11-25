@@ -21,6 +21,28 @@ import type {
   NotificationChannelResponse,
 } from '../types/alert';
 
+import { asHttpError } from '../utils/errors';
+/** 后端返回的告警（时间字段为 snake_case 字符串） */
+type ApiAlert = Omit<Alert, 'createdAt' | 'updatedAt' | 'acknowledgedAt' | 'resolvedAt'> & {
+  created_at?: string;
+  updated_at?: string;
+  acknowledged_at?: string;
+  resolved_at?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+/** 把后端告警转换为前端格式（时间字段转为 Date） */
+function toAlert(alert: ApiAlert): Alert {
+  return {
+    ...alert,
+    createdAt: new Date(alert.created_at || alert.createdAt || ''),
+    updatedAt: new Date(alert.updated_at || alert.updatedAt || ''),
+    acknowledgedAt: alert.acknowledged_at ? new Date(alert.acknowledged_at) : undefined,
+    resolvedAt: alert.resolved_at ? new Date(alert.resolved_at) : undefined,
+  };
+}
+
 class AlertService {
   private readonly baseUrl = '/alerts';
 
@@ -58,16 +80,11 @@ class AlertService {
       
       // 转换时间字段名称
       const { alerts, ...rest } = response.data.data;
-      const transformedAlerts = alerts.map((alert: any) => ({
-        ...alert,
-        createdAt: new Date(alert.created_at || alert.createdAt || ''),
-        updatedAt: new Date(alert.updated_at || alert.updatedAt || ''),
-        acknowledgedAt: alert.acknowledged_at ? new Date(alert.acknowledged_at) : undefined,
-        resolvedAt: alert.resolved_at ? new Date(alert.resolved_at) : undefined,
-      }));
+      const transformedAlerts = (alerts as unknown as ApiAlert[]).map(toAlert);
       
       return { alerts: transformedAlerts, ...rest };
-    } catch (error: any) {
+    } catch (caught) {
+      const error = asHttpError(caught);
       console.error('❌ 告警列表请求失败 - 完整错误信息:', {
         message: error.message,
         code: error.code,
@@ -96,14 +113,7 @@ class AlertService {
 
   async getAlert(id: string): Promise<Alert> {
     const response = await api.get<AlertResponse>(`${this.baseUrl}/${id}`);
-    const alert: any = response.data.data;
-    return {
-      ...alert,
-      createdAt: new Date(alert.created_at || alert.createdAt || ''),
-      updatedAt: new Date(alert.updated_at || alert.updatedAt || ''),
-      acknowledgedAt: alert.acknowledged_at ? new Date(alert.acknowledged_at) : undefined,
-      resolvedAt: alert.resolved_at ? new Date(alert.resolved_at) : undefined,
-    };
+    return toAlert(response.data.data as unknown as ApiAlert);
   }
 
   async createAlert(data: AlertCreateRequest): Promise<Alert> {
@@ -167,7 +177,7 @@ class AlertService {
     await api.delete(`${this.baseUrl}/rules/${id}`);
   }
 
-  async testAlertRule(id: string, testData: Record<string, any>): Promise<{ ruleId: string; triggered: boolean; message: string; testedAt: Date }> {
+  async testAlertRule(id: string, testData: Record<string, unknown>): Promise<{ ruleId: string; triggered: boolean; message: string; testedAt: Date }> {
     const response = await api.post<AlertRuleTestResponse>(`${this.baseUrl}/rules/${id}/test`, { data: testData });
     return response.data.data;
   }
@@ -260,7 +270,7 @@ class AlertService {
     }
   }
 
-  formatAlertData(data: Record<string, any>): string {
+  formatAlertData(data: Record<string, unknown>): string {
     try {
       return JSON.stringify(data, null, 2);
     } catch {

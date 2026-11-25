@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { useAuthStore } from '../store/authStore';
 
+import { asHttpError } from '../utils/errors';
 const { Title, Text } = Typography;
 
 interface LoginCredentials {
@@ -111,7 +112,8 @@ const Login: React.FC = () => {
         throw new Error('登录响应正常，但认证状态未正确设置');
       }
 
-    } catch (err: any) {
+    } catch (caught) {
+      const err = asHttpError(caught);
       console.error('❌ 登录失败:', err);
       
       let errorMessage = '登录失败，请重试。';

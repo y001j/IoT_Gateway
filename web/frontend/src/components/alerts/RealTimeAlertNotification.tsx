@@ -3,6 +3,7 @@ import { notification, Badge } from 'antd';
 import { AlertOutlined, CheckCircleOutlined, ExclamationCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useRealTimeData } from '../../hooks/useRealTimeData';
 
+import type { RealtimeAlert } from '../../types/realtime';
 interface RealTimeAlertNotificationProps {
   enabled?: boolean;
   position?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
@@ -19,14 +20,15 @@ export const RealTimeAlertNotification: React.FC<RealTimeAlertNotificationProps>
     if (!enabled || !realTimeData || !realTimeData.alerts) return;
 
     // 处理新的告警
-    realTimeData.alerts.forEach((alertEvent: any) => {
-      if (processedAlerts.has(alertEvent.id)) return;
+    realTimeData.alerts.forEach((alertEvent: RealtimeAlert) => {
+      const eventKey = String(alertEvent.id);
+      if (processedAlerts.has(eventKey)) return;
 
       // 标记为已处理
-      setProcessedAlerts(prev => new Set(prev).add(alertEvent.id));
+      setProcessedAlerts(prev => new Set(prev).add(eventKey));
 
       if (alertEvent.type === 'alert_created') {
-        const alert = alertEvent.data;
+        const alert = (alertEvent.data ?? {}) as { id?: string; title?: string; description?: string; level?: string; source?: string };
         
         // 根据告警级别选择图标和颜色
         const getAlertIcon = (level: string) => {
@@ -77,10 +79,10 @@ export const RealTimeAlertNotification: React.FC<RealTimeAlertNotificationProps>
         // 告警解决通知
         notification.success({
           message: '告警已解决',
-          description: `告警 ${alertEvent.data.alert_id} 已被解决`,
+          description: `告警 ${String(alertEvent.data?.alert_id ?? alertEvent.id)} 已被解决`,
           placement: position,
           duration: 3,
-          key: `resolved-${alertEvent.data.alert_id}`,
+          key: `resolved-${String(alertEvent.data?.alert_id ?? alertEvent.id)}`,
         });
       }
     });

@@ -246,7 +246,8 @@ func validateMin(field reflect.Value, fieldName string, min int) error {
 			return fmt.Errorf("field '%s' must be at least %d", fieldName, min)
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if field.Uint() < uint64(min) {
+		// min 为负数时无符号字段必然满足（以前 uint64(min) 会变成极大值，导致校验必然失败）
+		if min > 0 && field.Uint() < uint64(min) {
 			return fmt.Errorf("field '%s' must be at least %d", fieldName, min)
 		}
 	case reflect.Float32, reflect.Float64:
@@ -273,7 +274,8 @@ func validateMax(field reflect.Value, fieldName string, max int) error {
 			return fmt.Errorf("field '%s' must be at most %d", fieldName, max)
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if field.Uint() > uint64(max) {
+		// max 为负数时任何无符号值都超出上限
+		if max < 0 || field.Uint() > uint64(max) {
 			return fmt.Errorf("field '%s' must be at most %d", fieldName, max)
 		}
 	case reflect.Float32, reflect.Float64:
@@ -329,7 +331,11 @@ func validatePort(field reflect.Value, fieldName string) error {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		port = field.Int()
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		port = int64(field.Uint())
+		u := field.Uint()
+		if u > 65535 {
+			return fmt.Errorf("field '%s' must be a valid port number (1-65535)", fieldName)
+		}
+		port = int64(u)
 	default:
 		return fmt.Errorf("field '%s' must be a number for port validation", fieldName)
 	}

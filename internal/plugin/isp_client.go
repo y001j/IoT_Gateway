@@ -86,7 +86,7 @@ func (c *ISPClient) Disconnect() error {
 
 	// 关闭连接
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 	}
 
