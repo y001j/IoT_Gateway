@@ -532,6 +532,7 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 | 聚合 `output_key` | 只有 `output.key_template` 支持模板，`"{{.Key}}_stats"` 被原样当作键名（示例规则 humidity_monitor）；模板只替换第一种写法 | `output_key` 也做模板替换，支持 `{{.Key}}`、`{{.DeviceID}}` 等写法 |
 | transform 发布主题 | `transformed.<设备>.<键>` 直接拼接，含 "." 的设备 ID 会多出主题层级 | 用 `model.EncodeSubjectToken` 转义 |
 | 插件配置接口 | 校验失败返回 500 | 校验失败 400、实例不存在 404 |
+| 配置热加载 | 先 `viper.WatchConfig()` 再 `OnConfigChange()`：监听协程读取回调时与注册存在数据竞争，启动后立即发生的变更会丢失（CI 上 `TestConfigManagerHotReload` 偶发失败） | 先注册回调再启动监听（`internal/config/manager.go`、`internal/core/runtime.go`） |
 | 文档 | `iot.rules.>` 被写成"规则结果"，实际还包含每次匹配的 `iot.rules.matched` 事件；transform 输出在 `transformed.>` | 文档与示例改为 `iot.rules.aggregate.>`、`transformed.>` |
 
 实测（Lima Linux 虚拟机，独立 NATS）：`http_port: 0` 时对外只监听 8081，`/health` 返回真实组件状态；只订阅 `iot.rules.>` 并按设备过滤的连接器只收到指定设备的规则消息；重启后从 KV 恢复 5 个聚合状态；页面保存插件配置后 config.yaml 只改动该实例、注释保留，实例自动重启。

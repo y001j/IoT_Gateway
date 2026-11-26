@@ -208,7 +208,8 @@ func (h *hotReloadManager) startHotReload() error {
 		}
 	}()
 
-	h.manager.viper.WatchConfig()
+	// 先注册回调再启动监听：WatchConfig 启动的协程会读取回调，反过来调用存在数据竞争，
+	// 而且启动后立即发生的变更会因回调尚未注册而丢失
 	h.manager.viper.OnConfigChange(func(e fsnotify.Event) {
 		log.Info().Str("file", e.Name).Str("op", e.Op.String()).Msg("检测到配置文件变更")
 
@@ -220,6 +221,7 @@ func (h *hotReloadManager) startHotReload() error {
 		}
 		h.manager.mu.RUnlock()
 	})
+	h.manager.viper.WatchConfig()
 
 	return nil
 }

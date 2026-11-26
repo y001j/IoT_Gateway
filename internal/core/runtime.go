@@ -407,10 +407,11 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	}
 
 	// watch config
-	v.WatchConfig()
+	// 先注册回调再启动监听（WatchConfig 的协程会读取回调，顺序反过来存在数据竞争）
 	v.OnConfigChange(func(e fsnotify.Event) {
 		log.Info().Str("file", e.Name).Msg("config changed (todo: hot reload)")
 	})
+	v.WatchConfig()
 
 	return rt, nil
 }
