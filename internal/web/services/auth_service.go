@@ -199,14 +199,14 @@ func (a *authService) Logout(token string) error {
 
 // RefreshToken 刷新令牌
 func (a *authService) RefreshToken(req *models.RefreshTokenRequest) (*models.LoginResponse, error) {
-	// 获取原会话
+	// 获取原会话。会话存在即有效：SQLite 会话表没有 active 列，以前检查 session.Active
+	// 在 SQLite 存储下永远为 false，刷新令牌一直返回"会话已失效"
+	if req.RefreshToken == "" {
+		return nil, errors.New("缺少刷新令牌")
+	}
 	session, err := a.store.GetSessionByRefreshToken(req.RefreshToken)
 	if err != nil {
 		return nil, err
-	}
-
-	if !session.Active {
-		return nil, errors.New("会话已失效")
 	}
 
 	// 获取用户信息
@@ -237,10 +237,10 @@ func (a *authService) RefreshToken(req *models.RefreshTokenRequest) (*models.Log
 		return nil, fmt.Errorf("创建会话失败: %v", err)
 	}
 
-	// 使原会话失效
-	session.Active = false
-	if err := a.store.UpdateSession(session); err != nil {
-		fmt.Printf("使原会话失效失败: %v\n", err)
+	// 删除原会话：原访问令牌和刷新令牌随之失效。以前只是设置 Active=false 再 UpdateSession，
+	// SQLite 不保存该字段，旧刷新令牌可以反复使用
+	if err := a.store.DeleteSession(session.ID); err != nil {
+		log.Warn().Err(err).Msg("删除原会话失败")
 	}
 
 	response := &models.LoginResponse{

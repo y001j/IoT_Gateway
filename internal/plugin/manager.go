@@ -55,6 +55,7 @@ type PluginManager interface {
 	RestartPlugin(name string) error
 	GetAdapter(name string) (southbound.Adapter, bool)
 	GetSink(name string) (northbound.Sink, bool)
+	RunningInstances() (adapters, sinks map[string]string)
 }
 
 type Manager struct {
@@ -919,6 +920,29 @@ func (m *Manager) GetPlugin(name string) (*Meta, bool) {
 		return meta, true
 	}
 
+	// 配置文件中定义的实例（例如 name: mock1, type: mock）。StartPlugin/StopPlugin 按实例名工作，
+	// 以前这里只按类型查注册表，实例的详情、配置、统计接口都返回"插件不存在"
+	for _, kind := range []PluginType{TypeAdapter, TypeSink} {
+		if cfg, found := m.findPluginConfigMap(name, string(kind)); found {
+			typ, _ := cfg["type"].(string)
+			meta := &Meta{
+				Name:        name,
+				Version:     "1.0.0",
+				Type:        string(kind),
+				Mode:        "builtin",
+				Entry:       fmt.Sprintf("builtin://%s", typ),
+				Description: fmt.Sprintf("内置%s实例（%s）", typ, kind),
+				Status:      "stopped",
+			}
+			if _, ok := m.adapters[name]; ok {
+				meta.Status = "running"
+			} else if _, ok := m.sinks[name]; ok {
+				meta.Status = "running"
+			}
+			return meta, true
+		}
+	}
+
 	// 如果没找到，尝试从内置适配器中查找
 	if _, exists := southbound.Registry[name]; exists {
 		meta := &Meta{
@@ -1287,6 +1311,29 @@ func (m *Manager) GetAdapter(name string) (southbound.Adapter, bool) {
 }
 
 // GetSink returns the sink instance by name
+// RunningInstances 返回运行中的适配器和连接器实例（实例名 -> 类型）
+func (m *Manager) RunningInstances() (adapters, sinks map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	adapters = make(map[string]string, len(m.adapters))
+	sinks = make(map[string]string, len(m.sinks))
+	instanceType := func(name, kind string) string {
+		if cfg, ok := m.findPluginConfigMap(name, kind); ok {
+			if t, _ := cfg["type"].(string); t != "" {
+				return t
+			}
+		}
+		return name // 外部插件或实例名即类型
+	}
+	for name := range m.adapters {
+		adapters[name] = instanceType(name, string(TypeAdapter))
+	}
+	for name := range m.sinks {
+		sinks[name] = instanceType(name, string(TypeSink))
+	}
+	return adapters, sinks
+}
+
 func (m *Manager) GetSink(name string) (northbound.Sink, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1333,11 +1380,4 @@ func (m *Manager) loadAllDiscoveredPlugins() error {
 		Msg("插件加载完成")
 
 	return lastErr
-}
-
-// containsPluginWithType 检查插件映射中是否已经存在指定类型的插件
-func containsPluginWithType(pluginMap map[string]*Meta, pluginType, expectedType string) bool {
-	// 检查是否已经有外部插件使用了这个名称
-	_, exists := pluginMap[pluginType]
-	return exists
 }

@@ -113,6 +113,9 @@ func (a *HTTPAdapter) initWithConfig(config *config.HTTPConfig) error {
 	// 初始化BaseAdapter
 	a.BaseAdapter = southbound.NewBaseAdapter(config.Name, "http")
 	a.interval = config.Interval.Duration()
+	if a.interval <= 0 { // time.NewTicker 遇到 0 或负数会 panic
+		a.interval = 10 * time.Second
+	}
 	a.stopCh = make(chan struct{})
 
 	// 创建HTTP客户端

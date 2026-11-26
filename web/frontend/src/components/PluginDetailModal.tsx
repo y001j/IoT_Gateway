@@ -555,22 +555,25 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
               <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                 <Col xs={24} md={12}>
                   <Card title="资源使用" size="small">
-                    <div style={{ marginBottom: 16 }}>
-                      <Text>CPU 使用率: {stats.cpuUsage.toFixed(1)}%</Text>
-                      <Progress
-                        percent={Math.round(stats.cpuUsage)}
-                        status={stats.cpuUsage > 80 ? 'exception' : 'active'}
-                        size="small"
-                      />
-                    </div>
-                    <div>
-                      <Text>内存使用: {stats.memoryUsage.toFixed(1)} MB</Text>
-                      <Progress
-                        percent={Math.min(Math.round(stats.memoryUsage), 100)}
-                        status={stats.memoryUsage > 100 ? 'exception' : 'active'}
-                        size="small"
-                      />
-                    </div>
+                    {stats.cpuUsage === 0 && stats.memoryUsage === 0 ? (
+                      // 内置插件与网关共享进程，后端不提供单独的资源占用
+                      <Text type="secondary">内置插件与网关运行在同一进程，无法单独统计资源占用，请查看系统监控页面</Text>
+                    ) : (
+                      <>
+                        <div style={{ marginBottom: 16 }}>
+                          <Text>CPU 使用率: {stats.cpuUsage.toFixed(1)}%</Text>
+                          <Progress
+                            percent={Math.round(stats.cpuUsage)}
+                            status={stats.cpuUsage > 80 ? 'exception' : 'active'}
+                            size="small"
+                          />
+                        </div>
+                        <div>
+                          {/* 后端单位为字节 */}
+                          <Text>内存使用: {(stats.memoryUsage / 1024 / 1024).toFixed(1)} MB</Text>
+                        </div>
+                      </>
+                    )}
                   </Card>
                 </Col>
                 <Col xs={24} md={12}>

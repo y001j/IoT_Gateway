@@ -381,3 +381,71 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
   - `tsc --noEmit` 0 错误。
   - `npm test` 14 项通过。
   - `npm run build` 成功。
+
+## 11. 第八轮：函数级覆盖、死代码清理、补测试中发现的问题
+
+### 11.1 方法
+- 用 `go test -coverpkg=./internal/... ./internal/...` 做跨包统计。默认的按包统计只计入本包测试执行的代码，`testutil` 等被其他包使用的函数会显示为 0%。
+- 用 `deadcode -test ./...` 找出从任何程序入口和测试都不可达的函数：
+  - 内部死代码直接删除；
+  - 公开的小 API（默认配置函数）补测试。
+- **结果**：
+  - `internal/...` 中 1813 个函数全部被测试执行到（`internal/test` 下的手动工具程序除外），`deadcode -test` 输出为空。
+  - 跨包语句覆盖率 82.1%（上一轮按包统计 63.9%）。
+
+### 11.2 删除的死代码
+| 位置 | 内容 |
+|---|---|
+| `rules/utils.go` | `SafeStringMap` 及一串 map 拷贝函数（19 个） |
+| `rules/predefined_data_types.go` | 字段推断（10 个） |
+| `rules/types.go` | `CircularBuffer` |
+| `rules/evaluator.go` | 只写不读的内置函数表（9 个函数类型，表达式函数实际由 `ExpressionEngine` 提供） |
+| `rules/service.go` | 5 个从未调用的告警渠道函数 |
+| `rules/service.go` | transform/alert 的重复简化实现（运行时由注册的处理器执行，transform 还直接拼接 NATS 主题） |
+| `rules/service.go` | 存在数据竞争且不起作用的 `SetHotReloadEnabled` 开关 |
+| `rules/expression.go` | 返回"未实现"的 `in_array` 空实现 |
+| actions 包 | 3 个无人调用的辅助函数，以及 `HighPerformanceStats.AddNull` |
+| transform | 5 个伪重采样函数（被真实实现替换） |
+| web/api | 未挂载的 `Logger`/`Recovery`/`CORS` 中间件，未注册路由的 `GetSystemHealth`，5 个无人使用的 `BaseHandler` 方法 |
+| 其他 | `plugin.containsPluginWithType`、`ISPClient.GetDataChannel` |
+
+### 11.3 发现并修复的问题
+| 模块 | 问题 | 修复 |
+|---|---|---|
+| 规则热加载 | 管理器发出 `update`/`delete` 事件，服务只处理 `created`/`updated`/`deleted`，数据分发使用的规则索引从不更新。**热加载以及 Web 端修改规则后，新规则不触发、修改不生效、删除的规则继续执行，必须重启网关** | 事件类型常量统一 |
+| 规则热加载 | 从多规则文件中删除的规则仍在运行；删除文件时按文件名推断规则 ID，文件名与 ID 不同时不移除任何规则；`[]` 空文件被当作解析错误 | 记录规则与文件的对应关系；校验失败的新版本保留旧版本 |
+| 规则监控 | `Close` 关闭通知通道：run 协程读到 nil 后空指针 panic（停止规则引擎时网关崩溃），之后的 `RecordError` 向已关闭通道发送也会 panic，重复 Close 也会 panic | 只取消 context |
+| 规则监控 | `ToJSON` 递归加读锁（遇到等待中的写锁会死锁）；健康检查持有写锁执行（每项最长 5 秒），期间规则处理路径被阻塞 | 拆开加锁 |
+| 告警（内置处理器） | 邮件、短信渠道什么都不做却返回成功 | 返回 `ErrChannelNotImplemented` |
+| 表达式 | `exists()` 对 temperature/humidity 等"常见字段名"一律返回 true | 只检查实际字段 |
+| 聚合（优化版） | 只接受 float64，int 等数值从不参与统计 | 统一数值转换 |
+| 聚合（优化版） | 批处理按规则 ID 分片、直接模式按状态键分片，同一序列状态分裂 | 统一按状态键分片 |
+| 聚合（优化版） | 两个后台协程永不退出；`Close` 关闭通道后并发发送 panic、重复 Close 也会 panic | 后台协程可停止，Close 可重复调用 |
+| transform | 表达式中替换所有字母 x，`exp(x)` 变成 `e4p(4)` | 只替换独立的标识符 x |
+| transform | 重采样忽略频率，一律按 60 个点分组且结果没有时间戳 | 改为按真实时间分桶 |
+| transform | 移动平均和差分的结果没有时间戳（`Validate` 不通过） | 补上对齐的时间戳 |
+| transform | `toBool(int64(0))` 为 true | 修正数值判断 |
+| transform | 未知的平滑、归一化、变换、离群检测方法和坐标系静默回退（变换回退为原样返回） | 改为报错 |
+| transform | GCJ02↔BD09 未接入 | 接入 |
+| mock 适配器 | **配置文件中的 location/vector3d/color/vector/array 模拟点位实际发出的都是 float 0** | 复合类型保留生成函数给出的类型 |
+| mock 适配器 | `oscillate` 模式只配置全局范围时 panic（网关崩溃）；指数分布超出上限 | 修复取值范围 |
+| mock 适配器 | circular/linear 轨迹越过 ±180° 经线；标签数与维度不一致时数据被 `Validate` 拒绝 | 修正坐标和标签 |
+| mock 适配器 | 矩阵微调破坏 identity/diagonal 结构，symmetric 从不对称；单位矩阵受稀疏度影响 | 每次生成后保证矩阵结构 |
+| composite_mock | 配置的 tags 从未附加；int 数组 `max_value<1` 时 panic；间隔为 0 时 panic | 逐项修复（mock、http 适配器的间隔同样加了保护） |
+| Web 配置 | "校验配置"接口实际调用 `UpdateConfig`，校验即保存并应用 | 单独的校验路径 |
+| Web 鉴权 | 刷新令牌后旧会话不失效（SQLite 不保存 Active），旧刷新令牌可以反复使用 | 刷新后删除旧会话 |
+| Web 插件 | 详情、配置、统计接口按类型名查找，配置实例（如 mock1）返回 404（启停接口已按实例名工作） | 支持按实例名查找 |
+| Web 插件 | 资源占用是随机数；前端把字节当 MB 显示 | 返回 0 并在前端说明 |
+| Web 监控 | `ExtendedAdapter` 的 `GetMetrics` 签名与所有实现都不一致，监控页的数据点数、错误数从未生效；监控按插件类型而不是实例统计 | 统一签名，按实例统计 |
+| Web 通知 | 渠道和规则 ID 只用 UnixNano，同一微秒内创建会重复并互相覆盖 | 加入递增序号 |
+| Web 通知 | 短信失败或返回错误状态码时仍报成功；邮件中文主题未编码 | 逐项修复 |
+| 插件加载 | `builtin://` 适配器只支持写死的 mock | 改为按注册表创建 |
+| 日志 | 规则指标同步每 5 秒打 2 条 Info 日志；loader 每次查找打 Info/Error 日志 | 降为 Debug |
+
+### 11.4 验证
+- 本机 `go test -race ./...` 29 个包全部通过。
+- `go vet`、`gofmt -s -l .` 无输出。
+- ARMv7 交叉编译和 vet 通过。
+- gosec（v2.22.4）`Issues: 0`。
+- `deadcode -test ./...` 无输出。
+- 前端 lint 0 警告、tsc 0 错误、14 项测试通过、构建成功。

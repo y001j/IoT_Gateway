@@ -3,7 +3,6 @@ package southbound
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/y001j/iot-gateway/internal/model"
@@ -24,29 +23,6 @@ type AdapterMetrics struct {
 	ConnectionUptime    time.Duration `json:"connection_uptime"`     // 连接正常运行时间
 	LastError           string        `json:"last_error,omitempty"`  // 最后错误信息
 	AverageResponseTime float64       `json:"average_response_time"` // 平均响应时间(毫秒)
-}
-
-// StandardAdapterConfig 标准适配器配置
-type StandardAdapterConfig struct {
-	Name       string            `json:"name"`
-	Type       string            `json:"type"`
-	Mode       string            `json:"mode,omitempty"`        // 连接模式
-	Address    string            `json:"address,omitempty"`     // 连接地址
-	TimeoutMS  int               `json:"timeout_ms,omitempty"`  // 超时时间(ms)
-	IntervalMS int               `json:"interval_ms,omitempty"` // 采样间隔(ms)
-	Tags       map[string]string `json:"tags,omitempty"`        // 附加标签
-	Params     json.RawMessage   `json:"params,omitempty"`      // 特定参数
-}
-
-// Validate 验证配置
-func (c *StandardAdapterConfig) Validate() error {
-	if c.Name == "" {
-		return fmt.Errorf("adapter name cannot be empty")
-	}
-	if c.Type == "" {
-		return fmt.Errorf("adapter type cannot be empty")
-	}
-	return nil
 }
 
 // Adapter 定义了所有设备侧协议驱动必须实现的接口
@@ -71,8 +47,9 @@ type ExtendedAdapter interface {
 	// Health 返回适配器健康状态
 	Health() (HealthStatus, error)
 
-	// GetMetrics 返回适配器运行指标
-	GetMetrics() (AdapterMetrics, error)
+	// GetMetrics 返回适配器运行指标（AdapterMetrics）。签名与 BaseAdapter 及各调用方一致；
+	// 以前声明为 (AdapterMetrics, error)，没有任何适配器满足该接口，监控页的详细指标从未生效
+	GetMetrics() (interface{}, error)
 
 	// GetLastError 返回最后的错误信息
 	GetLastError() error

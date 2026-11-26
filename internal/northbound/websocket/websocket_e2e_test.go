@@ -77,3 +77,24 @@ func TestWebSocketSinkBroadcasts(t *testing.T) {
 		t.Fatalf("默认主题 = %q", got["hum"].Topic)
 	}
 }
+
+func TestWebSocketSinkHealthy(t *testing.T) {
+	s := NewWebSocketSink()
+	if err := s.Healthy(); err == nil {
+		t.Fatal("未运行时应不健康")
+	}
+	cfg := fmt.Sprintf(`{"name":"ws","type":"websocket","params":{"address":"127.0.0.1:%d","path":"/ws"}}`, freePort(t))
+	if err := s.Init(json.RawMessage(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Healthy(); err != nil {
+		t.Fatalf("应健康: %v", err)
+	}
+	_ = s.Stop()
+	if err := s.Healthy(); err == nil {
+		t.Fatal("停止后应不健康")
+	}
+}

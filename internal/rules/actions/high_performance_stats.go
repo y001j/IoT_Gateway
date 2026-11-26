@@ -104,10 +104,6 @@ func atomicLoadFloat64(addr *uint64) float64 {
 	return math.Float64frombits(atomic.LoadUint64(addr))
 }
 
-func atomicStoreFloat64(addr *uint64, val float64) {
-	atomic.StoreUint64(addr, math.Float64bits(val))
-}
-
 func atomicAddFloat64(addr *uint64, delta float64) float64 {
 	for {
 		old := atomic.LoadUint64(addr)
@@ -476,11 +472,4 @@ func (hps *HighPerformanceStats) GetCount() int64 {
 // GetWindowSize 获取窗口大小
 func (hps *HighPerformanceStats) GetWindowSize() int {
 	return int(hps.windowSize)
-}
-
-// 兼容性接口 - 保持与原有IncrementalStats接口一致
-func (hps *HighPerformanceStats) AddNull() {
-	atomic.AddInt64(&hps.nullCount, 1)
-	atomic.AddInt64(&hps.count, 1)
-	atomic.AddUint64(&hps.cacheVersion, 1)
 }

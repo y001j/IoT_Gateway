@@ -52,7 +52,12 @@ type Manager struct {
 	hotReloadConfig  *HotReloadConfig // 热加载配置
 	hotReloadEnabled bool             // 热加载状态
 	retryCount       int              // 重试计数
-	mu               sync.RWMutex
+	// 规则与文件的对应关系，热加载时据此移除文件中已删除的规则。
+	// 以前文件更新只会新增/替换规则，从多规则文件中删掉的规则仍在运行；
+	// 删除文件时按文件名推断规则 ID，文件名与规则 ID 不同时什么都不会移除。
+	fileRules map[string][]string // 规则文件 -> 该文件定义的规则 ID
+	ruleFile  map[string]string   // 规则 ID -> 定义它的文件
+	mu        sync.RWMutex
 }
 
 // NewManager 创建规则管理器
@@ -62,6 +67,8 @@ func NewManager(rulesDir string) *Manager {
 		rules:       make(map[string]*Rule),
 		ruleIndex:   NewIndex(),
 		changesChan: make(chan RuleChangeEvent, 100),
+		fileRules:   make(map[string][]string),
+		ruleFile:    make(map[string]string),
 		hotReloadConfig: &HotReloadConfig{
 			Enabled:          true,
 			GracefulFallback: true,
@@ -85,6 +92,8 @@ func (m *Manager) LoadRules() error {
 	// 清空现有规则
 	m.rules = make(map[string]*Rule)
 	m.ruleIndex = NewIndex()
+	m.fileRules = make(map[string][]string)
+	m.ruleFile = make(map[string]string)
 
 	// 扫描规则文件
 	err := filepath.Walk(m.rulesDir, func(path string, info os.FileInfo, err error) error {
@@ -104,11 +113,15 @@ func (m *Manager) LoadRules() error {
 			return nil // 继续处理其他文件
 		}
 
+		var added []*Rule
 		for _, rule := range rules {
 			if err := m.addRule(rule); err != nil {
 				log.Error().Err(err).Str("rule_id", rule.ID).Msg("添加规则失败")
+				continue
 			}
+			added = append(added, rule)
 		}
+		m.trackFileLocked(path, added)
 
 		return nil
 	})
@@ -127,6 +140,31 @@ func (m *Manager) LoadRules() error {
 
 // loadRuleFile 加载单个规则文件
 func (m *Manager) loadRuleFile(filePath string) ([]*Rule, error) {
+	rules, err := m.parseRuleFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// 验证和初始化规则：验证失败的规则不加载
+	// （以前只是跳过初始化，不合法的规则仍然会被返回并加载）
+	valid := make([]*Rule, 0, len(rules))
+	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		if err := m.validateRule(rule); err != nil {
+			log.Error().Err(err).Str("rule_id", rule.ID).Str("file", filePath).Msg("规则验证失败，已跳过")
+			continue
+		}
+		m.initializeRule(rule)
+		valid = append(valid, rule)
+	}
+
+	return valid, nil
+}
+
+// parseRuleFile 解析规则文件，返回其中的全部规则（不做校验）
+func (m *Manager) parseRuleFile(filePath string) ([]*Rule, error) {
 	data, err := ioutil.ReadFile(filepath.Clean(filePath))
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
@@ -145,7 +183,8 @@ func (m *Manager) loadRuleFile(filePath string) ([]*Rule, error) {
 		} else {
 			// 尝试解析为直接的规则数组格式 [{"id": "..."}, ...]
 			var ruleArray []*Rule
-			if err2 := json.Unmarshal(data, &ruleArray); err2 == nil && len(ruleArray) > 0 {
+			// 空数组是合法的（文件中的规则都被删除了），以前会被当成解析错误
+			if err2 := json.Unmarshal(data, &ruleArray); err2 == nil {
 				// 验证数组中的规则是否有效
 				validRules := []*Rule{}
 				for _, rule := range ruleArray {
@@ -194,22 +233,7 @@ func (m *Manager) loadRuleFile(filePath string) ([]*Rule, error) {
 		}
 	}
 
-	// 验证和初始化规则：验证失败的规则不加载
-	// （以前只是跳过初始化，不合法的规则仍然会被返回并加载）
-	valid := make([]*Rule, 0, len(rules))
-	for _, rule := range rules {
-		if rule == nil {
-			continue
-		}
-		if err := m.validateRule(rule); err != nil {
-			log.Error().Err(err).Str("rule_id", rule.ID).Str("file", filePath).Msg("规则验证失败，已跳过")
-			continue
-		}
-		m.initializeRule(rule)
-		valid = append(valid, rule)
-	}
-
-	return valid, nil
+	return rules, nil
 }
 
 // validateRule 验证规则
@@ -244,9 +268,6 @@ func ValidateRule(rule *Rule) error {
 
 	return nil
 }
-
-// validateCondition 验证条件
-func (m *Manager) validateCondition(condition *Condition) error { return ValidateCondition(condition) }
 
 // ValidateCondition 校验条件（与 Evaluator 语义一致：类型为空即简单条件，操作符为空即 eq）
 func ValidateCondition(condition *Condition) error {
@@ -442,10 +463,12 @@ func (m *Manager) SaveRule(rule *Rule) error {
 	// 确保内存状态同步：强制更新内存中的规则
 	m.rules[rule.ID] = rule
 	m.ruleIndex.AddRule(rule) // AddRule内部会处理重复规则的覆盖
+	m.untrackRuleLocked(rule.ID)
+	m.trackFileLocked(filePath, []*Rule{rule})
 
 	// 发送变更事件
 	select {
-	case m.changesChan <- RuleChangeEvent{Type: "update", Rule: rule}:
+	case m.changesChan <- RuleChangeEvent{Type: RuleEventUpdate, Rule: rule}:
 	default:
 		log.Warn().Str("rule_id", rule.ID).Msg("规则变更事件队列已满")
 	}
@@ -478,6 +501,7 @@ func (m *Manager) DeleteRule(id string) error {
 	// 从内存中删除
 	delete(m.rules, id)
 	m.ruleIndex.RemoveRule(rule)
+	m.untrackRuleLocked(id)
 
 	// 删除独立文件，并从多规则文件中移除（以前多规则文件中定义的规则重启后会"复活"）
 	filePath := filepath.Join(m.rulesDir, fmt.Sprintf("%s.json", id))
@@ -491,7 +515,7 @@ func (m *Manager) DeleteRule(id string) error {
 
 	// 发送变更事件
 	select {
-	case m.changesChan <- RuleChangeEvent{Type: "delete", Rule: rule}:
+	case m.changesChan <- RuleChangeEvent{Type: RuleEventDelete, Rule: rule}:
 	default:
 		log.Warn().Str("rule_id", id).Msg("规则变更事件队列已满")
 	}
@@ -530,7 +554,7 @@ func (m *Manager) EnableRule(id string) error {
 
 		// 发送变更事件
 		select {
-		case m.changesChan <- RuleChangeEvent{Type: "update", Rule: rule}:
+		case m.changesChan <- RuleChangeEvent{Type: RuleEventUpdate, Rule: rule}:
 		default:
 			log.Warn().Str("rule_id", rule.ID).Msg("规则变更事件队列已满")
 		}
@@ -571,7 +595,7 @@ func (m *Manager) DisableRule(id string) error {
 
 		// 发送变更事件
 		select {
-		case m.changesChan <- RuleChangeEvent{Type: "update", Rule: rule}:
+		case m.changesChan <- RuleChangeEvent{Type: RuleEventUpdate, Rule: rule}:
 		default:
 			log.Warn().Str("rule_id", rule.ID).Msg("规则变更事件队列已满")
 		}
@@ -708,8 +732,9 @@ func (m *Manager) watchFileChanges() {
 
 // handleFileUpdate 处理文件更新
 func (m *Manager) handleFileUpdate(filePath string) {
-	rules, err := m.loadRuleFile(filePath)
+	rules, err := m.parseRuleFile(filePath)
 	if err != nil {
+		// 解析失败时保留该文件原有的规则
 		log.Error().Err(err).Str("file", filePath).Msg("重新加载规则文件失败")
 		return
 	}
@@ -717,23 +742,47 @@ func (m *Manager) handleFileUpdate(filePath string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	path := filepath.Clean(filePath)
+	keep := make(map[string]bool, len(rules))
+	var valid []*Rule
 	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		keep[rule.ID] = true
 		if err := m.validateRule(rule); err != nil {
+			// 校验失败的规则保留原来的版本继续运行
 			log.Error().Err(err).Str("rule_id", rule.ID).Msg("规则验证失败")
 			continue
 		}
+		valid = append(valid, rule)
+	}
 
+	// 移除文件中已不存在的规则
+	for _, rule := range m.removeFileRulesLocked(path, keep) {
+		m.emitChangeLocked(RuleEventDelete, rule)
+	}
+
+	// 该文件拥有的规则：本次加载成功的，加上校验失败但保留旧版本的
+	owned := make([]*Rule, 0, len(rules))
+	validIDs := make(map[string]bool, len(valid))
+	for _, rule := range valid {
 		m.initializeRule(rule)
 		m.rules[rule.ID] = rule
 		m.ruleIndex.AddRule(rule)
-
-		// 发送变更事件
-		select {
-		case m.changesChan <- RuleChangeEvent{Type: "update", Rule: rule}:
-		default:
-			log.Warn().Str("rule_id", rule.ID).Msg("规则变更事件队列已满")
+		m.emitChangeLocked(RuleEventUpdate, rule)
+		owned = append(owned, rule)
+		validIDs[rule.ID] = true
+	}
+	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		if old, ok := m.rules[rule.ID]; ok && !validIDs[rule.ID] && m.ruleFile[rule.ID] == path {
+			owned = append(owned, old)
 		}
 	}
+	m.trackFileLocked(path, owned)
 
 	log.Info().Str("file", filePath).Int("count", len(rules)).Msg("规则文件重新加载完成")
 }
@@ -743,28 +792,81 @@ func (m *Manager) handleFileCreate(filePath string) {
 	m.handleFileUpdate(filePath) // 创建和更新处理逻辑相同
 }
 
-// handleFileDelete 处理文件删除
+// handleFileDelete 处理文件删除：移除该文件定义的所有规则
 func (m *Manager) handleFileDelete(filePath string) {
-	// 从文件名推断规则ID
-	fileName := filepath.Base(filePath)
-	ext := filepath.Ext(fileName)
-	ruleID := fileName[:len(fileName)-len(ext)]
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if rule, exists := m.rules[ruleID]; exists {
-		delete(m.rules, ruleID)
-		m.ruleIndex.RemoveRule(rule)
-
-		// 发送变更事件
-		select {
-		case m.changesChan <- RuleChangeEvent{Type: "delete", Rule: rule}:
-		default:
-			log.Warn().Str("rule_id", ruleID).Msg("规则变更事件队列已满")
+	path := filepath.Clean(filePath)
+	if _, tracked := m.fileRules[path]; !tracked {
+		// 未记录的文件（例如加载失败），按文件名推断规则 ID
+		fileName := filepath.Base(path)
+		ruleID := fileName[:len(fileName)-len(filepath.Ext(fileName))]
+		if _, exists := m.rules[ruleID]; exists && m.ruleFile[ruleID] == "" {
+			m.fileRules[path] = []string{ruleID}
+			m.ruleFile[ruleID] = path
 		}
+	}
+	removed := m.removeFileRulesLocked(path, nil)
+	for _, rule := range removed {
+		m.emitChangeLocked(RuleEventDelete, rule)
+	}
+	if len(removed) > 0 {
+		log.Info().Str("file", filePath).Int("count", len(removed)).Msg("规则文件删除，已移除规则")
+	}
+}
 
-		log.Info().Str("rule_id", ruleID).Str("file", filePath).Msg("规则文件删除，已移除规则")
+// trackFileLocked 记录文件定义的规则（调用方持有写锁）
+func (m *Manager) trackFileLocked(filePath string, rules []*Rule) {
+	path := filepath.Clean(filePath)
+	ids := make([]string, 0, len(rules))
+	for _, r := range rules {
+		ids = append(ids, r.ID)
+		m.ruleFile[r.ID] = path
+	}
+	m.fileRules[path] = ids
+}
+
+// untrackRuleLocked 解除规则与文件的对应关系（调用方持有写锁）
+func (m *Manager) untrackRuleLocked(id string) {
+	path, ok := m.ruleFile[id]
+	if !ok {
+		return
+	}
+	delete(m.ruleFile, id)
+	ids := m.fileRules[path]
+	for i, v := range ids {
+		if v == id {
+			m.fileRules[path] = append(ids[:i:i], ids[i+1:]...)
+			break
+		}
+	}
+}
+
+// removeFileRulesLocked 移除文件中定义、且仍归属该文件的规则（keep 中的除外），返回被移除的规则
+func (m *Manager) removeFileRulesLocked(path string, keep map[string]bool) []*Rule {
+	var removed []*Rule
+	for _, id := range m.fileRules[path] {
+		if keep[id] || m.ruleFile[id] != path {
+			continue // 仍在文件中，或已由其他文件接管
+		}
+		if r, ok := m.rules[id]; ok {
+			delete(m.rules, id)
+			m.ruleIndex.RemoveRule(r)
+			removed = append(removed, r)
+		}
+		delete(m.ruleFile, id)
+	}
+	delete(m.fileRules, path)
+	return removed
+}
+
+// emitChangeLocked 发送规则变更事件（队列满时丢弃并记录）
+func (m *Manager) emitChangeLocked(eventType string, rule *Rule) {
+	select {
+	case m.changesChan <- RuleChangeEvent{Type: eventType, Rule: rule}:
+	default:
+		log.Warn().Str("rule_id", rule.ID).Msg("规则变更事件队列已满")
 	}
 }
 

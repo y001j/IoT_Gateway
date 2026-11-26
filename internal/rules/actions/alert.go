@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -901,8 +900,8 @@ func (h *AlertHandler) sendWebhookAlert(ctx context.Context, alert *rules.Alert,
 	return nil
 }
 
-// ErrChannelNotImplemented 渠道尚未实现
-var ErrChannelNotImplemented = errors.New("该通知渠道尚未实现，请使用 webhook/nats 渠道或 Web 告警的通知渠道")
+// ErrChannelNotImplemented 渠道尚未实现（与规则引擎内置告警处理器共用同一个错误值）
+var ErrChannelNotImplemented = rules.ErrChannelNotImplemented
 
 // sendEmailAlert 邮件渠道尚未实现。以前什么也不做却返回成功，规则执行结果显示"已发送"，
 // 实际上从未发出任何邮件；现在如实返回错误。

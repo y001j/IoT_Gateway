@@ -129,7 +129,7 @@ func (a *CompositeMockAdapter) Init(cfg json.RawMessage) error {
 
 	// 解析时间间隔
 	interval, err := time.ParseDuration(parsedCfg.Interval)
-	if err != nil {
+	if err != nil || interval <= 0 { // time.NewTicker 遇到 0 或负数会 panic
 		interval = 3 * time.Second // 默认3秒
 		log.Warn().Str("interval", parsedCfg.Interval).Msg("解析间隔失败，使用默认值3秒")
 	}
@@ -223,7 +223,7 @@ func (a *CompositeMockAdapter) initCompositeDataState(dataPoint *CompositeDataPo
 				case "float":
 					initialValues[i] = simFloat64() * dataPoint.ArrayConfig.MaxValue
 				case "int":
-					initialValues[i] = simIntn(int(dataPoint.ArrayConfig.MaxValue))
+					initialValues[i] = simIntUpTo(dataPoint.ArrayConfig.MaxValue)
 				case "bool":
 					initialValues[i] = simFloat32() > 0.5
 				default:
@@ -310,7 +310,11 @@ func (a *CompositeMockAdapter) generateAndPublishData() {
 			Type:      model.DataType(dataPoint.DataType),
 			Timestamp: time.Now(),
 			Quality:   0,
-			SafeTags:  nil, // 暂时不设置标签
+		}
+		// 以前配置的 tags 从未加到数据点上
+		point.AddTag("source", "composite_mock")
+		for k, v := range a.copyTags() {
+			point.AddTag(k, fmt.Sprintf("%v", v))
 		}
 
 		// 发布数据
@@ -601,10 +605,10 @@ func (a *CompositeMockAdapter) generateArrayData(dataPoint *CompositeDataPoint) 
 					newVal := lastVal + change
 					elements[i] = int(math.Max(0, math.Min(config.MaxValue, float64(newVal))))
 				} else {
-					elements[i] = simIntn(int(config.MaxValue))
+					elements[i] = simIntUpTo(config.MaxValue)
 				}
 			} else {
-				elements[i] = simIntn(int(config.MaxValue))
+				elements[i] = simIntUpTo(config.MaxValue)
 			}
 		case "bool":
 			elements[i] = simFloat32() > 0.5

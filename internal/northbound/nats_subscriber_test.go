@@ -190,3 +190,29 @@ func TestNATSSubscriberInitErrorsAndDirectPublish(t *testing.T) {
 		t.Fatalf("未启动时应不健康")
 	}
 }
+
+func TestNATSSubscriberStaticTagTransform(t *testing.T) {
+	registerCapture()
+	_, nc := testutil.StartNATS(t)
+	s := northbound.NewNATSSubscriberSink()
+	params := `{"flush_interval": 20000000, "subscriptions":[
+		{"subject":"iot.rules.>","data_type":"rule","enabled":true,"transform":{"static_tags":{"pipeline":"rules","site":"A"}}}],
+		"target_sinks":[{"name":"tagged","type":"capture","params":{}}]}`
+	if err := s.Init(json.RawMessage(`{"name":"sub2","type":"nats_subscriber","params":` + params + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	s.SetNATSConnection(nc)
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	data, _ := json.Marshal(map[string]interface{}{"device_id": "d", "key": "k", "value": 1.0, "type": "float"})
+	nc.Publish("iot.rules.forward.d.k", data)
+	nc.Flush()
+	c := getCapture("tagged")
+	testutil.WaitFor(t, 3*time.Second, func() bool { return len(c.got()) == 1 }, "应收到 1 个数据点")
+	p := c.got()[0]
+	if v, _ := p.GetTag("pipeline"); v != "rules" {
+		t.Fatalf("静态标签未应用: %v", p.GetTagsCopy())
+	}
+}

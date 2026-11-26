@@ -42,6 +42,7 @@ type BatchProcessor struct {
 	flushTicker   *time.Ticker
 	stopChan      chan struct{}
 	wg            sync.WaitGroup
+	closeOnce     sync.Once
 }
 
 // BatchedPoint 批量处理的数据点
@@ -132,11 +133,10 @@ func (sam *ShardedAggregateManager) processDirect(rule *rules.Rule, point model.
 	// 获取或创建统计状态
 	stats := sam.getOrCreateStats(shard, stateKey, config)
 
-	// 添加数据点
-	if point.Value != nil {
-		if val, ok := point.Value.(float64); ok {
-			stats.AddValue(val)
-		}
+	// 添加数据点：与默认聚合器一致地转换数值。以前只接受 float64，
+	// int 等其他数值类型（例如 Modbus 整数寄存器）在优化聚合下从不参与统计
+	if val, err := extractNumericValue(point.Value); err == nil {
+		stats.AddValue(val)
 	}
 
 	// 计算结果
@@ -159,8 +159,15 @@ func (sam *ShardedAggregateManager) processBatched(rule *rules.Rule, point model
 		Result: resultChan,
 	}
 
-	// 根据规则ID分片
-	shardID := sam.getShardID(rule.ID)
+	// 按状态键分片，与直接模式一致。以前按规则 ID 分片，同一序列在两种模式下的
+	// 统计状态存放在不同分片，模式随 TPS 切换时聚合结果断开
+	shardID := sam.getShardID(sam.generateStateKey(rule, point, config))
+
+	select {
+	case <-sam.batchProcessor.stopChan:
+		return sam.processDirect(rule, point, config, time.Now())
+	default:
+	}
 
 	select {
 	case sam.batchProcessor.pointChannels[shardID] <- batchPoint:
@@ -372,10 +379,8 @@ func (sam *ShardedAggregateManager) processBatchGroup(shard *AggregateManagerSha
 	// 提取数值进行批量处理
 	values := make([]float64, 0, len(points))
 	for _, point := range points {
-		if point.Point.Value != nil {
-			if val, ok := point.Point.Value.(float64); ok {
-				values = append(values, val)
-			}
+		if val, err := extractNumericValue(point.Point.Value); err == nil {
+			values = append(values, val)
 		}
 	}
 
@@ -403,7 +408,13 @@ func (sam *ShardedAggregateManager) startPerformanceMonitoring() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 
-		for range ticker.C {
+		// 以前是 for range ticker.C，Close 后协程永不退出
+		for {
+			select {
+			case <-sam.batchProcessor.stopChan:
+				return
+			case <-ticker.C:
+			}
 			currentTime := time.Now().Unix()
 			lastTime := atomic.LoadInt64(&sam.metrics.lastSecondTime)
 
@@ -436,8 +447,13 @@ func (sam *ShardedAggregateManager) startPeriodicCleanup() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			sam.cleanupExpiredStates()
+		for {
+			select {
+			case <-sam.batchProcessor.stopChan:
+				return
+			case <-ticker.C:
+				sam.cleanupExpiredStates()
+			}
 		}
 	}()
 }
@@ -487,14 +503,13 @@ func (sam *ShardedAggregateManager) cleanupExpiredStates() {
 }
 
 // Close 关闭管理器
+// 可重复调用。不关闭 pointChannels：以前关闭后并发的 processBatched 发送会 panic，
+// 重复调用 Close 也会 panic。
 func (sam *ShardedAggregateManager) Close() {
-	close(sam.batchProcessor.stopChan)
-	sam.batchProcessor.wg.Wait()
-
-	// 关闭所有通道
-	for _, ch := range sam.batchProcessor.pointChannels {
-		close(ch)
-	}
+	sam.batchProcessor.closeOnce.Do(func() {
+		close(sam.batchProcessor.stopChan)
+		sam.batchProcessor.wg.Wait()
+	})
 }
 
 // GetMetrics 获取性能指标

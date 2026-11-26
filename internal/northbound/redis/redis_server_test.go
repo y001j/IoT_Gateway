@@ -201,3 +201,26 @@ func TestRedisWriteBatch(t *testing.T) {
 		t.Fatalf("Redis 不可达时应返回错误")
 	}
 }
+
+func TestRedisSinkHealthy(t *testing.T) {
+	srv := startFakeRedis(t)
+	s := NewRedisSink()
+	if err := s.Healthy(); err == nil {
+		t.Fatal("未运行时应不健康")
+	}
+	cfg := fmt.Sprintf(`{"name":"r","type":"redis","params":{"address":%q}}`, srv.ln.Addr().String())
+	if err := s.Init(json.RawMessage(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Healthy(); err != nil {
+		t.Fatalf("应健康: %v", err)
+	}
+	srv.ln.Close()
+	_ = s.Stop()
+	if err := s.Healthy(); err == nil {
+		t.Fatal("停止后应不健康")
+	}
+}

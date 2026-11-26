@@ -442,27 +442,6 @@ func (h *FilterHandler) timeWindowFilter(point model.Point, config *FilterConfig
 	return false, "", nil
 }
 
-// valuesEqual 比较两个值是否相等
-func (h *FilterHandler) valuesEqual(a, b interface{}) bool {
-	// 处理nil值
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-
-	// 尝试数字比较
-	if numA, err := h.toFloat64(a); err == nil {
-		if numB, err := h.toFloat64(b); err == nil {
-			return numA == numB
-		}
-	}
-
-	// 字符串比较
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
-}
-
 // simplePatternMatch 通配符匹配：* 匹配任意长度（含空）字符，? 匹配单个字符。
 // 以前注释声称支持 ?，实际只支持整串前缀/后缀的 *，"a*b" 之类的模式永远不匹配。
 func (h *FilterHandler) simplePatternMatch(value, pattern string) bool {

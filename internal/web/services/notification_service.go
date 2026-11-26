@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
+	"mime"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -99,8 +101,8 @@ func (s *notificationService) sendEmailNotification(channel *models.Notification
 		return fmt.Errorf("没有有效的邮件收件人")
 	}
 
-	// 构建邮件内容
-	subject := fmt.Sprintf("[%s] %s", strings.ToUpper(alert.Level), alert.Title)
+	// 构建邮件内容（主题按 RFC 2047 编码，以前中文主题直接写入邮件头）
+	subject := mime.QEncoding.Encode("utf-8", fmt.Sprintf("[%s] %s", strings.ToUpper(alert.Level), alert.Title))
 	body := s.buildEmailBody(alert)
 
 	// 构建邮件消息
@@ -231,7 +233,9 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 		message = message[:157] + "..."
 	}
 
-	// 发送短信（示例实现）
+	// 发送短信。以前每个号码失败只记日志、最后总是返回 nil，也不检查响应状态码，
+	// 全部失败时投递结果仍显示成功
+	var failed []string
 	for _, phoneNumber := range phoneNumbers {
 		if phone, ok := phoneNumber.(string); ok {
 			payload := map[string]interface{}{
@@ -245,6 +249,7 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 			req, err := http.NewRequest("POST", serviceURL, bytes.NewBuffer(data))
 			if err != nil {
 				log.Error().Err(err).Str("phone", phone).Msg("创建短信请求失败")
+				failed = append(failed, phone)
 				continue
 			}
 
@@ -253,9 +258,16 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 			resp, err := s.httpClient.Do(req)
 			if err != nil {
 				log.Error().Err(err).Str("phone", phone).Msg("发送短信失败")
+				failed = append(failed, phone)
 				continue
 			}
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				log.Error().Int("status", resp.StatusCode).Str("phone", phone).Msg("短信服务返回错误状态码")
+				failed = append(failed, phone)
+				continue
+			}
 
 			log.Info().
 				Str("channel_id", channel.ID).
@@ -265,6 +277,9 @@ func (s *notificationService) sendSMSNotification(channel *models.NotificationCh
 		}
 	}
 
+	if len(failed) > 0 {
+		return fmt.Errorf("%d 个号码短信发送失败: %s", len(failed), strings.Join(failed, ","))
+	}
 	return nil
 }
 

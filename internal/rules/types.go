@@ -176,9 +176,15 @@ type RuleStorage interface {
 
 // RuleChangeEvent 规则变更事件
 type RuleChangeEvent struct {
-	Type string `json:"type"` // create, update, delete
+	Type string `json:"type"` // RuleEventUpdate / RuleEventDelete
 	Rule *Rule  `json:"rule"`
 }
+
+// 规则变更事件类型（新增和修改都是 update）
+const (
+	RuleEventUpdate = "update"
+	RuleEventDelete = "delete"
+)
 
 // RuleIndex 规则索引
 type RuleIndex struct {
@@ -201,70 +207,10 @@ type EngineMetrics struct {
 	LastProcessedAt    time.Time     `json:"last_processed_at"`
 }
 
-// CircularBuffer 环形缓冲区（用于时间窗口数据）
-type CircularBuffer struct {
-	Data  []DataPoint `json:"data"`
-	Size  int         `json:"size"`
-	Head  int         `json:"head"`
-	Count int         `json:"count"`
-}
-
 // DataPoint 数据点（用于缓冲区）
 type DataPoint struct {
 	Value     interface{} `json:"value"`
 	Timestamp time.Time   `json:"timestamp"`
-}
-
-// NewCircularBuffer 创建环形缓冲区
-func NewCircularBuffer(size int) *CircularBuffer {
-	return &CircularBuffer{
-		Data:  make([]DataPoint, size),
-		Size:  size,
-		Head:  0,
-		Count: 0,
-	}
-}
-
-// Add 添加数据点
-func (cb *CircularBuffer) Add(value interface{}, timestamp time.Time) {
-	cb.Data[cb.Head] = DataPoint{
-		Value:     value,
-		Timestamp: timestamp,
-	}
-	cb.Head = (cb.Head + 1) % cb.Size
-	if cb.Count < cb.Size {
-		cb.Count++
-	}
-}
-
-// GetLatest 获取最新的N个数据点
-func (cb *CircularBuffer) GetLatest(n int) []DataPoint {
-	if n > cb.Count {
-		n = cb.Count
-	}
-
-	result := make([]DataPoint, n)
-	for i := 0; i < n; i++ {
-		idx := (cb.Head - 1 - i + cb.Size) % cb.Size
-		result[i] = cb.Data[idx]
-	}
-	return result
-}
-
-// GetInTimeWindow 获取时间窗口内的数据点
-func (cb *CircularBuffer) GetInTimeWindow(window time.Duration) []DataPoint {
-	now := time.Now()
-	cutoff := now.Add(-window)
-
-	var result []DataPoint
-	for i := 0; i < cb.Count; i++ {
-		idx := (cb.Head - 1 - i + cb.Size) % cb.Size
-		if cb.Data[idx].Timestamp.Before(cutoff) {
-			break
-		}
-		result = append(result, cb.Data[idx])
-	}
-	return result
 }
 
 // Operators 支持的操作符

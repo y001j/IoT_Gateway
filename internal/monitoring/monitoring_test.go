@@ -105,3 +105,13 @@ func TestMonitoringService(t *testing.T) {
 		t.Fatalf("停止后状态错误")
 	}
 }
+
+func TestDisabledCollectorReturnsDefaults(t *testing.T) {
+	c := NewSystemCollector(SystemCollectorConfig{Enabled: false})
+	for _, get := range []func() (*SystemMetrics, error){c.GetMetrics, c.GetMetricsForced} {
+		m, err := get()
+		if err != nil || m == nil || m.CPUCores == 0 || m.CPUUsage != 0 {
+			t.Fatalf("禁用时应返回默认指标: %+v %v", m, err)
+		}
+	}
+}

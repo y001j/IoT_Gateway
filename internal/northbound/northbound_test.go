@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"fmt"
 	"github.com/y001j/iot-gateway/internal/model"
 )
 
@@ -156,5 +157,26 @@ func TestRegistry(t *testing.T) {
 	}
 	if _, ok := Create("does-not-exist"); ok {
 		t.Fatalf("未注册的连接器不应创建成功")
+	}
+}
+
+func TestBaseSinkHealthAndStats(t *testing.T) {
+	b := NewBaseSink("h")
+	if h, _ := b.Health(); h.Status != "unhealthy" {
+		t.Fatalf("未运行时应为 unhealthy: %+v", h)
+	}
+	b.SetRunning(true)
+	if h, _ := b.Health(); h.Status != "healthy" {
+		t.Fatalf("运行中应为 healthy: %+v", h)
+	}
+	b.HandleError(errors.New("写入失败"), "测试")
+	if h, _ := b.Health(); h.Status != "degraded" || h.Message == "" {
+		t.Fatalf("有错误时应为 degraded: %+v", h)
+	}
+	if st := b.GetStats(); !st.Running || st.LastError == "" {
+		t.Fatalf("stats = %+v", st)
+	}
+	if !IsPermanent(fmt.Errorf("%w: bad data", ErrPermanent)) || IsPermanent(errors.New("x")) {
+		t.Fatal("IsPermanent")
 	}
 }

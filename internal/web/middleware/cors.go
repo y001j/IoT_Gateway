@@ -65,11 +65,6 @@ func DefaultCORSConfig() *CORSConfig {
 	}
 }
 
-// CORS 创建CORS中间件
-func CORS() func(http.Handler) http.Handler {
-	return CORSWithConfig(DefaultCORSConfig())
-}
-
 // CORSWithConfig 使用自定义配置创建CORS中间件
 func CORSWithConfig(config *CORSConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

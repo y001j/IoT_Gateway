@@ -2,20 +2,14 @@ package rules
 
 import (
 	"fmt"
-	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/y001j/iot-gateway/internal/model"
 )
 
 // Evaluator 条件评估器
-type Evaluator struct {
-	functions  map[string]Function
-	regexCache sync.Map // 使用sync.Map替代带锁的map
-}
+type Evaluator struct{}
 
 // Function 内置函数接口
 type Function interface {
@@ -25,15 +19,9 @@ type Function interface {
 
 // NewEvaluator 创建条件评估器
 func NewEvaluator() *Evaluator {
-	evaluator := &Evaluator{
-		functions: make(map[string]Function),
-		// regexCache 使用sync.Map，无需初始化
-	}
-
-	// 注册内置函数
-	evaluator.registerBuiltinFunctions()
-
-	return evaluator
+	// 以前这里注册了一张只写不读的内置函数表（abs/max/upper 等），
+	// 表达式中的函数实际由 ExpressionEngine 提供
+	return &Evaluator{}
 }
 
 // Evaluate 评估条件
@@ -616,275 +604,7 @@ func (e *Evaluator) evaluateLuaScript(condition *Condition, point model.Point) (
 	return false, fmt.Errorf("Lua脚本评估暂未实现")
 }
 
-// RegisterFunction 注册自定义函数
-func (e *Evaluator) RegisterFunction(fn Function) {
-	e.functions[fn.Name()] = fn
-}
-
-// GetCompiledRegex 获取编译后的正则表达式（无锁缓存）
-func (e *Evaluator) GetCompiledRegex(pattern string) (*regexp.Regexp, error) {
-	// 无锁读取
-	if compiled, ok := e.regexCache.Load(pattern); ok {
-		return compiled.(*regexp.Regexp), nil
-	}
-
-	// 编译正则表达式
-	compiled, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("正则表达式编译失败: %w", err)
-	}
-
-	// 原子存储，处理并发编译
-	actual, _ := e.regexCache.LoadOrStore(pattern, compiled)
-	return actual.(*regexp.Regexp), nil
-}
-
-// registerBuiltinFunctions 注册内置函数
-func (e *Evaluator) registerBuiltinFunctions() {
-	// 数学函数
-	e.RegisterFunction(&AbsFunction{})
-	e.RegisterFunction(&MaxFunction{})
-	e.RegisterFunction(&MinFunction{})
-
-	// 字符串函数
-	e.RegisterFunction(&LengthFunction{})
-	e.RegisterFunction(&UpperFunction{})
-	e.RegisterFunction(&LowerFunction{})
-
-	// 类型转换函数
-	e.RegisterFunction(&ToStringFunction{})
-	e.RegisterFunction(&ToNumberFunction{})
-	e.RegisterFunction(&ToBoolFunction{})
-}
-
 // 内置函数实现
-
-// AbsFunction 绝对值函数
-type AbsFunction struct{}
-
-func (f *AbsFunction) Name() string { return "abs" }
-
-func (f *AbsFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("abs函数需要1个参数")
-	}
-
-	if num, ok := toFloat64(args[0]); ok {
-		if num < 0 {
-			return -num, nil
-		}
-		return num, nil
-	}
-
-	return nil, fmt.Errorf("abs函数参数必须是数字")
-}
-
-// MaxFunction 最大值函数
-type MaxFunction struct{}
-
-func (f *MaxFunction) Name() string { return "max" }
-
-func (f *MaxFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("max函数至少需要2个参数")
-	}
-
-	var maxVal float64
-	var hasValue bool
-
-	for i, arg := range args {
-		if num, ok := toFloat64(arg); ok {
-			if !hasValue || num > maxVal {
-				maxVal = num
-				hasValue = true
-			}
-		} else {
-			return nil, fmt.Errorf("max函数第%d个参数必须是数字", i+1)
-		}
-	}
-
-	if !hasValue {
-		return nil, fmt.Errorf("max函数没有有效的数字参数")
-	}
-
-	return maxVal, nil
-}
-
-// MinFunction 最小值函数
-type MinFunction struct{}
-
-func (f *MinFunction) Name() string { return "min" }
-
-func (f *MinFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("min函数至少需要2个参数")
-	}
-
-	var minVal float64
-	var hasValue bool
-
-	for i, arg := range args {
-		if num, ok := toFloat64(arg); ok {
-			if !hasValue || num < minVal {
-				minVal = num
-				hasValue = true
-			}
-		} else {
-			return nil, fmt.Errorf("min函数第%d个参数必须是数字", i+1)
-		}
-	}
-
-	if !hasValue {
-		return nil, fmt.Errorf("min函数没有有效的数字参数")
-	}
-
-	return minVal, nil
-}
-
-// LengthFunction 长度函数
-type LengthFunction struct{}
-
-func (f *LengthFunction) Name() string { return "length" }
-
-func (f *LengthFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("length函数需要1个参数")
-	}
-
-	switch v := args[0].(type) {
-	case string:
-		return len(v), nil
-	case []interface{}:
-		return len(v), nil
-	case map[string]interface{}:
-		return len(v), nil
-	default:
-		// 使用反射获取长度
-		rv := reflect.ValueOf(v)
-		switch rv.Kind() {
-		case reflect.Slice, reflect.Array, reflect.Map, reflect.Chan, reflect.String:
-			return rv.Len(), nil
-		default:
-			return nil, fmt.Errorf("length函数参数类型不支持")
-		}
-	}
-}
-
-// UpperFunction 转大写函数
-type UpperFunction struct{}
-
-func (f *UpperFunction) Name() string { return "upper" }
-
-func (f *UpperFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("upper函数需要1个参数")
-	}
-
-	if str, ok := args[0].(string); ok {
-		return strings.ToUpper(str), nil
-	}
-
-	return nil, fmt.Errorf("upper函数参数必须是字符串")
-}
-
-// LowerFunction 转小写函数
-type LowerFunction struct{}
-
-func (f *LowerFunction) Name() string { return "lower" }
-
-func (f *LowerFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("lower函数需要1个参数")
-	}
-
-	if str, ok := args[0].(string); ok {
-		return strings.ToLower(str), nil
-	}
-
-	return nil, fmt.Errorf("lower函数参数必须是字符串")
-}
-
-// ToStringFunction 转字符串函数
-type ToStringFunction struct{}
-
-func (f *ToStringFunction) Name() string { return "toString" }
-
-func (f *ToStringFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("toString函数需要1个参数")
-	}
-
-	return fmt.Sprintf("%v", args[0]), nil
-}
-
-// ToNumberFunction 转数字函数
-type ToNumberFunction struct{}
-
-func (f *ToNumberFunction) Name() string { return "toNumber" }
-
-func (f *ToNumberFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, NewConditionError(ErrCodeConditionType, "toNumber函数需要1个参数", nil).
-			WithContext("args_count", len(args))
-	}
-
-	arg := args[0]
-	if arg == nil {
-		return nil, NewConditionError(ErrCodeConditionType, "toNumber函数参数不能为nil", nil)
-	}
-
-	if num, ok := toFloat64(arg); ok {
-		return num, nil
-	}
-
-	// 详细的错误信息
-	return nil, NewConditionError(ErrCodeConditionType, "无法转换为数字", nil).
-		WithContext("value", arg).
-		WithContext("type", fmt.Sprintf("%T", arg)).
-		WithContext("supported_types", []string{"int", "float", "string", "bool"})
-}
-
-// ToBoolFunction 转布尔函数
-type ToBoolFunction struct{}
-
-func (f *ToBoolFunction) Name() string { return "toBool" }
-
-func (f *ToBoolFunction) Call(args []interface{}) (interface{}, error) {
-	if len(args) != 1 {
-		return nil, NewConditionError(ErrCodeConditionType, "toBool函数需要1个参数", nil).
-			WithContext("args_count", len(args))
-	}
-
-	arg := args[0]
-	if arg == nil {
-		return false, nil
-	}
-
-	switch v := arg.(type) {
-	case bool:
-		return v, nil
-	case string:
-		// 严格的布尔转换
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "true", "1", "yes", "on":
-			return true, nil
-		case "false", "0", "no", "off", "":
-			return false, nil
-		default:
-			return len(v) > 0, nil
-		}
-	case int, int8, int16, int32, int64:
-		return v != 0, nil
-	case uint, uint8, uint16, uint32, uint64:
-		return v != 0, nil
-	case float32, float64:
-		if num, ok := toFloat64(v); ok {
-			return num != 0, nil
-		}
-	}
-
-	return arg != nil, nil
-}
 
 // 通用复合数据类型字段访问函数
 
