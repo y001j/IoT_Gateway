@@ -2,6 +2,9 @@ package actions
 
 import (
 	"os"
+	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/nats-io/nats.go"
 	"github.com/y001j/iot-gateway/internal/rules"
@@ -16,10 +19,36 @@ import (
 // alert 使用规则引擎内置的 BuiltinAlertHandler（与 Web 告警服务对接），这里不覆盖。
 // 必须在规则引擎 Start 之前调用。
 func RegisterBuiltinHandlers(svc *rules.RuleEngineService, nc *nats.Conn) {
+	RegisterBuiltinHandlersWithOptions(svc, nc, HandlerOptions{})
+}
+
+// HandlerOptions 动作处理器的可选配置
+type HandlerOptions struct {
+	// AggregateStateKV 不为空时，默认聚合实现把窗口状态保存到 JetStream KV（IOT_AGG_STATE），
+	// 网关重启后恢复，避免长时间窗口的统计周期被打断
+	AggregateStateKV nats.JetStreamContext
+	// AggregateSaveInterval 保存间隔（默认 30 秒）
+	AggregateSaveInterval time.Duration
+}
+
+// RegisterBuiltinHandlersWithOptions 同 RegisterBuiltinHandlers，可开启聚合状态持久化
+func RegisterBuiltinHandlersWithOptions(svc *rules.RuleEngineService, nc *nats.Conn, opts HandlerOptions) {
 	svc.RegisterActionHandler("filter", NewFilterHandler())
 	svc.RegisterActionHandler("transform", NewTransformHandler(nc))
 	svc.RegisterActionHandler("forward", NewForwardHandler(nc))
-	svc.RegisterActionHandler("aggregate", newAggregateActionHandler())
+	agg := newAggregateActionHandler()
+	if h, ok := agg.(*AggregateHandler); ok && opts.AggregateStateKV != nil {
+		p, err := NewKVAggregateStatePersister(opts.AggregateStateKV)
+		if err == nil {
+			err = h.manager.EnablePersistence(p, opts.AggregateSaveInterval)
+		}
+		if err != nil {
+			log.Warn().Err(err).Msg("聚合状态持久化未开启（重启后聚合窗口从零开始）")
+		}
+	} else if opts.AggregateStateKV != nil {
+		log.Warn().Msg("分片聚合实现（IOT_GATEWAY_ENABLE_OPTIMIZED_AGGREGATE）不支持状态持久化")
+	}
+	svc.RegisterActionHandler("aggregate", agg)
 }
 
 // newAggregateActionHandler 选择聚合实现：

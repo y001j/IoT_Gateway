@@ -36,6 +36,9 @@ type AggregateState struct {
 	Stats      *IncrementalStats
 	LastAccess time.Time
 	mu         sync.RWMutex
+
+	ttl         time.Duration // 闲置过期时间（至少覆盖两个时间窗口）
+	fingerprint string        // 创建时的窗口配置指纹，配置变化时状态需要重建
 }
 
 // AggregateManager 聚合状态管理器
@@ -50,6 +53,11 @@ type AggregateManager struct {
 	maxStates   int   // 最大状态数量限制
 	maxMemory   int64 // 最大内存使用限制（字节）
 	currentMem  int64 // 当前内存使用估算
+
+	// 持久化（EnablePersistence 开启）：定期保存变化的状态，重启后恢复
+	persister AggregateStatePersister
+	lastSave  time.Time
+	removed   []string // 已清理、待从持久化存储删除的状态键
 }
 
 // NewAggregateManager 创建聚合管理器
@@ -76,8 +84,14 @@ func NewAggregateManager() *AggregateManager {
 
 // GetOrCreateState 获取或创建聚合状态
 func (m *AggregateManager) GetOrCreateState(stateKey string, windowSize int, config ...*AggregateConfig) *AggregateState {
+	var cfg *AggregateConfig
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+	fingerprint := configFingerprint(windowSize, cfg)
+
 	m.mu.RLock()
-	if state, exists := m.states[stateKey]; exists {
+	if state, exists := m.states[stateKey]; exists && state.fingerprint == fingerprint {
 		state.mu.Lock()
 		state.LastAccess = time.Now()
 		state.mu.Unlock()
@@ -92,10 +106,16 @@ func (m *AggregateManager) GetOrCreateState(stateKey string, windowSize int, con
 
 	// 双重检查
 	if state, exists := m.states[stateKey]; exists {
-		state.mu.Lock()
-		state.LastAccess = time.Now()
-		state.mu.Unlock()
-		return state
+		if state.fingerprint == fingerprint {
+			state.mu.Lock()
+			state.LastAccess = time.Now()
+			state.mu.Unlock()
+			return state
+		}
+		// 规则的窗口配置变了（热加载修改了规则）：旧状态按旧窗口累积，继续使用会混合两种配置的数据
+		log.Info().Str("state_key", stateKey).Msg("聚合窗口配置已变化，重建聚合状态")
+		delete(m.states, stateKey)
+		m.currentMem -= m.estimateStateSize(state.WindowSize)
 	}
 
 	// 检查资源限制
@@ -184,10 +204,12 @@ func (m *AggregateManager) GetOrCreateState(stateKey string, windowSize int, con
 	}
 
 	state := &AggregateState{
-		GroupKey:   stateKey,
-		WindowSize: windowSize,
-		Stats:      stats,
-		LastAccess: time.Now(),
+		GroupKey:    stateKey,
+		WindowSize:  windowSize,
+		Stats:       stats,
+		LastAccess:  time.Now(),
+		ttl:         stateTTL(m.defaultTTL, cfg),
+		fingerprint: fingerprint,
 	}
 
 	m.states[stateKey] = state
@@ -381,9 +403,10 @@ func (m *AggregateManager) cleanupExpiredStates() {
 		state.mu.RLock()
 		age := now.Sub(state.LastAccess)
 		windowSize := state.WindowSize
+		ttl := state.ttlOr(m.defaultTTL)
 		state.mu.RUnlock()
 
-		if age > m.defaultTTL {
+		if age > ttl {
 			expiredKeys = append(expiredKeys, key)
 			freedMemory += m.estimateStateSize(windowSize)
 		}
@@ -393,6 +416,9 @@ func (m *AggregateManager) cleanupExpiredStates() {
 	for _, key := range expiredKeys {
 		delete(m.states, key)
 		log.Debug().Str("state_key", key).Msg("清理过期聚合状态")
+	}
+	if m.persister != nil {
+		m.removed = append(m.removed, expiredKeys...)
 	}
 
 	// 更新内存使用估算
@@ -419,7 +445,7 @@ func (m *AggregateManager) forceCleanup() {
 		state.mu.RUnlock()
 
 		// 使用更激进的清理策略
-		if age > m.defaultTTL/2 {
+		if age > state.ttlOr(m.defaultTTL)/2 {
 			expiredKeys = append(expiredKeys, key)
 			freedMemory += m.estimateStateSize(windowSize)
 		}
@@ -428,6 +454,9 @@ func (m *AggregateManager) forceCleanup() {
 	// 删除过期状态
 	for _, key := range expiredKeys {
 		delete(m.states, key)
+	}
+	if m.persister != nil {
+		m.removed = append(m.removed, expiredKeys...)
 	}
 
 	// 更新内存使用估算
@@ -472,8 +501,15 @@ func (m *AggregateManager) GetStats() map[string]interface{} {
 
 // Close 关闭管理器
 func (m *AggregateManager) Close() {
-	m.cancel()
-	m.wg.Wait()
+	m.closeWithFinalSave()
+}
+
+// ttlOr 返回状态的闲置过期时间（没有设置时使用默认值）
+func (s *AggregateState) ttlOr(def time.Duration) time.Duration {
+	if s.ttl > 0 {
+		return s.ttl
+	}
+	return def
 }
 
 // extractNumericValue 提取数值，支持复杂数据类型

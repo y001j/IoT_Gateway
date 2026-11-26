@@ -69,6 +69,8 @@ const PluginsPage: React.FC = () => {
   // 配置模态框状态
   const [configModalVisible, setConfigModalVisible] = useState(false);
   const [configText, setConfigText] = useState('');
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSaving, setConfigSaving] = useState(false);
 
   // 获取插件列表
   const { current: currentPage, pageSize } = pagination;
@@ -163,11 +165,63 @@ const PluginsPage: React.FC = () => {
   };
 
   // 显示配置模态框
+  // 解析编辑框中的 JSON，失败时显示错误
+  const parseConfigText = (): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(configText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setConfigError('配置必须是一个 JSON 对象');
+        return null;
+      }
+      return parsed as Record<string, unknown>;
+    } catch (caught) {
+      setConfigError('JSON 格式错误：' + (caught instanceof Error ? caught.message : String(caught)));
+      return null;
+    }
+  };
+
+  // 只校验，不保存
+  const handleValidateConfig = async () => {
+    if (!selectedPlugin) return;
+    const config = parseConfigText();
+    if (!config) return;
+    try {
+      const result = await pluginService.validatePluginConfig(selectedPlugin.name, config);
+      if (result.valid) {
+        setConfigError(null);
+        message.success('配置校验通过');
+      } else {
+        setConfigError((result.errors || []).join('；') || '配置校验失败');
+      }
+    } catch (caught) {
+      setConfigError(asHttpError(caught).message || '校验失败');
+    }
+  };
+
+  // 保存：写回 config.yaml，运行中的实例用新配置重启，失败时后端自动恢复原配置
+  const handleSaveConfig = async () => {
+    if (!selectedPlugin) return;
+    const config = parseConfigText();
+    if (!config) return;
+    setConfigSaving(true);
+    try {
+      await pluginService.updatePluginConfig(selectedPlugin.name, config);
+      message.success('配置已保存');
+      setConfigModalVisible(false);
+      await fetchPlugins();
+    } catch (caught) {
+      setConfigError(asHttpError(caught).message || '保存失败');
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
   const showConfigModal = async (plugin: Plugin) => {
     try {
       const config = await pluginService.getPluginConfig(plugin.name);
       setSelectedPlugin(plugin);
       setConfigText(JSON.stringify(config, null, 2));
+      setConfigError(null);
       setConfigModalVisible(true);
     } catch (caught) {
       const error = asHttpError(caught);
@@ -323,7 +377,7 @@ const PluginsPage: React.FC = () => {
             />
           </Tooltip>
           
-          <Tooltip title="查看配置">
+          <Tooltip title="配置">
             <Button
               type="link"
               icon={<SettingOutlined />}
@@ -584,24 +638,35 @@ const PluginsPage: React.FC = () => {
         )}
       </Drawer>
 
-      {/* 配置查看模态框（配置来自 config.yaml，页面上不能修改） */}
+      {/* 配置编辑模态框：保存时写回 config.yaml（仅管理员） */}
       <Modal
         title={selectedPlugin ? `插件配置：${selectedPlugin.name}` : '插件配置'}
         open={configModalVisible}
         onCancel={() => setConfigModalVisible(false)}
-        footer={<Button onClick={() => setConfigModalVisible(false)}>关闭</Button>}
         width={800}
+        footer={[
+          <Button key="cancel" onClick={() => setConfigModalVisible(false)}>取消</Button>,
+          <Button key="validate" onClick={handleValidateConfig}>校验</Button>,
+          <Button key="save" type="primary" loading={configSaving} onClick={handleSaveConfig}>保存</Button>,
+        ]}
       >
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="配置为只读"
-          description="修改适配器、连接器配置请编辑网关的 config.yaml（southbound.adapters / northbound.sinks），然后在这里重启对应插件。密码、令牌等敏感字段已隐藏。"
+          message="保存后写回 config.yaml，运行中的实例会用新配置重启"
+          description="新配置无法启动时自动恢复原配置。名称和类型不能修改；显示为 ****** 的密码、令牌等字段保持不变即可，保存时沿用原值。只有管理员可以保存。"
         />
-        <pre style={{ maxHeight: 500, overflow: 'auto', background: 'rgba(0,0,0,0.04)', padding: 12, borderRadius: 6, fontSize: 12 }}>
-          {configText}
-        </pre>
+        {configError && (
+          <Alert type="error" showIcon style={{ marginBottom: 12 }} message={configError} />
+        )}
+        <Input.TextArea
+          value={configText}
+          onChange={(e) => setConfigText(e.target.value)}
+          rows={20}
+          spellCheck={false}
+          style={{ fontFamily: 'monospace', fontSize: 12 }}
+        />
       </Modal>
     </div>
   );

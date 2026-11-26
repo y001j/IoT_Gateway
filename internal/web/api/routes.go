@@ -4,6 +4,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/y001j/iot-gateway/internal/web/middleware"
 	"github.com/y001j/iot-gateway/internal/web/services"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,6 +15,9 @@ type RouteOptions struct {
 	// 为空时不返回任何 CORS 头：同源访问（同域部署或通过 Vite 代理）不受影响，
 	// 第三方网站无法跨域调用 API。包含 "*" 时允许任意来源，但不允许携带凭证。
 	AllowedOrigins []string
+	// OpsHandler 网关的运维接口（/health、/metrics、/info、/storage）。设置后这些路径也由 Web 端口提供，
+	// 部署时只需要开放一个端口（gateway.http_port 设为 0 可关闭单独的运维端口）
+	OpsHandler http.Handler
 }
 
 // SetupRoutes 设置路由
@@ -240,13 +244,21 @@ func SetupRoutes(router *gin.Engine, svc *services.Services, natsConn *nats.Conn
 		}
 	}
 
-	// 健康检查端点（无需认证）
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status":  "ok",
-			"service": "iot-gateway-web",
+	// 健康检查端点（无需认证）：有运维接口时返回网关的真实健康状态（以前固定返回 ok）
+	if opt.OpsHandler != nil {
+		ops := gin.WrapH(opt.OpsHandler)
+		for _, p := range []string{"/health", "/metrics", "/info", "/storage"} {
+			router.GET(p, ops)
+			router.OPTIONS(p, ops)
+		}
+	} else {
+		router.GET("/health", func(c *gin.Context) {
+			c.JSON(200, gin.H{
+				"status":  "ok",
+				"service": "iot-gateway-web",
+			})
 		})
-	})
+	}
 
 	// Swagger 文档（开发环境）
 	// router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))

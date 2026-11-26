@@ -714,3 +714,13 @@ func cloneBatch(batch []model.Point) []model.Point {
 	}
 	return out
 }
+
+// subscribedMessageParser 只用于解析消息（parseMessage 不读写连接器状态）
+var subscribedMessageParser = NewNATSSubscriberSink()
+
+// ParseSubscribedMessage 把订阅到的 NATS 消息解析为数据点。dataType 为 raw（数据点 JSON）、
+// rule（规则输出或规则事件）、alert（告警）或 system，规则与 nats_subscriber 一致。
+// 普通连接器配置 subscriptions 时使用。
+func ParseSubscribedMessage(data []byte, dataType string) (model.Point, error) {
+	return subscribedMessageParser.parseMessage(data, SubscriptionConfig{DataType: dataType})
+}

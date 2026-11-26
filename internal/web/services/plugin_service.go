@@ -192,10 +192,18 @@ func (s *pluginService) DeletePlugin(name string) error {
 	return fmt.Errorf("plugin deletion not supported yet")
 }
 
+// UpdatePluginConfig 保存实例配置（写回 config.yaml），实例运行中时用新配置重启，失败则回滚
 func (s *pluginService) UpdatePluginConfig(name string, config map[string]interface{}) error {
-	// TODO: 更新插件配置文件
-	// 这需要插件管理器支持配置更新
-	return fmt.Errorf("plugin config update not implemented yet")
+	_, err := s.manager.UpdateInstanceConfig(name, unwrapConfig(config))
+	return err
+}
+
+// unwrapConfig 兼容前端发送的 {"config": {...}} 包装
+func unwrapConfig(config map[string]interface{}) map[string]interface{} {
+	if inner, ok := config["config"].(map[string]interface{}); ok && len(config) == 1 {
+		return inner
+	}
+	return config
 }
 
 // GetPluginConfig 返回实例的配置（密码、令牌等敏感字段会被隐藏）
@@ -225,71 +233,14 @@ func (s *pluginService) GetPluginConfig(name string) (map[string]interface{}, er
 }
 
 // maskSecrets 隐藏配置中的敏感字段（配置接口对所有登录用户开放）
-func maskSecrets(v interface{}) {
-	switch t := v.(type) {
-	case map[string]interface{}:
-		for k, val := range t {
-			if isSecretKey(k) {
-				if str, ok := val.(string); !ok || str != "" {
-					t[k] = "******"
-				}
-				continue
-			}
-			maskSecrets(val)
-		}
-	case []interface{}:
-		for _, val := range t {
-			maskSecrets(val)
-		}
-	}
-}
-
-func isSecretKey(key string) bool {
-	k := strings.ToLower(key)
-	for _, word := range []string{"password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key"} {
-		if strings.Contains(k, word) {
-			return true
-		}
-	}
-	return false
-}
+func maskSecrets(v interface{}) { plugin.MaskSecrets(v) }
 
 func (s *pluginService) ValidatePluginConfig(name string, config map[string]interface{}) (*models.PluginConfigValidationResponse, error) {
-	// 基本验证
-	response := &models.PluginConfigValidationResponse{
-		Valid:    true,
-		Errors:   []string{},
-		Warnings: []string{},
-	}
-
-	// 检查必要字段
-	if config["name"] == nil || config["name"] == "" {
+	response := &models.PluginConfigValidationResponse{Valid: true, Errors: []string{}, Warnings: []string{}}
+	if err := s.manager.ValidateInstanceConfig(name, unwrapConfig(config)); err != nil {
 		response.Valid = false
-		response.Errors = append(response.Errors, "名称不能为空")
+		response.Errors = append(response.Errors, err.Error())
 	}
-
-	if config["type"] == nil || config["type"] == "" {
-		response.Valid = false
-		response.Errors = append(response.Errors, "类型不能为空")
-	}
-
-	// 检查类型是否有效
-	if config["type"] != nil {
-		validTypes := []string{"adapter", "sink"}
-		typeStr := fmt.Sprintf("%v", config["type"])
-		isValidType := false
-		for _, validType := range validTypes {
-			if typeStr == validType {
-				isValidType = true
-				break
-			}
-		}
-		if !isValidType {
-			response.Valid = false
-			response.Errors = append(response.Errors, "无效的插件类型，必须是 adapter 或 sink")
-		}
-	}
-
 	return response, nil
 }
 

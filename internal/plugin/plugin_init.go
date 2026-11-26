@@ -146,6 +146,22 @@ func (m *Manager) initAdapters() error {
 // 支持两种格式：旧格式（嵌套 config 字段）和新格式（扁平化，去掉 enabled 字段）。
 func adapterConfigData(adapterMap map[string]interface{}, name, adapterType string) ([]byte, error) {
 	if configField, hasConfig := adapterMap["config"]; hasConfig {
+		// 嵌套的 config 里缺少 name/type 时用实例的值补上（以前要求在两处重复填写，漏写时适配器初始化失败）
+		if inner, ok := configField.(map[string]interface{}); ok {
+			if _, has := inner["name"]; !has || inner["type"] == nil {
+				filled := make(map[string]interface{}, len(inner)+2)
+				for k, v := range inner {
+					filled[k] = v
+				}
+				if _, has := filled["name"]; !has {
+					filled["name"] = name
+				}
+				if filled["type"] == nil {
+					filled["type"] = adapterType
+				}
+				return json.Marshal(filled)
+			}
+		}
 		return json.Marshal(configField)
 	}
 	configMap := make(map[string]interface{}, len(adapterMap))

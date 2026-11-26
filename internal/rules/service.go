@@ -482,6 +482,15 @@ func (s *RuleEngineService) Stop(ctx context.Context) error {
 		log.Warn().Msg("规则引擎服务停止超时")
 	}
 
+	// 关闭动作处理器（聚合处理器停止后台协程并保存窗口状态）。以前从未调用
+	s.handlersMu.RLock()
+	for _, h := range s.actionHandlers {
+		if c, ok := h.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+	s.handlersMu.RUnlock()
+
 	// 关闭监控器
 	if s.monitor != nil {
 		s.monitor.Close()

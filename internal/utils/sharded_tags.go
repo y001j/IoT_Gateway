@@ -14,6 +14,9 @@ import (
 type ShardedTags struct {
 	mu   sync.RWMutex
 	data map[string]string
+	// shared 表示 data 与 Clone 出的副本共享（写时复制）：共享的 map 不再被修改，
+	// 任何一方写入前先复制一份。管道给每个连接器一份数据点副本时，标签只读就不必复制。
+	shared bool
 }
 
 // NewShardedTags 创建标签容器。shardCount 参数仅为兼容旧接口保留，已不再使用。
@@ -36,6 +39,7 @@ func NewShardedTagsFromMap(sourceMap map[string]string) *ShardedTags {
 // Set 设置标签值
 func (st *ShardedTags) Set(key, value string) {
 	st.mu.Lock()
+	st.ownLocked(1)
 	if st.data == nil {
 		st.data = make(map[string]string, 4)
 	}
@@ -84,7 +88,10 @@ func (st *ShardedTags) Len() int {
 // Delete 删除标签
 func (st *ShardedTags) Delete(key string) {
 	st.mu.Lock()
-	delete(st.data, key)
+	if _, ok := st.data[key]; ok {
+		st.ownLocked(0)
+		delete(st.data, key)
+	}
 	st.mu.Unlock()
 }
 
@@ -92,6 +99,7 @@ func (st *ShardedTags) Delete(key string) {
 func (st *ShardedTags) Clear() {
 	st.mu.Lock()
 	st.data = nil
+	st.shared = false
 	st.mu.Unlock()
 }
 
@@ -101,6 +109,7 @@ func (st *ShardedTags) SetMultiple(tags map[string]string) {
 		return
 	}
 	st.mu.Lock()
+	st.ownLocked(len(tags))
 	if st.data == nil {
 		st.data = make(map[string]string, len(tags))
 	}
@@ -123,18 +132,37 @@ func (st *ShardedTags) UnmarshalJSON(data []byte) error {
 	}
 	st.mu.Lock()
 	st.data = temp
+	st.shared = false
 	st.mu.Unlock()
 	return nil
 }
 
-// Clone 创建深度副本
+// Clone 创建副本（写时复制）：副本与原容器共享同一个 map，直到任何一方写入。
+// 以前每次都复制整个 map，管道为每个连接器复制数据点时，每个点每个连接器都要分配一次。
 func (st *ShardedTags) Clone() *ShardedTags {
 	if st == nil {
 		return nil
 	}
-	st.mu.RLock()
-	defer st.mu.RUnlock()
-	return NewShardedTagsFromMap(st.data)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.data) == 0 {
+		return &ShardedTags{}
+	}
+	st.shared = true
+	return &ShardedTags{data: st.data, shared: true}
+}
+
+// ownLocked 写入前调用（持有写锁）：data 与其他容器共享时先复制一份，extra 为预计新增的键数
+func (st *ShardedTags) ownLocked(extra int) {
+	if !st.shared {
+		return
+	}
+	own := make(map[string]string, len(st.data)+extra)
+	for k, v := range st.data {
+		own[k] = v
+	}
+	st.data = own
+	st.shared = false
 }
 
 // Merge 合并另一个容器

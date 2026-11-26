@@ -136,3 +136,27 @@ func TestMaskSecretsNested(t *testing.T) {
 		t.Fatalf("maskSecrets = %+v", cfg)
 	}
 }
+
+// 配置校验与保存交给插件管理器；兼容前端的 {"config": {...}} 包装
+func TestPluginServiceValidateAndUpdateConfig(t *testing.T) {
+	v := viper.New()
+	v.Set("southbound.adapters", []interface{}{map[string]interface{}{"name": "m1", "type": "mock",
+		"config": map[string]interface{}{"interval": "1s", "data_points": []interface{}{map[string]interface{}{"device_id": "d", "key": "k"}}}}})
+	pm := plugin.NewManager(t.TempDir(), nil, v)
+	svc, _ := NewPluginService(pm)
+	ok, err := svc.ValidatePluginConfig("m1", map[string]interface{}{"config": map[string]interface{}{"name": "m1", "type": "mock",
+		"config": map[string]interface{}{"interval": "2s", "data_points": []interface{}{map[string]interface{}{"device_id": "d", "key": "k"}}}}})
+	if err != nil || !ok.Valid {
+		t.Fatalf("合法配置应通过: %+v %v", ok, err)
+	}
+	bad, _ := svc.ValidatePluginConfig("m1", map[string]interface{}{"type": "http"})
+	if bad.Valid || len(bad.Errors) == 0 {
+		t.Fatalf("修改类型应校验失败: %+v", bad)
+	}
+	if err := svc.UpdatePluginConfig("m1", map[string]interface{}{}); err == nil {
+		t.Fatal("没有配置文件时保存应失败")
+	}
+	if got := unwrapConfig(map[string]interface{}{"config": map[string]interface{}{"a": 1}, "x": 1}); got["x"] != 1 {
+		t.Fatal("有其他字段时不解包")
+	}
+}
