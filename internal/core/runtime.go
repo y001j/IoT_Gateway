@@ -46,6 +46,11 @@ type Runtime struct {
 	natsAsyncErrors   atomic.Int64
 	lastNatsErrLog    atomic.Int64
 	started           atomic.Bool
+
+	// 内嵌 MQTT（gateway.mqtt）：启用时 mqttAddr 为实际监听地址，未能启动时 mqttProblem 说明原因
+	mqttEnabled bool
+	mqttAddr    string
+	mqttProblem string
 }
 
 // natsOptions 返回网关使用的 NATS 连接参数
@@ -125,6 +130,12 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		return nil, fmt.Errorf("storage 配置错误: %w", err)
 	}
 
+	mqttCfg, err := mqttConfigFromViper(v)
+	if err != nil {
+		return nil, err
+	}
+	rtOpts.mqttEnabled = mqttCfg.Enabled
+
 	// nats embedded or external
 	natsURL := v.GetString("gateway.nats_url")
 	var nc *nats.Conn
@@ -146,6 +157,10 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 			// 成功连接到现有服务器
 			testConn.Close() // 关闭测试连接
 			serverReady = true
+			if mqttCfg.Enabled {
+				rtOpts.mqttProblem = fmt.Sprintf("端口 %d 上已有 NATS 服务器，网关连接到它而没有启动内嵌服务器，MQTT 未启动", port)
+				log.Warn().Msg(rtOpts.mqttProblem)
+			}
 		} else {
 			// 没有现有服务器，检查端口是否可用
 			ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -177,6 +192,15 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 				opts.JetStreamMaxStore = storageCfg.MaxDisk
 				opts.SyncInterval = storageCfg.SyncInterval
 			}
+			mqttStarting := false
+			if mqttCfg.Enabled {
+				if err := applyMQTTOptions(opts, mqttCfg); err != nil {
+					rtOpts.mqttProblem = err.Error()
+					log.Error().Err(err).Msg("内嵌 MQTT 未启动")
+				} else {
+					mqttStarting = true
+				}
+			}
 
 			// 创建并启动服务器
 			natsServer, err = server.NewServer(opts)
@@ -194,6 +218,15 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 					natsServer.Shutdown()
 				}
 				return nil, fmt.Errorf("嵌入式 NATS 服务器启动超时")
+			}
+			if mqttStarting {
+				if err := waitMQTTListening(mqttCfg, 5*time.Second); err != nil {
+					rtOpts.mqttProblem = err.Error()
+					log.Error().Err(err).Msg("内嵌 MQTT 未启动")
+				} else {
+					rtOpts.mqttAddr = mqttCfg.addr()
+					log.Info().Str("addr", rtOpts.mqttAddr).Msg("内嵌 MQTT 已启动（MQTT 主题 a/b 对应 NATS 主题 a.b）")
+				}
 			}
 
 			serverReady = true
@@ -231,6 +264,10 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	} else if natsURL != "" {
 		// 连接到外部 NATS 服务器
 		nc, err = nats.Connect(natsURL, rtOpts.natsOptions()...)
+		if mqttCfg.Enabled {
+			rtOpts.mqttProblem = "使用外部 NATS 服务器，gateway.mqtt 只对内嵌服务器生效，请在外部服务器上配置 MQTT"
+			log.Warn().Msg(rtOpts.mqttProblem)
+		}
 	} else {
 		// 默认连接
 		nc, err = nats.Connect(nats.DefaultURL, rtOpts.natsOptions()...)

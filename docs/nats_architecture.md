@@ -275,6 +275,33 @@ if sinkType == "nats_subscriber" {
 4. **灵活路由**: nats_subscriber支持复杂的数据转换、过滤和多目标分发
 5. **批处理优化**: 统一的批处理机制提高性能
 
+## 内嵌 MQTT（gateway.mqtt）
+
+内嵌 NATS 服务器可以同时提供 MQTT 3.1.1 服务（nats-server 内置功能，支持 QoS 0/1/2、保留消息、持久会话，数据保存在 JetStream 中）。开启方式：
+
+```yaml
+gateway:
+  nats_url: "embedded"
+  mqtt:
+    enabled: true
+    host: "127.0.0.1"   # 局域网设备连接时改为 0.0.0.0，并配置 username/password
+    port: 1883
+```
+
+MQTT 主题与 NATS 主题互通：MQTT 的 `/` 对应 NATS 的 `.`，`+` 对应 `*`，`#` 对应 `>`。
+
+| 用途 | 做法 |
+|---|---|
+| 外部系统订阅规则结果、告警 | MQTT 客户端订阅 `iot/rules/#`、`iot/alerts/#`，不需要配置连接器 |
+| mqtt 连接器需要 broker | `mqtt_output` 的 broker 指向 `tcp://localhost:1883` |
+| 设备直接上报 | 发布到 `iot/data/<设备>/<键>`，载荷必须是网关数据点的 JSON 格式（绕过适配器，直接进入规则引擎） |
+
+注意事项：
+- 只在网关自己启动内嵌 NATS 时生效。4222 端口上已有 NATS 服务器（网关会连接它）或使用外部 NATS 时，MQTT 不会启动，`/health` 的 `mqtt` 组件会说明原因（degraded）。
+- 启动前检查端口：端口被占用时跳过 MQTT，网关照常运行（nats-server 在 MQTT 端口监听失败时会结束整个进程，所以必须预先检查）。
+- 不支持 MQTT 5。需要 MQTT 5 或海量设备直连时，可以考虑独立的 broker。
+- 对外开放（非回环地址）且没有配置用户名密码时，启动日志会给出警告。
+
 ## 核心模块NATS集成
 
 ### 1. Core Runtime
