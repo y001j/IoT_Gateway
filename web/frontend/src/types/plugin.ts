@@ -2,6 +2,8 @@ export interface Plugin {
   id?: number;
   name: string;
   type: string; // 'adapter' | 'sink'
+  plugin_type?: string; // 插件类型，例如 mock、websocket
+  mode?: string; // builtin 或外部插件的运行方式
   version: string;
   status: string; // 'running' | 'stopped' | 'error'
   description: string;

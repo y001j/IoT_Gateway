@@ -56,6 +56,8 @@ type PluginManager interface {
 	GetAdapter(name string) (southbound.Adapter, bool)
 	GetSink(name string) (northbound.Sink, bool)
 	RunningInstances() (adapters, sinks map[string]string)
+	InstanceStatuses() []InstanceStatus
+	InstanceConfig(name string) (map[string]interface{}, bool)
 }
 
 type Manager struct {
@@ -271,11 +273,13 @@ func (m *Manager) initSinks() error {
 
 // setupDataFlow 设置数据流
 func (m *Manager) setupDataFlow(ctx context.Context) {
+	var failedSinks, failedAdapters []string
 	// 启动所有连接器，并为每个连接器创建独立的分发器
 	for name, sink := range m.sinks {
 		log.Info().Str("name", name).Msg("启动连接器")
 		if err := sink.Start(ctx); err != nil {
 			log.Error().Err(err).Str("name", name).Msg("启动连接器失败")
+			failedSinks = append(failedSinks, name)
 			continue
 		}
 		m.attachSink(name, sink)
@@ -287,9 +291,22 @@ func (m *Manager) setupDataFlow(ctx context.Context) {
 		log.Info().Str("name", name).Msg("启动适配器")
 		if err := adapter.Start(ctx, m.dataChan); err != nil {
 			log.Error().Err(err).Str("name", name).Msg("启动适配器失败")
+			failedAdapters = append(failedAdapters, name)
 			continue
 		}
 		log.Info().Str("name", name).Msg("适配器启动成功")
+	}
+
+	// 启动失败的实例不保留，健康检查据此显示为未运行
+	if len(failedSinks) > 0 || len(failedAdapters) > 0 {
+		m.mu.Lock()
+		for _, name := range failedSinks {
+			delete(m.sinks, name)
+		}
+		for _, name := range failedAdapters {
+			delete(m.adapters, name)
+		}
+		m.mu.Unlock()
 	}
 
 	go m.runPipeline(ctx)
@@ -619,13 +636,20 @@ func (m *Manager) loop(ctx context.Context) error {
 
 	for {
 		select {
-		case event := <-m.watcher.Events:
+		case event, ok := <-m.watcher.Events:
+			if !ok {
+				// Stop 关闭了文件监听器；以前这里会在已关闭的通道上空转，反复扫描目录
+				return nil
+			}
 			log.Info().Str("file", event.Name).Str("op", event.Op.String()).Msg("检测到插件文件变动")
 			// 文件变动后重新扫描
 			if err := m.scanAndLoadMeta(); err != nil {
 				log.Error().Err(err).Msg("重新扫描插件目录失败")
 			}
-		case err := <-m.watcher.Errors:
+		case err, ok := <-m.watcher.Errors:
+			if !ok {
+				return nil
+			}
 			log.Error().Err(err).Msg("监控插件目录失败")
 		case <-ticker.C:
 			// 定期扫描

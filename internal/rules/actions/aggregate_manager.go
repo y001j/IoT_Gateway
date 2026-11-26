@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -514,6 +515,13 @@ func extractNumericValue(value interface{}) (float64, error) {
 		} else {
 			return 0, fmt.Errorf("复杂数据类型中没有有效的数值")
 		}
+	case model.CompositeData:
+		// 类型化的复合数据（适配器在进程内直接产生）
+		val, ok := extractFromCompositeData(v)
+		if !ok {
+			return 0, fmt.Errorf("复杂数据类型中没有有效的数值")
+		}
+		result = val
 	default:
 		return 0, fmt.Errorf("不支持的数值类型: %T", value)
 	}
@@ -532,19 +540,26 @@ func extractNumericValue(value interface{}) (float64, error) {
 
 // extractFromComplexType 从复杂数据类型中提取数值用于聚合
 func extractFromComplexType(data map[string]interface{}) (float64, bool) {
-	// 1. 数组数据类型 - 取第一个数值元素
+	// 1. 数组数据类型 - 取第一个数值元素（元素可能是 []interface{} 或 []float64）
 	if elements, ok := data["elements"]; ok {
-		if elemArray, ok := elements.([]interface{}); ok && len(elemArray) > 0 {
+		if elemArray := sliceElements(elements); len(elemArray) > 0 {
 			if val, ok := convertToFloat64(elemArray[0]); ok {
 				return val, true
 			}
 		}
 	}
 
-	// 2. 3D向量数据类型 - 使用幅值 (magnitude)
+	// 2. 3D向量数据类型 - 使用幅值 (magnitude)，没有时按 x/y/z 计算
 	if magnitude, ok := data["magnitude"]; ok {
 		if val, ok := convertToFloat64(magnitude); ok {
 			return val, true
+		}
+	}
+	if x, okX := convertToFloat64(data["x"]); okX {
+		y, okY := convertToFloat64(data["y"])
+		z, okZ := convertToFloat64(data["z"])
+		if okY && okZ {
+			return math.Sqrt(x*x + y*y + z*z), true
 		}
 	}
 
@@ -555,27 +570,25 @@ func extractFromComplexType(data map[string]interface{}) (float64, bool) {
 		}
 	}
 
-	// 4. 颜色数据类型 - 使用亮度 (brightness)
-	if brightness, ok := data["brightness"]; ok {
-		if val, ok := convertToFloat64(brightness); ok {
+	// 4. 颜色数据类型 - 使用亮度 (brightness / lightness)
+	for _, field := range []string{"brightness", "lightness"} {
+		if val, ok := convertToFloat64(data[field]); ok {
 			return val, true
 		}
 	}
 
-	// 5. 通用向量数据类型 - 使用平均值
+	// 5. 通用向量数据类型 - 使用平均值（values 可能是 []interface{} 或 []float64）
 	if values, ok := data["values"]; ok {
-		if valArray, ok := values.([]interface{}); ok && len(valArray) > 0 {
-			var sum float64
-			var count int
-			for _, v := range valArray {
-				if val, ok := convertToFloat64(v); ok {
-					sum += val
-					count++
-				}
+		var sum float64
+		var count int
+		for _, v := range sliceElements(values) {
+			if val, ok := convertToFloat64(v); ok {
+				sum += val
+				count++
 			}
-			if count > 0 {
-				return sum / float64(count), true
-			}
+		}
+		if count > 0 {
+			return sum / float64(count), true
 		}
 	}
 
@@ -625,4 +638,47 @@ func convertToFloat64(value interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// extractFromCompositeData 从类型化的复合数据中提取用于聚合的数值，规则与 map 形式一致：
+// 位置取速度、三维向量取模长、颜色取亮度、向量取平均值、数组取第一个元素
+func extractFromCompositeData(data model.CompositeData) (float64, bool) {
+	switch d := data.(type) {
+	case *model.LocationData:
+		return d.Speed, true
+	case *model.Vector3D:
+		return math.Sqrt(d.X*d.X + d.Y*d.Y + d.Z*d.Z), true
+	case *model.ColorData:
+		return (float64(d.R) + float64(d.G) + float64(d.B)) / 3 / 255 * 100, true
+	case *model.VectorData:
+		if len(d.Values) == 0 {
+			return 0, false
+		}
+		var sum float64
+		for _, v := range d.Values {
+			sum += v
+		}
+		return sum / float64(len(d.Values)), true
+	case *model.ArrayData:
+		if len(d.Values) > 0 {
+			return convertToFloat64(d.Values[0])
+		}
+	}
+	return 0, false
+}
+
+// sliceElements 把任意切片（[]interface{}、[]float64 等）转换为 []interface{}
+func sliceElements(v interface{}) []interface{} {
+	if s, ok := v.([]interface{}); ok {
+		return s
+	}
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() != reflect.Slice {
+		return nil
+	}
+	out := make([]interface{}, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out
 }

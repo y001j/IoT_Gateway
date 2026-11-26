@@ -449,3 +449,41 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 - gosec（v2.22.4）`Issues: 0`。
 - `deadcode -test ./...` 无输出。
 - 前端 lint 0 警告、tsc 0 错误、14 项测试通过、构建成功。
+
+## 12. 第九轮：插件健康统计
+
+试用时发现：网关所有配置的实例都在正常运行，`/health` 却显示 degraded（"4/13 个插件在运行"）。
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| `/health`、`/metrics` | 插件统计用的是 `GetPlugins()`，它列出所有可用的插件类型（内置注册表 + plugins 目录中的外部插件）。没有被配置使用的类型（redis、influxdb、http 等）都算"未运行"，网关一直显示 degraded；同类型的多个实例被合并成一个 | 新增 `Manager.InstanceStatuses()`，按配置中启用的实例统计（加上不在配置中但正在运行的外部插件）；初始化失败、启动失败、被停止的实例算作未运行 |
+| 插件管理器启动 | 启动失败的适配器/连接器仍留在运行列表中，被统计为运行中 | 启动失败时从列表中移除 |
+| 插件管理器 `loop` | `Stop` 关闭文件监听器后，`loop` 在已关闭的通道上空转，反复扫描插件目录并打 Info 日志，直到上下文取消 | 通道关闭时退出 |
+
+### 12.1 插件管理页面无法控制插件
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| Web 插件列表 | 列出的是插件类型（mock、websocket、redis…），启停接口按实例名（mock_temperature_sensors…）工作：对 mock、websocket 点停止报 `plugin 'mock' is not running`，对没配置的类型点启动会用空配置创建实例 | 按实例列出（`InstanceStatuses`：配置中的实例，包括禁用的；插件目录中的外部插件；其他运行中的实例），新增 `plugin_type`、`mode` 字段 |
+| Web 插件详情 | `GetPlugin` 只返回名称（TODO） | 返回实例的完整信息 |
+| Web 插件配置 | 返回类型的元数据而不是实例配置；配置接口对所有登录用户开放 | 返回实例配置（`Manager.InstanceConfig`，副本），隐藏 password/secret/token 等字段 |
+| 前端插件页面 | 删除、保存配置后端不支持（固定返回错误），"添加插件"按钮没有绑定操作 | 去掉这些按钮，配置改为只读查看并说明修改方式；类型列显示插件类型 |
+
+验证：新增 `TestInstanceStatuses`、`TestLoopExitsWhenWatcherClosed`（无修复时失败）、`TestHealthAndMetricsCountConfiguredInstances`、`TestPluginServiceListsControllableInstances`、`TestMaskSecretsNested`；另外用新代码在独立端口启动网关，通过 Web 接口实测列表、停止、启动、重启、统计、配置均正常；`go test -race ./...` 全部通过，vet、gofmt、deadcode 无输出。
+
+## 13. 第十轮：示例规则在运行时大量报错
+
+试用时网关日志中每分钟有上千条"动作执行失败"。新增 `TestRepoRulesRunWithoutActionErrors`：用仓库 config.yaml 中的模拟适配器产生数据（同时包括经过 JSON 往返的数据，与规则引擎从 NATS 收到的一致），让 rules/ 下的全部规则（包括禁用的）按规则引擎的管道语义执行，发现 24 种错误，原因如下：
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| `model.Point.GetCompositeData` | 规则引擎从 NATS 收到的数据点经过 JSON 反序列化，复合值是 map（composite_mock 也直接产生 map），这里只接受类型化数据，**线上所有针对复合数据的转换都失败** | 新增 `CompositeFromMap`，按数据类型把 map 转换为复合类型（兼容数组的 `elements`、颜色的浮点分量） |
+| transform / filter 参数 | 多数示例规则把参数写在动作配置顶层（`from`/`to`、`expression`、`min`/`max`、`max_rate`），处理器只读 `parameters` | `parameters` 优先，其余非保留的顶层字段作为参数（`mergeFlatParameters`，不修改共享的规则配置）；前端规则编辑器本来就兼容两种写法 |
+| transform 表达式 | 内置计算器只认变量 `x`，`pow(value, 2)`、`max(...)` 等全部失败 | 先用规则引擎的表达式引擎（支持 value、tags、复合值字段、pow、max 等，旧写法中的 `x` 视为 value），失败时回退到内置计算器（ln、log、exp、sin 等） |
+| transform 类型 | `identity` 不被支持；复合数据透传时把原值替换为类型化结构体，丢失 magnitude、hue 等字段 | `identity` 作为 `pass_through` 的别名；透传保留原值 |
+| transform `field` | `"field": "value.hue"`、`value.values`、`timestamp` 不被支持 | 支持 `timestamp`、`value.x`、`value.arr[0]`；数组字段逐个元素转换（结果为 ArrayData）；时间值按 Go 时间格式格式化；`round` 没有 `decimals` 时使用 `precision`（以前先取整再应用精度，结果总是整数） |
+| filter `field` | `"field": "value.elements[0]"` 不被支持 | 按字段取值判断，输出中的原数据点不变 |
+| 聚合数值提取 | 类型化复合数据、`[]float64`、颜色数据（只有 lightness）无法提取数值 | 补充这些情况 |
+| 表达式引擎 | `value.magnitude` 等字段访问不被支持；没有 `round` 函数 | 选择器从基础变量（map 或结构体）中取字段，三维向量提供 magnitude；新增 `round(x[, n])` |
+
+验证：`TestRepoRulesRunWithoutActionErrors` 由 24 种错误变为 0；新增 `TestGetCompositeDataFromMap`、`TestTransformFlatParameters`、`TestTransformIdentityAndPassThroughComposite`、`TestTransformFieldSelection`、`TestTransformExpressionEngine`、`TestFilterFlatParametersAndField`、`TestExtractNumericFromCompositeValues`、`TestExpressionRoundAndValueFields`。

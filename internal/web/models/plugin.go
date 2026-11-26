@@ -6,7 +6,9 @@ import "time"
 type Plugin struct {
 	BaseModel
 	Name        string                 `json:"name"`
-	Type        string                 `json:"type"` // adapter, sink
+	Type        string                 `json:"type"`                  // adapter, sink
+	PluginType  string                 `json:"plugin_type,omitempty"` // 插件类型，例如 mock、websocket
+	Mode        string                 `json:"mode,omitempty"`        // builtin 或外部插件的运行方式
 	Version     string                 `json:"version"`
 	Status      string                 `json:"status"` // running, stopped, error
 	Description string                 `json:"description"`
