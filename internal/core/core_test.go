@@ -1,14 +1,17 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/viper"
 	"github.com/y001j/iot-gateway/internal/metrics"
+	"github.com/y001j/iot-gateway/internal/plugin"
 	"github.com/y001j/iot-gateway/internal/rules"
 	"github.com/y001j/iot-gateway/internal/testutil"
 	"os"
@@ -150,4 +153,52 @@ func TestUpdateRuleEngineMetrics(t *testing.T) {
 		t.Fatalf("规则指标未同步: %+v", got)
 	}
 	(&Runtime{}).updateRuleEngineMetrics() // 没有指标收集器时直接返回
+}
+
+// /health 与 /metrics 按配置的实例统计插件：以前按"所有可用插件类型"统计，
+// 没有被配置使用的类型（redis、influxdb 等）让网关一直显示 degraded
+func TestHealthAndMetricsCountConfiguredInstances(t *testing.T) {
+	rt := newTestRuntime(t)
+	rt.V.Set("southbound.adapters", []interface{}{map[string]interface{}{"name": "m1", "type": "mock",
+		"config": map[string]interface{}{"name": "m1", "type": "mock", "interval": "50ms",
+			"data_points": []interface{}{map[string]interface{}{"device_id": "d", "key": "k", "min_value": 1.0, "max_value": 2.0}}}}})
+	rt.V.Set("northbound.sinks", []interface{}{
+		map[string]interface{}{"name": "c1", "type": "console", "params": map[string]interface{}{}},
+		map[string]interface{}{"name": "mq", "type": "mqtt", "enabled": false},
+	})
+	pm := plugin.NewManager(t.TempDir(), rt.Bus, rt.V)
+	if err := pm.Init(nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := pm.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer pm.Stop(context.Background())
+	rt.PluginMgr = pm
+	rt.metrics = metrics.NewLightweightMetrics()
+	rt.started.Store(true)
+
+	if got := rt.HealthStatus(); got.Status != "healthy" || got.Components["plugins"].Status != "healthy" {
+		t.Fatalf("配置的实例都在运行时应为 healthy: %+v", got)
+	}
+	rt.UpdateMetrics()
+	gm := rt.metrics.GatewayMetrics
+	if gm.TotalAdapters != 1 || gm.RunningAdapters != 1 || gm.TotalSinks != 1 || gm.RunningSinks != 1 {
+		t.Fatalf("指标应只统计配置的实例: %+v", gm)
+	}
+
+	if err := pm.StopPlugin("m1"); err != nil {
+		t.Fatal(err)
+	}
+	got := rt.HealthStatus()
+	if got.Status != "degraded" || got.Components["plugins"].Status != "degraded" ||
+		!strings.Contains(got.Components["plugins"].Message, "m1") {
+		t.Fatalf("配置的实例停止后应为 degraded: %+v", got)
+	}
+	rt.UpdateMetrics()
+	if rt.metrics.GatewayMetrics.RunningAdapters != 0 || rt.metrics.GatewayMetrics.TotalAdapters != 1 {
+		t.Fatalf("停止后指标错误: %+v", rt.metrics.GatewayMetrics)
+	}
 }

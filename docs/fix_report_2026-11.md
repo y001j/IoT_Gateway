@@ -449,3 +449,15 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 - gosec（v2.22.4）`Issues: 0`。
 - `deadcode -test ./...` 无输出。
 - 前端 lint 0 警告、tsc 0 错误、14 项测试通过、构建成功。
+
+## 12. 第九轮：插件健康统计
+
+试用时发现：网关所有配置的实例都在正常运行，`/health` 却显示 degraded（"4/13 个插件在运行"）。
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| `/health`、`/metrics` | 插件统计用的是 `GetPlugins()`，它列出所有可用的插件类型（内置注册表 + plugins 目录中的外部插件）。没有被配置使用的类型（redis、influxdb、http 等）都算"未运行"，网关一直显示 degraded；同类型的多个实例被合并成一个 | 新增 `Manager.InstanceStatuses()`，按配置中启用的实例统计（加上不在配置中但正在运行的外部插件）；初始化失败、启动失败、被停止的实例算作未运行 |
+| 插件管理器启动 | 启动失败的适配器/连接器仍留在运行列表中，被统计为运行中 | 启动失败时从列表中移除 |
+| 插件管理器 `loop` | `Stop` 关闭文件监听器后，`loop` 在已关闭的通道上空转，反复扫描插件目录并打 Info 日志，直到上下文取消 | 通道关闭时退出 |
+
+验证：新增 `TestInstanceStatuses`、`TestLoopExitsWhenWatcherClosed`（无修复时失败）、`TestHealthAndMetricsCountConfiguredInstances`；`go test -race ./...` 全部通过，vet、gofmt、deadcode 无输出。

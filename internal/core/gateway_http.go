@@ -61,17 +61,15 @@ func (rt *Runtime) HealthStatus() HealthReport {
 	}
 
 	if rt.PluginMgr != nil {
+		// 按配置的实例统计；没有被配置使用的插件类型不影响健康状态
 		var total, running int
 		var stopped []string
-		for _, p := range rt.PluginMgr.GetPlugins() {
-			if p.Type != "adapter" && p.Type != "sink" {
-				continue
-			}
+		for _, inst := range rt.PluginMgr.InstanceStatuses() {
 			total++
-			if p.Status == "running" {
+			if inst.Running {
 				running++
 			} else {
-				stopped = append(stopped, p.Name)
+				stopped = append(stopped, inst.Name)
 			}
 		}
 		if total > 0 && running < total {

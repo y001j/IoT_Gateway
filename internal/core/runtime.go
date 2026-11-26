@@ -500,18 +500,17 @@ func (r *Runtime) UpdateMetrics() {
 	if r.metrics != nil {
 		// 更新适配器和连接器计数
 		if r.PluginMgr != nil {
-			plugins := r.PluginMgr.GetPlugins()
 			var totalAdapters, runningAdapters, totalSinks, runningSinks int
-
-			for _, plugin := range plugins {
-				if plugin.Type == "adapter" {
+			for _, inst := range r.PluginMgr.InstanceStatuses() {
+				switch inst.Kind {
+				case string(plugin.TypeAdapter):
 					totalAdapters++
-					if plugin.Status == "running" {
+					if inst.Running {
 						runningAdapters++
 					}
-				} else if plugin.Type == "sink" {
+				case string(plugin.TypeSink):
 					totalSinks++
-					if plugin.Status == "running" {
+					if inst.Running {
 						runningSinks++
 					}
 				}
