@@ -53,6 +53,13 @@ type Runtime struct {
 	mqttProblem string
 }
 
+// 内嵌 NATS 的端口：先尝试 embeddedNATSPort（该端口上已有 NATS 时直接连接它），
+// 端口被其他程序占用时改用 embeddedNATSFallbackPort。测试中改为随机空闲端口。
+var (
+	embeddedNATSPort         = 4222
+	embeddedNATSFallbackPort = 14222
+)
+
 // natsOptions 返回网关使用的 NATS 连接参数
 func (rt *Runtime) natsOptions(extra ...nats.Option) []nats.Option {
 	opts := []nats.Option{
@@ -144,7 +151,7 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 
 	if natsURL == "embedded" {
 		// 使用更可靠的方法启动嵌入式 NATS
-		port := 4222
+		port := embeddedNATSPort
 		var serverReady bool
 
 		// 先检查是否已有运行中的 NATS 服务器
@@ -167,7 +174,7 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 			if err != nil {
 				// 端口被占用，尝试备用端口
 				log.Warn().Int("port", port).Msg("端口被占用，尝试备用端口")
-				port = 14222
+				port = embeddedNATSFallbackPort
 				ln, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 				if err != nil {
 					return nil, fmt.Errorf("无法找到可用的端口: %w", err)

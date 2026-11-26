@@ -258,12 +258,38 @@ func TestRuntimeMQTTWithExternalNATS(t *testing.T) {
 	}
 }
 
-// 内嵌模式启动 MQTT。4222 端口上已有 NATS 服务器（例如本机正在运行网关）时，网关会连接它而不启动内嵌服务器，
-// 这时应说明 MQTT 没有启动
+// useEmbeddedNATSPort 让内嵌 NATS 使用指定端口（默认的 4222 在 CI 上被 NATS 服务容器占用，本机也可能正在运行网关）
+func useEmbeddedNATSPort(t *testing.T, port int) {
+	t.Helper()
+	oldPort, oldFallback := embeddedNATSPort, embeddedNATSFallbackPort
+	embeddedNATSPort, embeddedNATSFallbackPort = port, freePort(t)
+	t.Cleanup(func() { embeddedNATSPort, embeddedNATSFallbackPort = oldPort, oldFallback })
+}
+
+// 已有 NATS 服务器时，网关连接它而不启动内嵌服务器，健康状态说明 MQTT 没有启动
+func TestRuntimeEmbeddedJoinsExistingNATS(t *testing.T) {
+	srv, _ := testutil.StartNATS(t)
+	useEmbeddedNATSPort(t, srv.Addr().(*net.TCPAddr).Port)
+	rt, err := NewRuntime(writeMQTTRuntimeConfig(t, "embedded", freePort(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Bus.Close()
+	if rt.NatsServer != nil {
+		t.Fatal("已有 NATS 时不应启动内嵌服务器")
+	}
+	rt.started.Store(true)
+	if c := rt.HealthStatus().Components["mqtt"]; c.Status != "degraded" || !strings.Contains(c.Message, "已有 NATS 服务器") {
+		t.Fatalf("应说明 MQTT 未启动: %+v", c)
+	}
+}
+
+// 内嵌模式实际启动 NATS 和 MQTT，MQTT 发布的消息进入网关的 NATS 连接
 func TestRuntimeEmbeddedMQTT(t *testing.T) {
 	if runtime.GOOS == "darwin" && raceEnabled {
 		t.Skip("nats-server 在 macOS 上读取系统内存的代码不兼容 -race 的 checkptr 检查（Linux 上正常运行）")
 	}
+	useEmbeddedNATSPort(t, freePort(t))
 	mqttPort := freePort(t)
 	rt, err := NewRuntime(writeMQTTRuntimeConfig(t, "embedded", mqttPort))
 	if err != nil {
@@ -278,10 +304,7 @@ func TestRuntimeEmbeddedMQTT(t *testing.T) {
 	rt.started.Store(true)
 	c := rt.HealthStatus().Components["mqtt"]
 	if rt.NatsServer == nil {
-		if c.Status != "degraded" || !strings.Contains(c.Message, "已有 NATS 服务器") {
-			t.Fatalf("连接到已有服务器时应说明 MQTT 未启动: %+v", c)
-		}
-		t.Skip("4222 端口上已有 NATS 服务器，跳过内嵌 MQTT 的收发验证")
+		t.Fatal("应启动内嵌 NATS 服务器")
 	}
 	if c.Status != "healthy" {
 		t.Fatalf("mqtt 组件: %+v", c)
