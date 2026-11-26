@@ -13,22 +13,19 @@ import {
   Col,
   Typography,
   message,
-  Popconfirm,
   Tooltip,
   Avatar,
-  Form,
   Switch,
   Tabs,
   Space,
   Badge,
+  Alert,
   Statistic
 } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import {
   PauseCircleOutlined,
   ReloadOutlined,
-  DeleteOutlined,
-  PlusOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
   PlayCircleOutlined,
@@ -71,7 +68,7 @@ const PluginsPage: React.FC = () => {
 
   // 配置模态框状态
   const [configModalVisible, setConfigModalVisible] = useState(false);
-  const [configForm] = Form.useForm();
+  const [configText, setConfigText] = useState('');
 
   // 获取插件列表
   const { current: currentPage, pageSize } = pagination;
@@ -158,18 +155,6 @@ const PluginsPage: React.FC = () => {
     }
   };
 
-  // 删除插件
-  const handleDeletePlugin = async (plugin: Plugin) => {
-    try {
-      await pluginService.deletePlugin(plugin.name);
-      message.success('删除插件成功');
-      await fetchPlugins();
-    } catch (caught) {
-      const error = asHttpError(caught);
-      message.error('删除插件失败：' + (error.message || '未知错误'));
-    }
-  };
-
   // 显示插件详情
   const showPluginDetails = async (plugin: Plugin) => {
     setSelectedPlugin(plugin);
@@ -182,33 +167,11 @@ const PluginsPage: React.FC = () => {
     try {
       const config = await pluginService.getPluginConfig(plugin.name);
       setSelectedPlugin(plugin);
-      configForm.setFieldsValue({ config: JSON.stringify(config, null, 2) });
+      setConfigText(JSON.stringify(config, null, 2));
       setConfigModalVisible(true);
     } catch (caught) {
       const error = asHttpError(caught);
       message.error('获取插件配置失败：' + (error.message || '未知错误'));
-    }
-  };
-
-  // 保存配置
-  const handleSaveConfig = async () => {
-    if (!selectedPlugin) return;
-
-    try {
-      const values = await configForm.validateFields();
-      const config = JSON.parse(values.config);
-      
-      await pluginService.updatePluginConfig(selectedPlugin.name, config);
-      message.success('配置保存成功');
-      setConfigModalVisible(false);
-      await fetchPlugins();
-    } catch (caught) {
-      const error = asHttpError(caught);
-      if (error instanceof SyntaxError) {
-        message.error('配置格式错误，请检查 JSON 格式');
-      } else {
-        message.error('保存配置失败：' + (error.message || '未知错误'));
-      }
     }
   };
 
@@ -268,7 +231,12 @@ const PluginsPage: React.FC = () => {
       title: '类型',
       dataIndex: 'type',
       key: 'type',
-      render: (type: PluginType) => getTypeTag(type),
+      render: (type: PluginType, record: Plugin) => (
+        <Space size={4}>
+          {getTypeTag(type)}
+          {record.plugin_type && <Text type="secondary">{record.plugin_type}</Text>}
+        </Space>
+      ),
       filters: [
         { text: '适配器', value: 'adapter' },
         { text: '连接器', value: 'sink' }
@@ -355,7 +323,7 @@ const PluginsPage: React.FC = () => {
             />
           </Tooltip>
           
-          <Tooltip title="配置">
+          <Tooltip title="查看配置">
             <Button
               type="link"
               icon={<SettingOutlined />}
@@ -363,21 +331,6 @@ const PluginsPage: React.FC = () => {
             />
           </Tooltip>
           
-          <Popconfirm
-            title="确定要删除这个插件吗？"
-            description="删除后无法恢复"
-            onConfirm={() => handleDeletePlugin(record)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Tooltip title="删除">
-              <Button
-                type="link"
-                danger
-                icon={<DeleteOutlined />}
-              />
-            </Tooltip>
-          </Popconfirm>
         </Space>
       )
     }
@@ -448,9 +401,6 @@ const PluginsPage: React.FC = () => {
             <Space>
               <Button icon={<ReloadOutlined />} onClick={fetchPlugins}>
                 刷新
-              </Button>
-              <Button type="primary" icon={<PlusOutlined />}>
-                添加插件
               </Button>
             </Space>
           </Col>
@@ -634,43 +584,24 @@ const PluginsPage: React.FC = () => {
         )}
       </Drawer>
 
-      {/* 配置编辑模态框 */}
+      {/* 配置查看模态框（配置来自 config.yaml，页面上不能修改） */}
       <Modal
-        title="插件配置"
+        title={selectedPlugin ? `插件配置：${selectedPlugin.name}` : '插件配置'}
         open={configModalVisible}
-        onOk={handleSaveConfig}
         onCancel={() => setConfigModalVisible(false)}
+        footer={<Button onClick={() => setConfigModalVisible(false)}>关闭</Button>}
         width={800}
-        okText="保存"
-        cancelText="取消"
       >
-        {selectedPlugin && (
-          <Form form={configForm} layout="vertical">
-            <Form.Item
-              label="配置 (JSON 格式)"
-              name="config"
-              rules={[
-                { required: true, message: '请输入配置' },
-                {
-                  validator: (_, value) => {
-                    try {
-                      JSON.parse(value);
-                      return Promise.resolve();
-                    } catch {
-                      return Promise.reject(new Error('JSON 格式错误'));
-                    }
-                  }
-                }
-              ]}
-            >
-              <Input.TextArea
-                rows={20}
-                placeholder='{"key": "value"}'
-                style={{ fontFamily: 'monospace' }}
-              />
-            </Form.Item>
-          </Form>
-        )}
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="配置为只读"
+          description="修改适配器、连接器配置请编辑网关的 config.yaml（southbound.adapters / northbound.sinks），然后在这里重启对应插件。密码、令牌等敏感字段已隐藏。"
+        />
+        <pre style={{ maxHeight: 500, overflow: 'auto', background: 'rgba(0,0,0,0.04)', padding: 12, borderRadius: 6, fontSize: 12 }}>
+          {configText}
+        </pre>
       </Modal>
     </div>
   );

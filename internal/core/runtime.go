@@ -502,6 +502,9 @@ func (r *Runtime) UpdateMetrics() {
 		if r.PluginMgr != nil {
 			var totalAdapters, runningAdapters, totalSinks, runningSinks int
 			for _, inst := range r.PluginMgr.InstanceStatuses() {
+				if !inst.Counted() {
+					continue
+				}
 				switch inst.Kind {
 				case string(plugin.TypeAdapter):
 					totalAdapters++

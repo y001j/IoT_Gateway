@@ -65,6 +65,9 @@ func (rt *Runtime) HealthStatus() HealthReport {
 		var total, running int
 		var stopped []string
 		for _, inst := range rt.PluginMgr.InstanceStatuses() {
+			if !inst.Counted() {
+				continue
+			}
 			total++
 			if inst.Running {
 				running++

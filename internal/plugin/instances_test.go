@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -48,7 +50,13 @@ func TestInstanceStatuses(t *testing.T) {
 		map[string]interface{}{"name": "console1", "type": "console", "params": map[string]interface{}{}},
 		map[string]interface{}{"name": "mqtt_off", "type": "mqtt", "enabled": false},
 	})
-	m := NewManager(t.TempDir(), nil, v)
+	dir := t.TempDir()
+	ext := map[string]interface{}{"name": "ext-sidecar", "version": "2.0.0", "type": "adapter", "mode": "isp-sidecar", "entry": "sidecar/bin"}
+	data, _ := json.Marshal(ext)
+	if err := os.WriteFile(filepath.Join(dir, "plugin.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(dir, nil, v)
 	if err := m.Init(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +76,16 @@ func TestInstanceStatuses(t *testing.T) {
 	for _, s := range m.InstanceStatuses() {
 		got[s.Name] = s
 	}
+	b := "builtin"
 	want := map[string]InstanceStatus{
-		"mock_a":         {Name: "mock_a", Type: "mock", Kind: "adapter", Running: true},
-		"mock_b":         {Name: "mock_b", Type: "mock", Kind: "adapter", Running: true},
-		"unknown_type":   {Name: "unknown_type", Type: "no_such_adapter", Kind: "adapter", Running: false},
-		"fails_on_start": {Name: "fails_on_start", Type: "start_fail", Kind: "adapter", Running: false},
-		"console1":       {Name: "console1", Type: "console", Kind: "sink", Running: true},
+		"mock_a":         {Name: "mock_a", Type: "mock", Kind: "adapter", Mode: b, Enabled: true, Running: true},
+		"mock_b":         {Name: "mock_b", Type: "mock", Kind: "adapter", Mode: b, Enabled: true, Running: true},
+		"mock_off":       {Name: "mock_off", Type: "mock", Kind: "adapter", Mode: b},
+		"unknown_type":   {Name: "unknown_type", Type: "no_such_adapter", Kind: "adapter", Mode: b, Enabled: true},
+		"fails_on_start": {Name: "fails_on_start", Type: "start_fail", Kind: "adapter", Mode: b, Enabled: true},
+		"console1":       {Name: "console1", Type: "console", Kind: "sink", Mode: b, Enabled: true, Running: true},
+		"mqtt_off":       {Name: "mqtt_off", Type: "mqtt", Kind: "sink", Mode: b},
+		"ext-sidecar":    {Name: "ext-sidecar", Type: "sidecar/bin", Kind: "adapter", Mode: "isp-sidecar", Version: "2.0.0", External: true},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("实例列表 = %+v", got)
@@ -82,6 +94,25 @@ func TestInstanceStatuses(t *testing.T) {
 		if got[name] != w {
 			t.Errorf("%s = %+v, want %+v", name, got[name], w)
 		}
+	}
+	// 只有启用或运行中的实例计入健康状态
+	for name, counted := range map[string]bool{"mock_a": true, "fails_on_start": true, "mock_off": false, "ext-sidecar": false} {
+		if got[name].Counted() != counted {
+			t.Errorf("%s Counted = %v", name, !counted)
+		}
+	}
+
+	// 实例配置是副本，修改不影响原配置
+	cfg, ok := m.InstanceConfig("mock_a")
+	if !ok || cfg["type"] != "mock" {
+		t.Fatalf("InstanceConfig = %v %v", cfg, ok)
+	}
+	cfg["config"].(map[string]interface{})["interval"] = "1h"
+	if again, _ := m.InstanceConfig("mock_a"); again["config"].(map[string]interface{})["interval"] != "50ms" {
+		t.Fatal("InstanceConfig 应返回副本")
+	}
+	if _, ok := m.InstanceConfig("ext-sidecar"); ok {
+		t.Fatal("不在配置中的插件没有实例配置")
 	}
 
 	// 停止的实例显示为未运行
@@ -101,7 +132,7 @@ func TestInstanceStatuses(t *testing.T) {
 	found := false
 	for _, s := range m.InstanceStatuses() {
 		if s.Name == "ext" {
-			found = s.Running && s.Kind == "adapter"
+			found = s.Running && s.Kind == "adapter" && s.Counted()
 		}
 	}
 	if !found {

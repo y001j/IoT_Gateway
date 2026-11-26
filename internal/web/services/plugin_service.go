@@ -50,22 +50,19 @@ func NewPluginService(manager plugin.PluginManager) (PluginService, error) {
 
 // GetPlugins 获取插件列表
 func (s *pluginService) GetPlugins(req *models.PluginListRequest) ([]models.Plugin, int, error) {
-	// 从插件管理器获取所有插件
-	pluginMetas := s.manager.GetPlugins()
-
-	// 转换为models.Plugin格式
-	allPlugins := make([]models.Plugin, 0, len(pluginMetas))
-	for _, meta := range pluginMetas {
-		plugin := models.Plugin{
-			Name:        meta.Name,
-			Version:     meta.Version,
-			Type:        meta.Type,
-			Status:      meta.Status,
-			Description: meta.Description,
-			Enabled:     meta.Status == "running", // 根据状态判断是否启用
-		}
-		allPlugins = append(allPlugins, plugin)
+	// 按实例列出（名称与启停接口一致）。以前列出的是插件类型（mock、websocket、redis…），
+	// 而启停接口按实例名工作，页面上的启停操作全部失败
+	instances := s.manager.InstanceStatuses()
+	allPlugins := make([]models.Plugin, 0, len(instances))
+	for _, inst := range instances {
+		allPlugins = append(allPlugins, instanceToModel(inst))
 	}
+	sort.SliceStable(allPlugins, func(i, j int) bool {
+		if allPlugins[i].Type != allPlugins[j].Type {
+			return allPlugins[i].Type == string(plugin.TypeAdapter)
+		}
+		return allPlugins[i].Name < allPlugins[j].Name
+	})
 
 	// 应用过滤器
 	filteredPlugins := s.filterPlugins(allPlugins, req)
@@ -85,6 +82,48 @@ func (s *pluginService) GetPlugins(req *models.PluginListRequest) ([]models.Plug
 
 	result := filteredPlugins[start:end]
 	return result, total, nil
+}
+
+// instanceToModel 把插件实例转换为 Web 模型
+func instanceToModel(inst plugin.InstanceStatus) models.Plugin {
+	status := "stopped"
+	if inst.Running {
+		status = "running"
+	}
+	kindText := "适配器"
+	if inst.Kind == string(plugin.TypeSink) {
+		kindText = "连接器"
+	}
+	desc := fmt.Sprintf("%s %s", inst.Type, kindText)
+	switch {
+	case inst.External:
+		desc = fmt.Sprintf("外部插件（%s）：%s", inst.Mode, inst.Type)
+	case !inst.Enabled && !inst.Running:
+		desc += "（配置中已禁用）"
+	}
+	version := inst.Version
+	if version == "" {
+		version = "内置"
+	}
+	return models.Plugin{
+		Name:        inst.Name,
+		Type:        inst.Kind,
+		PluginType:  inst.Type,
+		Mode:        inst.Mode,
+		Version:     version,
+		Status:      status,
+		Description: desc,
+		Enabled:     inst.Enabled,
+	}
+}
+
+func (s *pluginService) findInstance(name string) (plugin.InstanceStatus, bool) {
+	for _, inst := range s.manager.InstanceStatuses() {
+		if inst.Name == name {
+			return inst, true
+		}
+	}
+	return plugin.InstanceStatus{}, false
 }
 
 // filterPlugins 过滤插件列表
@@ -119,14 +158,14 @@ func (s *pluginService) filterPlugins(plugins []models.Plugin, req *models.Plugi
 	return filtered
 }
 
-// GetPlugin 获取单个插件
+// GetPlugin 获取单个插件实例
 func (s *pluginService) GetPlugin(name string) (*models.Plugin, error) {
-	p, ok := s.manager.GetPlugin(name)
+	inst, ok := s.findInstance(name)
 	if !ok {
 		return nil, fmt.Errorf("plugin %s not found", name)
 	}
-	// TODO: 转换
-	return &models.Plugin{Name: p.Name}, nil
+	p := instanceToModel(inst)
+	return &p, nil
 }
 
 // StartPlugin 启动插件
@@ -159,29 +198,60 @@ func (s *pluginService) UpdatePluginConfig(name string, config map[string]interf
 	return fmt.Errorf("plugin config update not implemented yet")
 }
 
+// GetPluginConfig 返回实例的配置（密码、令牌等敏感字段会被隐藏）
 func (s *pluginService) GetPluginConfig(name string) (map[string]interface{}, error) {
-	// 获取插件信息
-	plugin, exists := s.manager.GetPlugin(name)
+	if cfg, ok := s.manager.InstanceConfig(name); ok {
+		maskSecrets(cfg)
+		return cfg, nil
+	}
+
+	// 不在配置中的外部插件：返回 plugin.json 中的元数据
+	meta, exists := s.manager.GetPlugin(name)
 	if !exists {
 		return nil, fmt.Errorf("plugin %s not found", name)
 	}
-
-	// 返回插件的额外配置信息
-	config := make(map[string]interface{})
-	config["name"] = plugin.Name
-	config["version"] = plugin.Version
-	config["type"] = plugin.Type
-	config["mode"] = plugin.Mode
-	config["entry"] = plugin.Entry
-	config["description"] = plugin.Description
-	config["status"] = plugin.Status
-
-	// 如果有额外配置，也包含进来
-	for k, v := range plugin.Extra {
-		config[k] = v
+	config := map[string]interface{}{
+		"name":        meta.Name,
+		"version":     meta.Version,
+		"type":        meta.Type,
+		"mode":        meta.Mode,
+		"entry":       meta.Entry,
+		"description": meta.Description,
 	}
-
+	if meta.ISPPort != 0 {
+		config["isp_port"] = meta.ISPPort
+	}
 	return config, nil
+}
+
+// maskSecrets 隐藏配置中的敏感字段（配置接口对所有登录用户开放）
+func maskSecrets(v interface{}) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for k, val := range t {
+			if isSecretKey(k) {
+				if str, ok := val.(string); !ok || str != "" {
+					t[k] = "******"
+				}
+				continue
+			}
+			maskSecrets(val)
+		}
+	case []interface{}:
+		for _, val := range t {
+			maskSecrets(val)
+		}
+	}
+}
+
+func isSecretKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, word := range []string{"password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key"} {
+		if strings.Contains(k, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *pluginService) ValidatePluginConfig(name string, config map[string]interface{}) (*models.PluginConfigValidationResponse, error) {

@@ -56,6 +56,8 @@ type PluginManager interface {
 	GetAdapter(name string) (southbound.Adapter, bool)
 	GetSink(name string) (northbound.Sink, bool)
 	RunningInstances() (adapters, sinks map[string]string)
+	InstanceStatuses() []InstanceStatus
+	InstanceConfig(name string) (map[string]interface{}, bool)
 }
 
 type Manager struct {

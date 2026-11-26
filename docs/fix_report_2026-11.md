@@ -460,4 +460,13 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 | 插件管理器启动 | 启动失败的适配器/连接器仍留在运行列表中，被统计为运行中 | 启动失败时从列表中移除 |
 | 插件管理器 `loop` | `Stop` 关闭文件监听器后，`loop` 在已关闭的通道上空转，反复扫描插件目录并打 Info 日志，直到上下文取消 | 通道关闭时退出 |
 
-验证：新增 `TestInstanceStatuses`、`TestLoopExitsWhenWatcherClosed`（无修复时失败）、`TestHealthAndMetricsCountConfiguredInstances`；`go test -race ./...` 全部通过，vet、gofmt、deadcode 无输出。
+### 12.1 插件管理页面无法控制插件
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| Web 插件列表 | 列出的是插件类型（mock、websocket、redis…），启停接口按实例名（mock_temperature_sensors…）工作：对 mock、websocket 点停止报 `plugin 'mock' is not running`，对没配置的类型点启动会用空配置创建实例 | 按实例列出（`InstanceStatuses`：配置中的实例，包括禁用的；插件目录中的外部插件；其他运行中的实例），新增 `plugin_type`、`mode` 字段 |
+| Web 插件详情 | `GetPlugin` 只返回名称（TODO） | 返回实例的完整信息 |
+| Web 插件配置 | 返回类型的元数据而不是实例配置；配置接口对所有登录用户开放 | 返回实例配置（`Manager.InstanceConfig`，副本），隐藏 password/secret/token 等字段 |
+| 前端插件页面 | 删除、保存配置后端不支持（固定返回错误），"添加插件"按钮没有绑定操作 | 去掉这些按钮，配置改为只读查看并说明修改方式；类型列显示插件类型 |
+
+验证：新增 `TestInstanceStatuses`、`TestLoopExitsWhenWatcherClosed`（无修复时失败）、`TestHealthAndMetricsCountConfiguredInstances`、`TestPluginServiceListsControllableInstances`、`TestMaskSecretsNested`；另外用新代码在独立端口启动网关，通过 Web 接口实测列表、停止、启动、重启、统计、配置均正常；`go test -race ./...` 全部通过，vet、gofmt、deadcode 无输出。
