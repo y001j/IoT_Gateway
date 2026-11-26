@@ -81,7 +81,8 @@ rule_engine:
     graceful_fallback: true          # 热加载失败时优雅降级
     retry_interval: "30s"            # 文件监控器启动失败后重试间隔
     max_retries: 3                   # 最大重试次数
-    debounce_delay: "100ms"          # 文件变更防抖延迟
+    debounce_delay: "100ms"          # 文件变更防抖延迟（同一文件的多次变更合并处理）
+    resync_interval: "30s"           # 定期核对规则文件，补上丢失的文件事件；"0" 关闭
 
   # 聚合窗口状态持久化：保存到 JetStream KV（IOT_AGG_STATE），网关重启后恢复，长时间窗口的统计不被打断
   aggregate_state:

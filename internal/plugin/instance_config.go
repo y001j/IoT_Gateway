@@ -84,6 +84,19 @@ func restoreMaskedSecrets(newCfg, oldCfg interface{}) {
 	}
 }
 
+// ErrInvalidInstanceConfig 实例配置无效（校验失败、修改了名称或类型等），Web 接口据此返回 400
+var ErrInvalidInstanceConfig = errors.New("插件配置无效")
+
+// invalidConfigError 校验失败的错误：文字是具体原因，errors.Is 可识别为 ErrInvalidInstanceConfig
+type invalidConfigError struct{ msg string }
+
+func (e *invalidConfigError) Error() string        { return e.msg }
+func (e *invalidConfigError) Is(target error) bool { return target == ErrInvalidInstanceConfig }
+
+func invalidConfig(format string, args ...interface{}) error {
+	return &invalidConfigError{msg: fmt.Sprintf(format, args...)}
+}
+
 // ErrInstanceNotConfigured 实例不在配置文件中（例如插件目录里的外部插件），无法在页面上修改
 var ErrInstanceNotConfigured = errors.New("只能修改 config.yaml 中定义的适配器和连接器")
 
@@ -102,10 +115,10 @@ func (m *Manager) prepareInstanceConfig(name string, cfg map[string]interface{})
 	merged = copyConfigValue(cfg).(map[string]interface{})
 	typ, _ := old["type"].(string)
 	if n, ok := merged["name"]; ok && n != name {
-		return "", nil, nil, fmt.Errorf("不能修改实例名称（%v）", n)
+		return "", nil, nil, invalidConfig("不能修改实例名称（%v）", n)
 	}
 	if t, ok := merged["type"]; ok && t != typ {
-		return "", nil, nil, fmt.Errorf("不能修改插件类型（%v → %v），请新建实例", typ, t)
+		return "", nil, nil, invalidConfig("不能修改插件类型（%v → %v），请新建实例", typ, t)
 	}
 	merged["name"], merged["type"] = name, typ
 	restoreMaskedSecrets(merged, old)
@@ -113,26 +126,26 @@ func (m *Manager) prepareInstanceConfig(name string, cfg map[string]interface{})
 	if kind == TypeAdapter {
 		a, ok := southbound.Create(typ)
 		if !ok {
-			return "", nil, nil, fmt.Errorf("未知的适配器类型 %s", typ)
+			return "", nil, nil, invalidConfig("未知的适配器类型 %s", typ)
 		}
 		data, err := adapterConfigData(merged, name, typ)
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, invalidConfig("配置无法序列化: %v", err)
 		}
 		if err := a.Init(data); err != nil {
-			return "", nil, nil, fmt.Errorf("配置校验失败: %w", err)
+			return "", nil, nil, invalidConfig("配置校验失败: %v", err)
 		}
 	} else {
 		// 连接器的 Init 可能连接目标系统（redis 会 ping、jetstream 会建立连接），这里只做结构校验；
 		// 实例正在运行时用新配置重启，失败则回滚（UpdateInstanceConfig）
 		if _, ok := northbound.Registry[typ]; !ok {
-			return "", nil, nil, fmt.Errorf("未知的连接器类型 %s", typ)
+			return "", nil, nil, invalidConfig("未知的连接器类型 %s", typ)
 		}
 		if _, err := parseSinkRouting(merged); err != nil {
-			return "", nil, nil, fmt.Errorf("配置校验失败: %w", err)
+			return "", nil, nil, invalidConfig("配置校验失败: %v", err)
 		}
 		if _, err := sinkConfigData(merged, name, typ); err != nil {
-			return "", nil, nil, err
+			return "", nil, nil, invalidConfig("配置无法序列化: %v", err)
 		}
 	}
 	return kind, merged, old, nil

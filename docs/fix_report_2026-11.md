@@ -523,3 +523,15 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 | 嵌套 `config` 中要重复填写 name / type，漏写时适配器初始化失败 | 缺少时用实例的值补上 |
 
 验证：新增 `TestAggregateStatePersistsAcrossRestart`、`TestAggregateStateResetsWhenWindowConfigChanges`、`TestAggregateStateTTLCoversTimeWindow`、`TestAggregatePersistenceExpiryAndRetry`、`TestStatsSnapshotRoundTrip`、`TestStopClosesActionHandlers`、`TestRuntimeAggregateStatePersistenceConfig`、`TestParseSinkRouting`、`TestRoutedSinkFiltersAndSerializes`、`TestSinkSubscriptionsEndToEnd`、`TestShardedTagsCloneCopyOnWrite`、`TestShardedTagsCloneConcurrent`、`TestOpsPort`、`TestUpdateInstanceConfig`、`TestUpdateInstanceConfigRollsBack`、`TestWriteInstanceToFileErrors`、`TestRestoreMaskedSecrets`、`TestPluginServiceValidateAndUpdateConfig` 等。
+
+### 14.5 验证中发现的问题
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| 规则热加载 | 偶发 `TestHotReloadUpdatesDispatchIndex` 超时（规则变更未进入索引）。排查发现：文件监控只覆盖顶层目录（`rules/composite/` 等子目录的修改从不热加载）；"防抖"只是每个事件 Sleep；监控出错（例如事件队列溢出）只打日志，丢失的事件永远不会补上 | 子目录（含运行中新建的）加入监控；同一文件的事件合并后按文件当前状态处理一次；记录每个文件加载时的修改时间和大小，监控出错时立即核对、并按 `hot_reload.resync_interval`（默认 30s）定期核对，补上丢失的修改和删除 |
+| 聚合 `output_key` | 只有 `output.key_template` 支持模板，`"{{.Key}}_stats"` 被原样当作键名（示例规则 humidity_monitor）；模板只替换第一种写法 | `output_key` 也做模板替换，支持 `{{.Key}}`、`{{.DeviceID}}` 等写法 |
+| transform 发布主题 | `transformed.<设备>.<键>` 直接拼接，含 "." 的设备 ID 会多出主题层级 | 用 `model.EncodeSubjectToken` 转义 |
+| 插件配置接口 | 校验失败返回 500 | 校验失败 400、实例不存在 404 |
+| 文档 | `iot.rules.>` 被写成"规则结果"，实际还包含每次匹配的 `iot.rules.matched` 事件；transform 输出在 `transformed.>` | 文档与示例改为 `iot.rules.aggregate.>`、`transformed.>` |
+
+实测（Lima Linux 虚拟机，独立 NATS）：`http_port: 0` 时对外只监听 8081，`/health` 返回真实组件状态；只订阅 `iot.rules.>` 并按设备过滤的连接器只收到指定设备的规则消息；重启后从 KV 恢复 5 个聚合状态；页面保存插件配置后 config.yaml 只改动该实例、注释保留，实例自动重启。

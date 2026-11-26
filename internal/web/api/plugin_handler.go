@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/y001j/iot-gateway/internal/web/models"
 	"github.com/y001j/iot-gateway/internal/web/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/y001j/iot-gateway/internal/plugin"
 )
 
 // PluginHandler 插件处理器
@@ -222,7 +224,15 @@ func (h *PluginHandler) UpdatePluginConfig(c *gin.Context) {
 	}
 
 	if err := h.pluginService.UpdatePluginConfig(name, config); err != nil {
-		h.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		// 校验失败是请求的问题（400），实例不存在为 404，其余（写文件失败、重启失败）为 500
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, plugin.ErrInvalidInstanceConfig):
+			status = http.StatusBadRequest
+		case errors.Is(err, plugin.ErrInstanceNotConfigured):
+			status = http.StatusNotFound
+		}
+		h.ErrorResponse(c, status, err.Error())
 		return
 	}
 

@@ -231,3 +231,14 @@ func TestRestoreMaskedSecrets(t *testing.T) {
 	}
 	_ = model.Point{}
 }
+
+func TestInvalidConfigErrorsAreClassified(t *testing.T) {
+	m, _ := newConfigFileManager(t)
+	_, err := m.UpdateInstanceConfig("temp", map[string]interface{}{"type": "http"})
+	if !errors.Is(err, ErrInvalidInstanceConfig) || !strings.Contains(err.Error(), "不能修改插件类型") {
+		t.Fatalf("校验失败应可识别并保留原因: %v", err)
+	}
+	if _, err := m.UpdateInstanceConfig("nope", nil); !errors.Is(err, ErrInstanceNotConfigured) || errors.Is(err, ErrInvalidInstanceConfig) {
+		t.Fatalf("实例不存在: %v", err)
+	}
+}
