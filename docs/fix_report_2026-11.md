@@ -470,3 +470,20 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 | 前端插件页面 | 删除、保存配置后端不支持（固定返回错误），"添加插件"按钮没有绑定操作 | 去掉这些按钮，配置改为只读查看并说明修改方式；类型列显示插件类型 |
 
 验证：新增 `TestInstanceStatuses`、`TestLoopExitsWhenWatcherClosed`（无修复时失败）、`TestHealthAndMetricsCountConfiguredInstances`、`TestPluginServiceListsControllableInstances`、`TestMaskSecretsNested`；另外用新代码在独立端口启动网关，通过 Web 接口实测列表、停止、启动、重启、统计、配置均正常；`go test -race ./...` 全部通过，vet、gofmt、deadcode 无输出。
+
+## 13. 第十轮：示例规则在运行时大量报错
+
+试用时网关日志中每分钟有上千条"动作执行失败"。新增 `TestRepoRulesRunWithoutActionErrors`：用仓库 config.yaml 中的模拟适配器产生数据（同时包括经过 JSON 往返的数据，与规则引擎从 NATS 收到的一致），让 rules/ 下的全部规则（包括禁用的）按规则引擎的管道语义执行，发现 24 种错误，原因如下：
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| `model.Point.GetCompositeData` | 规则引擎从 NATS 收到的数据点经过 JSON 反序列化，复合值是 map（composite_mock 也直接产生 map），这里只接受类型化数据，**线上所有针对复合数据的转换都失败** | 新增 `CompositeFromMap`，按数据类型把 map 转换为复合类型（兼容数组的 `elements`、颜色的浮点分量） |
+| transform / filter 参数 | 多数示例规则把参数写在动作配置顶层（`from`/`to`、`expression`、`min`/`max`、`max_rate`），处理器只读 `parameters` | `parameters` 优先，其余非保留的顶层字段作为参数（`mergeFlatParameters`，不修改共享的规则配置）；前端规则编辑器本来就兼容两种写法 |
+| transform 表达式 | 内置计算器只认变量 `x`，`pow(value, 2)`、`max(...)` 等全部失败 | 先用规则引擎的表达式引擎（支持 value、tags、复合值字段、pow、max 等，旧写法中的 `x` 视为 value），失败时回退到内置计算器（ln、log、exp、sin 等） |
+| transform 类型 | `identity` 不被支持；复合数据透传时把原值替换为类型化结构体，丢失 magnitude、hue 等字段 | `identity` 作为 `pass_through` 的别名；透传保留原值 |
+| transform `field` | `"field": "value.hue"`、`value.values`、`timestamp` 不被支持 | 支持 `timestamp`、`value.x`、`value.arr[0]`；数组字段逐个元素转换（结果为 ArrayData）；时间值按 Go 时间格式格式化；`round` 没有 `decimals` 时使用 `precision`（以前先取整再应用精度，结果总是整数） |
+| filter `field` | `"field": "value.elements[0]"` 不被支持 | 按字段取值判断，输出中的原数据点不变 |
+| 聚合数值提取 | 类型化复合数据、`[]float64`、颜色数据（只有 lightness）无法提取数值 | 补充这些情况 |
+| 表达式引擎 | `value.magnitude` 等字段访问不被支持；没有 `round` 函数 | 选择器从基础变量（map 或结构体）中取字段，三维向量提供 magnitude；新增 `round(x[, n])` |
+
+验证：`TestRepoRulesRunWithoutActionErrors` 由 24 种错误变为 0；新增 `TestGetCompositeDataFromMap`、`TestTransformFlatParameters`、`TestTransformIdentityAndPassThroughComposite`、`TestTransformFieldSelection`、`TestTransformExpressionEngine`、`TestFilterFlatParametersAndField`、`TestExtractNumericFromCompositeValues`、`TestExpressionRoundAndValueFields`。

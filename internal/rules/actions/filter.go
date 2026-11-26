@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,8 +85,25 @@ func (h *FilterHandler) Execute(ctx context.Context, point model.Point, rule *ru
 		}, nil
 	}
 
+	// 配置了 field（例如 value.elements[0]）时按字段取值判断，原数据点不变
+	checkPoint := point
+	if field, ok := filterConfig.Parameters["field"].(string); ok && strings.HasPrefix(field, "value.") {
+		v, found := compositeFieldValue(point.Value, field)
+		if !found {
+			return &rules.ActionResult{
+				Type:     "filter",
+				Success:  false,
+				Error:    fmt.Sprintf("过滤检查失败: 数据中没有字段 %s", field),
+				Duration: time.Since(start),
+			}, nil
+		}
+		checkPoint = point.Clone()
+		checkPoint.Value = v
+		checkPoint.Type = inferValueType(v)
+	}
+
 	// 执行过滤
-	shouldFilter, reason, err := h.shouldFilter(point, filterConfig)
+	shouldFilter, reason, err := h.shouldFilter(checkPoint, filterConfig)
 	if err != nil {
 		return &rules.ActionResult{
 			Type:     "filter",
@@ -128,6 +146,9 @@ type FilterConfig struct {
 	TTL        time.Duration          `json:"ttl"`        // 缓存生存时间
 }
 
+// filterReservedKeys 是 filter 动作配置的顶层字段，其余顶层字段视为过滤参数
+var filterReservedKeys = map[string]bool{"type": true, "parameters": true, "action": true, "ttl": true}
+
 // parseConfig 解析配置
 func (h *FilterHandler) parseConfig(config map[string]interface{}) (*FilterConfig, error) {
 	filterConfig := &FilterConfig{
@@ -142,10 +163,9 @@ func (h *FilterHandler) parseConfig(config map[string]interface{}) (*FilterConfi
 		filterConfig.Type = filterType
 	}
 
-	// 解析参数
-	if parameters, ok := config["parameters"].(map[string]interface{}); ok {
-		filterConfig.Parameters = parameters
-	}
+	// 解析参数：标准写法是 parameters 嵌套，也兼容直接写在顶层的参数（多数示例规则的写法）
+	parameters, _ := config["parameters"].(map[string]interface{})
+	filterConfig.Parameters = mergeFlatParameters(config, parameters, filterReservedKeys)
 
 	// 解析动作
 	if action, ok := config["action"].(string); ok {

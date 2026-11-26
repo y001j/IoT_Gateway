@@ -807,12 +807,120 @@ func (p *Point) GetCompositeData() (CompositeData, error) {
 		return nil, fmt.Errorf("point is not composite data type: %s", p.Type)
 	}
 
-	compositeData, ok := p.Value.(CompositeData)
-	if !ok {
-		return nil, fmt.Errorf("value is not composite data: %T", p.Value)
+	switch v := p.Value.(type) {
+	case CompositeData:
+		return v, nil
+	case map[string]interface{}:
+		// 经过 JSON 传输（NATS、本地暂存）的复合值反序列化后是 map，
+		// composite_mock 适配器也直接产生 map。以前这里直接报错，
+		// 规则引擎中所有针对复合数据的转换、聚合都会失败
+		return CompositeFromMap(p.Type, v)
+	case LocationData:
+		return &v, nil
+	case Vector3D:
+		return &v, nil
+	case ColorData:
+		return &v, nil
+	case VectorData:
+		return &v, nil
+	case ArrayData:
+		return &v, nil
+	case MatrixData:
+		return &v, nil
+	case TimeSeriesData:
+		return &v, nil
 	}
+	return nil, fmt.Errorf("value is not composite data: %T", p.Value)
+}
 
-	return compositeData, nil
+// CompositeFromMap 把 map 形式的复合值转换为对应的复合数据类型。
+// 兼容 composite_mock 的字段（数组的 elements、颜色的浮点分量等），额外的字段（magnitude、hue 等）被忽略。
+func CompositeFromMap(t DataType, m map[string]interface{}) (CompositeData, error) {
+	var target CompositeData
+	switch t {
+	case TypeLocation:
+		target = &LocationData{}
+	case TypeVector3D:
+		target = &Vector3D{}
+	case TypeColor:
+		c := &ColorData{A: 255}
+		for key, dst := range map[string]*uint8{"r": &c.R, "g": &c.G, "b": &c.B, "a": &c.A} {
+			if raw, ok := m[key]; ok {
+				f, ok := toFloat(raw)
+				if !ok {
+					return nil, fmt.Errorf("颜色分量 %s 不是数值: %v", key, raw)
+				}
+				*dst = uint8(math.Round(math.Max(0, math.Min(255, f))))
+			}
+		}
+		return c, nil
+	case TypeVector:
+		target = &VectorData{}
+	case TypeArray:
+		if _, ok := m["values"]; !ok {
+			if elements, ok := m["elements"]; ok {
+				copied := make(map[string]interface{}, len(m))
+				for k, v := range m {
+					copied[k] = v
+				}
+				copied["values"] = elements
+				m = copied
+			}
+		}
+		target = &ArrayData{}
+	case TypeMatrix:
+		target = &MatrixData{}
+	case TypeTimeSeries:
+		target = &TimeSeriesData{}
+	default:
+		return nil, fmt.Errorf("point is not composite data type: %s", t)
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("复合值无法序列化: %w", err)
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		return nil, fmt.Errorf("复合值格式不符合 %s 类型: %w", t, err)
+	}
+	switch d := target.(type) {
+	case *VectorData:
+		if d.Dimension == 0 {
+			d.Dimension = len(d.Values)
+		}
+	case *ArrayData:
+		if d.Size == 0 {
+			d.Size = len(d.Values)
+		}
+	case *MatrixData:
+		if d.Rows == 0 {
+			d.Rows = len(d.Values)
+		}
+		if d.Cols == 0 && len(d.Values) > 0 {
+			d.Cols = len(d.Values[0])
+		}
+	}
+	return target, nil
+}
+
+func toFloat(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
 }
 
 // GetLocationData 获取地理位置数据

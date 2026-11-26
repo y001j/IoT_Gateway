@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"math"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -281,6 +282,7 @@ func (e *ExpressionEngine) setCompositeDataVariables(point model.Point) {
 			e.variables[prefix+".x"] = vectorData.X
 			e.variables[prefix+".y"] = vectorData.Y
 			e.variables[prefix+".z"] = vectorData.Z
+			e.variables[prefix+".magnitude"] = math.Sqrt(vectorData.X*vectorData.X + vectorData.Y*vectorData.Y + vectorData.Z*vectorData.Z)
 		}
 
 	case model.TypeVector:
@@ -785,10 +787,17 @@ func (e *ExpressionEngine) evaluateSelectorExpr(expr *ast.SelectorExpr) (interfa
 	// 查找变量
 	e.mu.RLock()
 	value, exists := e.variables[fieldName]
+	base, baseExists := e.variables[baseName]
 	e.mu.RUnlock()
 
 	if exists {
 		return value, nil
+	}
+	// 从基础变量中按字段取值，例如 value.magnitude、value.hue（复合值可能是 map 或结构体）
+	if baseExists {
+		if v, ok := selectField(base, expr.Sel.Name); ok {
+			return v, nil
+		}
 	}
 
 	// 提供更多诊断信息
@@ -1144,6 +1153,7 @@ func (e *ExpressionEngine) registerBuiltinFunctions() {
 	e.RegisterFunction(&MathPowFunction{})
 	e.RegisterFunction(&MathFloorFunction{})
 	e.RegisterFunction(&MathCeilFunction{})
+	e.RegisterFunction(&MathRoundFunction{})
 
 	// 字符串函数
 	e.RegisterFunction(&StringLenFunction{})
@@ -1400,6 +1410,31 @@ func (f *MathFloorFunction) Call(args ...interface{}) (interface{}, error) {
 		return math.Floor(num), nil
 	}
 	return nil, fmt.Errorf("floor函数参数必须是数值")
+}
+
+// MathRoundFunction round(x) 或 round(x, n)：四舍五入到 n 位小数
+type MathRoundFunction struct{}
+
+func (f *MathRoundFunction) Name() string { return "round" }
+func (f *MathRoundFunction) Description() string {
+	return "四舍五入，第二个参数为保留的小数位数"
+}
+func (f *MathRoundFunction) Call(args ...interface{}) (interface{}, error) {
+	if len(args) != 1 && len(args) != 2 {
+		return nil, fmt.Errorf("round函数需要1或2个参数")
+	}
+	num, ok := toFloat64(args[0])
+	if !ok {
+		return nil, fmt.Errorf("round函数参数必须是数值")
+	}
+	digits := 0.0
+	if len(args) == 2 {
+		if digits, ok = toFloat64(args[1]); !ok {
+			return nil, fmt.Errorf("round函数的小数位数必须是数值")
+		}
+	}
+	factor := math.Pow(10, math.Trunc(digits))
+	return math.Round(num*factor) / factor, nil
 }
 
 type MathCeilFunction struct{}
@@ -3068,3 +3103,33 @@ func (f *Vector3DCrossProductFunction) Call(args ...interface{}) (interface{}, e
 // =======================
 // 辅助函数
 // =======================
+
+// selectField 从 map 或结构体中取字段；三维向量没有 magnitude 字段时按 x/y/z 计算
+func selectField(base interface{}, name string) (interface{}, bool) {
+	m, ok := base.(map[string]interface{})
+	if !ok {
+		rv := reflect.ValueOf(base)
+		for rv.Kind() == reflect.Ptr && !rv.IsNil() {
+			rv = rv.Elem()
+		}
+		if rv.Kind() != reflect.Struct {
+			return nil, false
+		}
+		data, err := json.Marshal(base)
+		if err != nil || json.Unmarshal(data, &m) != nil {
+			return nil, false
+		}
+	}
+	if v, ok := m[name]; ok {
+		return v, true
+	}
+	if name == "magnitude" {
+		x, okX := toFloat64(m["x"])
+		y, okY := toFloat64(m["y"])
+		z, okZ := toFloat64(m["z"])
+		if okX && okY && okZ {
+			return math.Sqrt(x*x + y*y + z*z), true
+		}
+	}
+	return nil, false
+}

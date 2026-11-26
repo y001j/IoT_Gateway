@@ -3,8 +3,10 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -163,6 +165,13 @@ type TransformConfig struct {
 	ErrorAction  string                 `json:"error_action"`  // 错误处理：ignore, default, error
 	DefaultValue interface{}            `json:"default_value"` // 默认值
 	AddTags      map[string]string      `json:"add_tags"`      // 添加标签
+	Field        string                 `json:"field"`         // 复合数据的取值字段，例如 value.hue
+}
+
+// transformReservedKeys 是 transform 动作配置的顶层字段，其余顶层字段视为转换参数
+var transformReservedKeys = map[string]bool{
+	"type": true, "parameters": true, "output_key": true, "output_type": true, "precision": true,
+	"conditions": true, "error_action": true, "default_value": true, "add_tags": true, "publish_subject": true,
 }
 
 // parseConfig 解析配置
@@ -184,9 +193,11 @@ func (h *TransformHandler) parseConfig(config map[string]interface{}) (*Transfor
 		transformConfig.Type = transformType
 	}
 
-	// 解析参数
-	if parameters, ok := config["parameters"].(map[string]interface{}); ok {
-		transformConfig.Parameters = parameters
+	// 解析参数：标准写法是 parameters 嵌套，也兼容直接写在顶层的参数（多数示例规则的写法）
+	parameters, _ := config["parameters"].(map[string]interface{})
+	transformConfig.Parameters = mergeFlatParameters(config, parameters, transformReservedKeys)
+	if field, ok := config["field"].(string); ok {
+		transformConfig.Field = field
 	}
 
 	// 解析输出配置
@@ -239,40 +250,36 @@ func (h *TransformHandler) transformPoint(point model.Point, config *TransformCo
 	// 转换时添加的标签不能影响原数据点
 	transformedPoint := point.Clone()
 
-	// 检查是否为复合数据处理
-	if point.IsComposite() {
+	// 选择输入值：field 可以是 timestamp，或 value.xxx / value.arr[0]（复合值、map 中的字段）
+	input := point.Value
+	fieldSelected := false
+	switch {
+	case config.Field == "timestamp":
+		input, fieldSelected = point.Timestamp, true
+	case strings.HasPrefix(config.Field, "value."):
+		v, ok := compositeFieldValue(point.Value, config.Field)
+		if !ok {
+			return point, fmt.Errorf("数据中没有字段 %s", config.Field)
+		}
+		input, fieldSelected = v, true
+	}
+
+	// 检查是否为复合数据处理（透传只添加标签、修改输出字段，不需要解析复合值）
+	// 表达式由规则引擎的表达式引擎处理，它能直接访问复合值的字段（value.magnitude 等）
+	if point.IsComposite() && !fieldSelected && config.Type != "pass_through" && config.Type != "identity" && config.Type != "expression" {
 		return h.transformCompositePoint(point, config)
 	}
 
-	// 根据转换类型执行转换
+	// 根据转换类型执行转换；数组字段逐个元素转换
 	var transformedValue interface{}
 	var err error
-
-	switch config.Type {
-	case "pass_through":
-		// 透传模式：不修改值，只添加标签或其他元数据
-		transformedValue = point.Value
-		err = nil
-	case "scale":
-		transformedValue, err = h.scaleTransform(point.Value, config.Parameters)
-	case "offset":
-		transformedValue, err = h.offsetTransform(point.Value, config.Parameters)
-	case "unit_convert":
-		transformedValue, err = h.unitConvertTransform(point.Value, config.Parameters)
-	case "format":
-		transformedValue, err = h.formatTransform(point.Value, config.Parameters)
-	case "expression":
-		transformedValue, err = h.expressionTransform(point.Value, config.Parameters)
-	case "lookup":
-		transformedValue, err = h.lookupTransform(point.Value, config.Parameters)
-	case "round":
-		transformedValue, err = h.roundTransform(point.Value, config.Parameters)
-	case "clamp":
-		transformedValue, err = h.clampTransform(point.Value, config.Parameters)
-	case "map":
-		transformedValue, err = h.mapTransform(point.Value, config.Parameters)
-	default:
-		return point, fmt.Errorf("不支持的转换类型: %s", config.Type)
+	if elems, ok := numericSlice(input); ok && fieldSelected && config.Type != "pass_through" && config.Type != "identity" {
+		transformedValue, err = h.transformElements(point, elems, config)
+	} else {
+		transformedValue, err = h.applyValueTransform(point, input, config)
+	}
+	if errors.Is(err, errUnsupportedTransform) {
+		return point, err
 	}
 
 	// 错误处理
@@ -307,8 +314,11 @@ func (h *TransformHandler) transformPoint(point model.Point, config *TransformCo
 		}
 	}
 
-	// 设置转换后的值
+	// 设置转换后的值（选择了字段时，数据类型按结果推断）
 	transformedPoint.Value = transformedValue
+	if fieldSelected || (point.IsComposite() && config.Type == "expression") {
+		transformedPoint.Type = inferValueType(transformedValue)
+	}
 
 	// 设置输出字段（支持模板替换）
 	if config.OutputKey != "" {
@@ -406,20 +416,37 @@ func (h *TransformHandler) formatTransform(value interface{}, params map[string]
 	if !ok {
 		return nil, fmt.Errorf("格式字符串未配置")
 	}
+	// 时间值使用 Go 时间格式（例如 2006-01-02 15:04:05）
+	if t, ok := value.(time.Time); ok && !strings.Contains(format, "%") {
+		return t.Format(format), nil
+	}
 
 	return fmt.Sprintf(format, value), nil
 }
 
-// expressionTransform 表达式转换
-func (h *TransformHandler) expressionTransform(value interface{}, params map[string]interface{}) (interface{}, error) {
+// expressionTransform 表达式转换：使用规则引擎的表达式引擎（与条件表达式相同，支持 value、tags.x、
+// pow、max 等函数；旧写法中的变量 x 等同于 value）。失败时回退到内置计算器（支持 ln、log、exp、sin 等）。
+// 以前只有内置计算器，只认变量 x，示例规则中的 pow(value, 2) 等表达式全部失败。
+func (h *TransformHandler) expressionTransform(point model.Point, params map[string]interface{}) (interface{}, error) {
 	expression, ok := params["expression"].(string)
-	if !ok {
+	if !ok || strings.TrimSpace(expression) == "" {
 		return nil, fmt.Errorf("表达式未配置")
 	}
 
-	// 简单的表达式计算（这里可以集成更强大的表达式引擎）
-	return h.evaluateSimpleExpression(expression, value)
+	engine := rules.AcquireExpressionEngine()
+	result, err := engine.Evaluate(exprLegacyVarPattern.ReplaceAllString(expression, "${1}value"), point)
+	rules.ReleaseExpressionEngine(engine)
+	if err == nil {
+		return result, nil
+	}
+	if v, calcErr := h.evaluateSimpleExpression(expression, point.Value); calcErr == nil {
+		return v, nil
+	}
+	return nil, fmt.Errorf("表达式计算失败: %w", err)
 }
+
+// exprLegacyVarPattern 匹配旧写法中独立的变量 x（不匹配 acceleration.x 这样的字段访问）
+var exprLegacyVarPattern = regexp.MustCompile(`(^|[^.\w])x\b`)
 
 // lookupTransform 查找表转换
 func (h *TransformHandler) lookupTransform(value interface{}, params map[string]interface{}) (interface{}, error) {
@@ -642,7 +669,7 @@ func (h *TransformHandler) isWeightUnit(unit string) bool {
 
 // evaluateSimpleExpression 计算简单表达式
 func (h *TransformHandler) evaluateSimpleExpression(expression string, value interface{}) (interface{}, error) {
-	// 替换变量：只替换独立的标识符 x，并加括号保证负数正确（2-x）。
+	// 替换变量：只替换独立的标识符 x 或 value，并加括号保证负数正确（2-x）。
 	// 以前替换所有字母 x，exp(x) 会变成 e4p(4)
 	expr := exprVarPattern.ReplaceAllString(expression, "("+fmt.Sprintf("%v", value)+")")
 
@@ -652,7 +679,7 @@ func (h *TransformHandler) evaluateSimpleExpression(expression string, value int
 }
 
 // exprVarPattern 匹配表达式中的变量 x
-var exprVarPattern = regexp.MustCompile(`\bx\b`)
+var exprVarPattern = regexp.MustCompile(`\b(x|value)\b`)
 
 // calculateExpression 计算表达式
 func (h *TransformHandler) calculateExpression(expr string) (interface{}, error) {
@@ -4470,4 +4497,167 @@ func resampleByTime(data *model.TimeSeriesData, frequency, method string) (*mode
 	}
 	flush()
 	return out, nil
+}
+
+// mergeFlatParameters 合并动作参数：parameters 中的键优先，其余非保留的顶层字段作为参数。
+// 不修改规则配置本身（规则配置被多个协程共享）。
+func mergeFlatParameters(config, parameters map[string]interface{}, reserved map[string]bool) map[string]interface{} {
+	merged := parameters
+	copied := false
+	for k, v := range config {
+		if reserved[k] {
+			continue
+		}
+		if _, exists := parameters[k]; exists {
+			continue
+		}
+		if !copied {
+			merged = make(map[string]interface{}, len(parameters)+len(config))
+			for pk, pv := range parameters {
+				merged[pk] = pv
+			}
+			copied = true
+		}
+		merged[k] = v
+	}
+	if merged == nil {
+		merged = make(map[string]interface{})
+	}
+	return merged
+}
+
+// compositeFieldValue 按路径（value.x、value.elements[0]）从复合值中取值。
+// 复合值可能是 map（经过 JSON 传输或 composite_mock 产生）或类型化结构体。
+func compositeFieldValue(value interface{}, path string) (interface{}, bool) {
+	path = strings.TrimPrefix(path, "value.")
+	current := value
+	if _, isMap := current.(map[string]interface{}); !isMap {
+		data, err := json.Marshal(current)
+		if err != nil {
+			return nil, false
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(data, &m) != nil {
+			return nil, false
+		}
+		current = m
+	}
+	for _, part := range strings.Split(path, ".") {
+		name, index := part, -1
+		if i := strings.Index(part, "["); i >= 0 && strings.HasSuffix(part, "]") {
+			n, err := strconv.Atoi(part[i+1 : len(part)-1])
+			if err != nil {
+				return nil, false
+			}
+			name, index = part[:i], n
+		}
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		if current, ok = m[name]; !ok {
+			return nil, false
+		}
+		if index >= 0 {
+			rv := reflect.ValueOf(current)
+			if rv.Kind() != reflect.Slice || index >= rv.Len() {
+				return nil, false
+			}
+			current = rv.Index(index).Interface()
+		}
+	}
+	return current, true
+}
+
+// errUnsupportedTransform 表示配置了不存在的转换类型（不受 error_action 影响）
+var errUnsupportedTransform = errors.New("不支持的转换类型")
+
+// applyValueTransform 对单个值执行转换
+func (h *TransformHandler) applyValueTransform(point model.Point, value interface{}, config *TransformConfig) (interface{}, error) {
+	switch config.Type {
+	case "pass_through", "identity":
+		// 透传模式：不修改值，只添加标签或其他元数据
+		return value, nil
+	case "scale":
+		return h.scaleTransform(value, config.Parameters)
+	case "offset":
+		return h.offsetTransform(value, config.Parameters)
+	case "unit_convert":
+		return h.unitConvertTransform(value, config.Parameters)
+	case "format":
+		return h.formatTransform(value, config.Parameters)
+	case "expression":
+		p := point
+		p.Value = value
+		return h.expressionTransform(p, config.Parameters)
+	case "lookup":
+		return h.lookupTransform(value, config.Parameters)
+	case "round":
+		// 没有配置 decimals 时使用 precision（示例规则写作 "type": "round", "precision": 1），
+		// 以前先取整再应用精度，结果总是整数
+		params := config.Parameters
+		if _, ok := params["decimals"]; !ok && config.Precision >= 0 {
+			params = mergeFlatParameters(map[string]interface{}{"decimals": float64(config.Precision)}, params, nil)
+		}
+		return h.roundTransform(value, params)
+	case "clamp":
+		return h.clampTransform(value, config.Parameters)
+	case "map":
+		return h.mapTransform(value, config.Parameters)
+	default:
+		return nil, fmt.Errorf("%w: %s", errUnsupportedTransform, config.Type)
+	}
+}
+
+// transformElements 对数组字段逐个元素转换，精度设置作用于每个元素
+func (h *TransformHandler) transformElements(point model.Point, elems []float64, config *TransformConfig) (interface{}, error) {
+	out := make([]interface{}, len(elems))
+	for i, e := range elems {
+		v, err := h.applyValueTransform(point, e, config)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个元素: %w", i, err)
+		}
+		f, ok := convertToFloat64(v)
+		if !ok {
+			return nil, fmt.Errorf("第 %d 个元素的转换结果不是数值: %v", i, v)
+		}
+		if config.Precision >= 0 {
+			factor := math.Pow(10, float64(config.Precision))
+			f = math.Round(f*factor) / factor
+		}
+		out[i] = f
+	}
+	return &model.ArrayData{Values: out, DataType: "float", Size: len(out)}, nil
+}
+
+// numericSlice 把数值切片（[]float64、[]interface{} 等）转换为 []float64
+func numericSlice(v interface{}) ([]float64, bool) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() || rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	out := make([]float64, rv.Len())
+	for i := range out {
+		f, ok := convertToFloat64(rv.Index(i).Interface())
+		if !ok {
+			return nil, false
+		}
+		out[i] = f
+	}
+	return out, true
+}
+
+// inferValueType 按值推断数据点类型
+func inferValueType(v interface{}) model.DataType {
+	switch v.(type) {
+	case bool:
+		return model.TypeBool
+	case string:
+		return model.TypeString
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return model.TypeInt
+	case *model.ArrayData:
+		return model.TypeArray
+	}
+	return model.TypeFloat
 }
