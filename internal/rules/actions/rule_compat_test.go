@@ -7,6 +7,7 @@ import (
 
 	"github.com/y001j/iot-gateway/internal/model"
 	"github.com/y001j/iot-gateway/internal/rules"
+	"github.com/y001j/iot-gateway/internal/testutil"
 )
 
 func execTransform(t *testing.T, point model.Point, cfg map[string]interface{}) (model.Point, *rules.ActionResult) {
@@ -211,5 +212,25 @@ func TestExtractNumericFromCompositeValues(t *testing.T) {
 	}
 	if sliceElements(1.5) != nil {
 		t.Error("非切片应返回 nil")
+	}
+}
+
+// transform 的发布主题转义设备 ID 和键（以前直接拼接，含 "." 的设备 ID 多出主题层级）
+func TestTransformPublishSubjectEscapesTokens(t *testing.T) {
+	_, nc := testutil.StartNATS(t)
+	sub, _ := nc.SubscribeSync("transformed.*.*")
+	nc.Flush()
+	h := NewTransformHandler(nc)
+	p := model.NewPoint("temp.c", "line.1 a", 1.5, model.TypeFloat)
+	if res, err := h.Execute(context.Background(), p, &rules.Rule{ID: "r"}, map[string]interface{}{"type": "scale", "factor": 2.0}); err != nil || !res.Success {
+		t.Fatalf("%v %+v", err, res)
+	}
+	msg, err := sub.NextMsg(3 * time.Second)
+	if err != nil {
+		t.Fatalf("应发布到两级转义后的主题: %v", err)
+	}
+	want := "transformed." + model.EncodeSubjectToken("line.1 a") + "." + model.EncodeSubjectToken("temp.c")
+	if msg.Subject != want {
+		t.Fatalf("主题 = %s, want %s", msg.Subject, want)
 	}
 }

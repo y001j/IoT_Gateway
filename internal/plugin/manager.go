@@ -58,6 +58,8 @@ type PluginManager interface {
 	RunningInstances() (adapters, sinks map[string]string)
 	InstanceStatuses() []InstanceStatus
 	InstanceConfig(name string) (map[string]interface{}, bool)
+	ValidateInstanceConfig(name string, cfg map[string]interface{}) error
+	UpdateInstanceConfig(name string, cfg map[string]interface{}) (restarted bool, err error)
 }
 
 type Manager struct {
@@ -76,6 +78,7 @@ type Manager struct {
 
 	// 每个连接器独立的分发器（队列 + 写入协程）
 	dispatchers map[string]*sinkDispatcher
+	feeds       map[string]*subscriptionFeed // 连接器订阅的 NATS 主题（subscriptions）
 	dispMu      sync.RWMutex
 
 	// 本地暂存（断网续传）：开启缓冲的连接器由 SinkRunner 从持久化流驱动，不走分发器
@@ -110,6 +113,7 @@ func NewManager(dir string, bus *nats.Conn, v *viper.Viper) *Manager {
 		adapters:        make(map[string]southbound.Adapter),
 		sinks:           make(map[string]northbound.Sink),
 		dispatchers:     make(map[string]*sinkDispatcher),
+		feeds:           make(map[string]*subscriptionFeed),
 		bufferConfigs:   make(map[string]storage.BufferConfig),
 		runners:         make(map[string]*storage.SinkRunner),
 		batchSize:       defaultPipelineBatchSize,
@@ -258,6 +262,12 @@ func (m *Manager) initSinks() error {
 			}
 		}
 
+		// 订阅与过滤配置错误时跳过该连接器（与其他配置错误一致），避免把不想要的数据写入目标
+		if _, err := parseSinkRouting(sinkMap); err != nil {
+			log.Error().Err(err).Str("name", name).Msg("连接器的 subscriptions / filter 配置无效，跳过该连接器")
+			continue
+		}
+
 		// 记录缓冲（断网续传）配置
 		if bc := storage.ParseBufferConfig(sinkMap["buffer"]); bc.Enabled {
 			m.bufferConfigs[name] = bc
@@ -393,6 +403,31 @@ func (m *Manager) SetStore(store *storage.Store) {
 
 // attachSink 把连接器接入数据流：开启缓冲且本地暂存可用时使用 SinkRunner，否则使用分发器
 func (m *Manager) attachSink(name string, sink northbound.Sink) {
+	// 连接器接收哪些数据（subscriptions / filter），默认只接收原始采集数据
+	routing := sinkRouting{Raw: true}
+	if cfg, ok := m.findPluginConfigMap(name, string(TypeSink)); ok {
+		r, err := parseSinkRouting(cfg)
+		if err != nil {
+			log.Error().Err(err).Str("sink", name).Msg("连接器的 subscriptions / filter 配置无效，按默认只接收原始数据")
+		} else {
+			routing = r
+		}
+	}
+	target := sink
+	if routing.needsWrapper() {
+		target = newRoutedSink(sink, routing.Filter)
+	}
+	if len(routing.Subs) > 0 {
+		if err := m.startSubscriptionFeed(name, target, routing.Subs); err != nil {
+			log.Error().Err(err).Str("sink", name).Msg("连接器订阅 NATS 主题失败")
+		}
+	}
+	if !routing.Raw {
+		if bc, ok := m.bufferConfigs[name]; ok && bc.Enabled {
+			log.Warn().Str("sink", name).Msg("buffer 只对原始数据（iot.data.>）生效，该连接器没有订阅原始数据，buffer 不起作用")
+		}
+		return
+	}
 	if bc, ok := m.bufferConfigs[name]; ok && bc.Enabled {
 		if m.store == nil {
 			log.Warn().Str("sink", name).Msg("连接器配置了 buffer，但本地暂存未启用（storage.enabled），退回直连模式")
@@ -401,7 +436,7 @@ func (m *Manager) attachSink(name string, sink northbound.Sink) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			r, err := m.store.StartSinkRunner(ctx, name, sink, bc)
+			r, err := m.store.StartSinkRunner(ctx, name, target, bc)
 			if err == nil {
 				m.dispMu.Lock()
 				if old := m.runners[name]; old != nil {
@@ -414,11 +449,12 @@ func (m *Manager) attachSink(name string, sink northbound.Sink) {
 			log.Error().Err(err).Str("sink", name).Msg("启动缓冲运行器失败，退回直连模式")
 		}
 	}
-	m.addDispatcher(name, sink)
+	m.addDispatcher(name, target)
 }
 
 // detachSink 停止连接器的分发器或缓冲运行器
 func (m *Manager) detachSink(name string) {
+	m.removeFeed(name)
 	m.removeDispatcher(name)
 	m.dispMu.Lock()
 	r := m.runners[name]
@@ -521,9 +557,12 @@ func (m *Manager) removeDispatcher(name string) {
 func (m *Manager) GetSinkDispatchStats() []SinkDispatchStats {
 	m.dispMu.RLock()
 	defer m.dispMu.RUnlock()
-	out := make([]SinkDispatchStats, 0, len(m.dispatchers))
+	out := make([]SinkDispatchStats, 0, len(m.dispatchers)+len(m.feeds))
 	for _, d := range m.dispatchers {
 		out = append(out, d.stats())
+	}
+	for _, f := range m.feeds {
+		out = append(out, f.disp.stats())
 	}
 	return out
 }
@@ -577,7 +616,12 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.dispMu.Lock()
 	dispatchers := m.dispatchers
 	m.dispatchers = make(map[string]*sinkDispatcher)
+	feeds := m.feeds
+	m.feeds = make(map[string]*subscriptionFeed)
 	m.dispMu.Unlock()
+	for _, f := range feeds {
+		f.stop()
+	}
 	for _, d := range dispatchers {
 		d.stop(5 * time.Second)
 	}

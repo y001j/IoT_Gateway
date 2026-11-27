@@ -206,25 +206,35 @@ type NATSAwareSink interface {
 **主动型Sink（当前仅有）**：
 - **nats_subscriber**: 专门的NATS订阅和数据路由中心
 
-### 关键架构限制
+### 连接器订阅（subscriptions / filter）
 
-**⚠️ 重要：规则处理数据的访问限制**
+任何连接器都可以直接选择接收哪些数据，不再需要 `nats_subscriber` 作为中介：
 
-由于插件管理器的NATS连接分配机制：
-
-```go
-// 只有nats_subscriber类型的sink才能获得NATS连接
-if sinkType == "nats_subscriber" {
-    if natsAwareSink, ok := sink.(northbound.NATSAwareSink); ok {
-        natsAwareSink.SetNATSConnection(m.bus)
-    }
-}
+```yaml
+northbound:
+  sinks:
+    - name: influx_main
+      type: influxdb
+      params: { ... }
+      # 默认只有 iot.data.>（原始采集数据，由管道直接分发，支持 buffer 断网续传）
+      subscriptions:
+        - "iot.data.>"
+        - "iot.rules.aggregate.>"                        # 聚合结果（data_type 自动为 rule）
+        - "transformed.>"                                # transform 输出
+        - { subject: "iot.alerts.>", data_type: alert }
+      # 可选：按设备 ID、数据键过滤（通配符同 path.Match），对所有来源生效
+      filter:
+        devices: ["temp_sensor_*"]
+        keys: ["temperature", "temperature_f"]
 ```
 
-**这意味着**：
-- ❌ **其他Sink无法直接订阅规则处理的数据**
-- ❌ **InfluxDB、Redis、WebSocket等Sink无法直接访问`iot.rules.*`主题**
-- ✅ **必须通过nats_subscriber作为中介来访问规则数据**
+- 不包含 `iot.data.>` 时不接收原始数据（"采集 → 网关降采样 → 只上传结果"）。
+- 规则引擎输出的主题：聚合结果 `iot.rules.aggregate.<设备>.<键>`、forward `iot.rules.forward.<设备>.<键>`、transform `transformed.<设备>.<键>`、告警 `iot.alerts.>`。注意 `iot.rules.>` 还包含 `iot.rules.matched`（每次规则匹配一条，带原始数据点），只要计算结果时请订阅具体的主题，例如 `["iot.rules.aggregate.>", "transformed.>"]`。
+- 原始数据只能用 `iot.data.>` 加 `filter` 筛选；`iot.data.<设备>.>` 这类子主题会被拒绝，因为原始数据不经 NATS 订阅。
+- 订阅到的数据有独立的分发队列（统计中显示为 `<名称> (订阅)`），与原始数据的队列互不影响；多个来源对同一连接器的写入会串行执行。
+- `buffer` 只对原始数据生效：规则结果不在 `IOT_RAW` 流中，断网期间不会补发。
+- 配置无效时（例如订阅 `iot.data.d1.>`）跳过该连接器并记录错误。
+- `nats_subscriber` 仍然可用，已有配置不需要修改。
 
 ### 数据流路径
 

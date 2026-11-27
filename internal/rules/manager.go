@@ -23,6 +23,30 @@ type HotReloadConfig struct {
 	RetryInterval    string `yaml:"retry_interval" json:"retry_interval"`       // 重试间隔
 	MaxRetries       int    `yaml:"max_retries" json:"max_retries"`             // 最大重试次数
 	DebounceDelay    string `yaml:"debounce_delay" json:"debounce_delay"`       // 防抖延迟
+	// ResyncInterval 定期核对规则文件（修改时间、大小）的间隔，补上丢失的文件事件；"0" 关闭，默认 30s
+	ResyncInterval string `yaml:"resync_interval" json:"resync_interval"`
+}
+
+// fileStamp 规则文件上次加载时的修改时间和大小
+type fileStamp struct {
+	mod  time.Time
+	size int64
+}
+
+func statStamp(path string) (fileStamp, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return fileStamp{}, false
+	}
+	return fileStamp{mod: info.ModTime(), size: info.Size()}, true
+}
+
+func isRuleFile(path string) bool {
+	switch filepath.Ext(path) {
+	case ".json", ".yaml", ".yml":
+		return true
+	}
+	return false
 }
 
 // RuleManager defines the interface for managing rules.
@@ -58,6 +82,9 @@ type Manager struct {
 	fileRules map[string][]string // 规则文件 -> 该文件定义的规则 ID
 	ruleFile  map[string]string   // 规则 ID -> 定义它的文件
 	mu        sync.RWMutex
+
+	// fileStamps 每个规则文件上次加载（或尝试加载）时的状态，用于核对丢失的文件事件
+	fileStamps map[string]fileStamp
 }
 
 // NewManager 创建规则管理器
@@ -69,6 +96,7 @@ func NewManager(rulesDir string) *Manager {
 		changesChan: make(chan RuleChangeEvent, 100),
 		fileRules:   make(map[string][]string),
 		ruleFile:    make(map[string]string),
+		fileStamps:  make(map[string]fileStamp),
 		hotReloadConfig: &HotReloadConfig{
 			Enabled:          true,
 			GracefulFallback: true,
@@ -94,6 +122,7 @@ func (m *Manager) LoadRules() error {
 	m.ruleIndex = NewIndex()
 	m.fileRules = make(map[string][]string)
 	m.ruleFile = make(map[string]string)
+	m.fileStamps = make(map[string]fileStamp)
 
 	// 扫描规则文件
 	err := filepath.Walk(m.rulesDir, func(path string, info os.FileInfo, err error) error {
@@ -107,6 +136,7 @@ func (m *Manager) LoadRules() error {
 			return nil
 		}
 
+		m.recordStampLocked(path)
 		rules, err := m.loadRuleFile(path)
 		if err != nil {
 			log.Error().Err(err).Str("file", path).Msg("加载规则文件失败")
@@ -658,12 +688,14 @@ func (m *Manager) startFileWatcher() error {
 		return fmt.Errorf("创建文件监控器失败: %w", err)
 	}
 
-	// 监控规则目录
+	// 监控规则目录及其子目录（规则加载会递归子目录，以前只监控顶层目录，
+	// rules/composite/ 等子目录中的规则修改后不会热加载）
 	if err := m.watcher.Add(m.rulesDir); err != nil {
 		_ = m.watcher.Close()
 		m.watcher = nil
 		return fmt.Errorf("添加目录监控失败: %w", err)
 	}
+	m.watchSubdirs(m.rulesDir)
 
 	// 启动文件监控协程
 	go m.watchFileChanges()
@@ -680,61 +712,155 @@ func (m *Manager) watchFileChanges() {
 		}
 	}()
 
-	// 解析防抖延迟
-	var debounceDelay time.Duration = 100 * time.Millisecond
-	if m.hotReloadConfig != nil && m.hotReloadConfig.DebounceDelay != "" {
-		if d, err := time.ParseDuration(m.hotReloadConfig.DebounceDelay); err == nil {
+	// 解析防抖延迟和核对间隔
+	debounceDelay := 100 * time.Millisecond
+	resyncInterval := 30 * time.Second
+	if m.hotReloadConfig != nil {
+		if d, err := time.ParseDuration(m.hotReloadConfig.DebounceDelay); err == nil && m.hotReloadConfig.DebounceDelay != "" {
 			debounceDelay = d
 		}
+		if v := m.hotReloadConfig.ResyncInterval; v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				resyncInterval = d
+			}
+		}
+	}
+	watcher := m.watcher
+
+	// 真正的防抖：同一文件的多个事件合并，安静 debounceDelay 后统一处理一次；
+	// 处理时以文件当前是否存在为准（删除后又创建、编辑器的原子保存都能正确处理）。
+	// 以前每个事件都单独 Sleep 后处理，事件只是被逐个推迟。
+	pending := make(map[string]struct{})
+	debounce := time.NewTimer(time.Hour)
+	debounce.Stop()
+	var resyncC <-chan time.Time
+	if resyncInterval > 0 {
+		ticker := time.NewTicker(resyncInterval)
+		defer ticker.Stop()
+		resyncC = ticker.C
 	}
 
 	for {
 		select {
-		case event, ok := <-m.watcher.Events:
+		case event, ok := <-watcher.Events:
 			if !ok {
 				log.Info().Msg("文件监控器已关闭")
 				return
 			}
-
-			// 只处理规则文件
-			ext := filepath.Ext(event.Name)
-			if ext != ".json" && ext != ".yaml" && ext != ".yml" {
+			// 新建的子目录也加入监控，并核对其中已有的文件
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					m.watchSubdirs(event.Name)
+					_ = watcher.Add(event.Name)
+					m.resyncFiles()
+					continue
+				}
+			}
+			if !isRuleFile(event.Name) {
 				continue
 			}
-
 			log.Debug().Str("file", event.Name).Str("op", event.Op.String()).Msg("检测到文件变化")
+			pending[filepath.Clean(event.Name)] = struct{}{}
+			debounce.Reset(debounceDelay)
 
-			// 防抖延迟处理
-			time.Sleep(debounceDelay)
-
-			switch {
-			case event.Op&fsnotify.Write == fsnotify.Write:
-				m.handleFileUpdate(event.Name)
-			case event.Op&fsnotify.Create == fsnotify.Create:
-				m.handleFileCreate(event.Name)
-			case event.Op&fsnotify.Remove == fsnotify.Remove:
-				m.handleFileDelete(event.Name)
+		case <-debounce.C:
+			for path := range pending {
+				if _, err := os.Stat(path); err == nil {
+					m.handleFileUpdate(path)
+				} else {
+					m.handleFileDelete(path)
+				}
 			}
+			pending = make(map[string]struct{})
 
-		case err, ok := <-m.watcher.Errors:
+		case <-resyncC:
+			m.resyncFiles()
+
+		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
-			log.Error().Err(err).Msg("文件监控错误")
-
-			// 如果错误太多，可能是系统不支持，尝试优雅关闭
-			if m.hotReloadConfig != nil && m.hotReloadConfig.GracefulFallback {
-				log.Warn().Msg("文件监控错误较多，考虑禁用热加载")
-			}
+			m.handleWatchError(err)
 		}
+	}
+}
+
+// handleWatchError 监控出错（例如 inotify 事件队列溢出）意味着可能丢了事件：立即核对一遍
+func (m *Manager) handleWatchError(err error) {
+	log.Error().Err(err).Msg("文件监控错误，核对规则文件")
+	m.resyncFiles()
+}
+
+// watchSubdirs 把 dir 下的所有子目录加入监控
+func (m *Manager) watchSubdirs(dir string) {
+	if m.watcher == nil {
+		return
+	}
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() || path == dir {
+			return nil
+		}
+		if err := m.watcher.Add(path); err != nil {
+			log.Warn().Err(err).Str("dir", path).Msg("添加子目录监控失败")
+		}
+		return nil
+	})
+}
+
+// recordStampLocked 记录文件当前的修改时间和大小（持有写锁；文件不存在时删除记录）
+func (m *Manager) recordStampLocked(path string) {
+	path = filepath.Clean(path)
+	if st, ok := statStamp(path); ok {
+		m.fileStamps[path] = st
+	} else {
+		delete(m.fileStamps, path)
+	}
+}
+
+// resyncFiles 核对规则目录：修改时间或大小与上次加载时不同的文件重新加载，已删除的文件移除其规则。
+// 文件事件可能丢失（队列溢出、监控建立前的修改等），以前丢失后规则会一直停在旧版本。
+func (m *Manager) resyncFiles() {
+	onDisk := make(map[string]fileStamp)
+	_ = filepath.Walk(m.rulesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !isRuleFile(path) {
+			return nil
+		}
+		onDisk[filepath.Clean(path)] = fileStamp{mod: info.ModTime(), size: info.Size()}
+		return nil
+	})
+	var changed, removed []string
+	m.mu.RLock()
+	for path, st := range onDisk {
+		if old, ok := m.fileStamps[path]; !ok || !old.mod.Equal(st.mod) || old.size != st.size {
+			changed = append(changed, path)
+		}
+	}
+	for path := range m.fileStamps {
+		if _, ok := onDisk[path]; !ok {
+			removed = append(removed, path)
+		}
+	}
+	m.mu.RUnlock()
+	for _, path := range changed {
+		log.Info().Str("file", path).Msg("核对发现规则文件有未处理的变更，重新加载")
+		m.handleFileUpdate(path)
+	}
+	for _, path := range removed {
+		log.Info().Str("file", path).Msg("核对发现规则文件已删除")
+		m.handleFileDelete(path)
 	}
 }
 
 // handleFileUpdate 处理文件更新
 func (m *Manager) handleFileUpdate(filePath string) {
+	// 先记录文件状态再读取：读取之后的修改会让状态不一致，下次核对时重新加载
+	m.mu.Lock()
+	m.recordStampLocked(filePath)
+	m.mu.Unlock()
+
 	rules, err := m.parseRuleFile(filePath)
 	if err != nil {
-		// 解析失败时保留该文件原有的规则
+		// 解析失败时保留该文件原有的规则（文件再次修改时会重新加载）
 		log.Error().Err(err).Str("file", filePath).Msg("重新加载规则文件失败")
 		return
 	}
@@ -787,17 +913,13 @@ func (m *Manager) handleFileUpdate(filePath string) {
 	log.Info().Str("file", filePath).Int("count", len(rules)).Msg("规则文件重新加载完成")
 }
 
-// handleFileCreate 处理文件创建
-func (m *Manager) handleFileCreate(filePath string) {
-	m.handleFileUpdate(filePath) // 创建和更新处理逻辑相同
-}
-
 // handleFileDelete 处理文件删除：移除该文件定义的所有规则
 func (m *Manager) handleFileDelete(filePath string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	path := filepath.Clean(filePath)
+	delete(m.fileStamps, path)
 	if _, tracked := m.fileRules[path]; !tracked {
 		// 未记录的文件（例如加载失败），按文件名推断规则 ID
 		fileName := filepath.Base(path)

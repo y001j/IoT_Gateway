@@ -6,7 +6,7 @@ gateway:
   name: "IoT Gateway Rule Engine Test"
   version: "1.0.0"
   log_level: "error"
-  http_port: 8080
+  http_port: 8080             # 运维接口（/health、/metrics）；设为 0 时只由 Web 端口（web_ui.port）提供
   https_port: 8443
   nats_url: "embedded"
   plugins_dir: "./plugins"
@@ -81,7 +81,13 @@ rule_engine:
     graceful_fallback: true          # 热加载失败时优雅降级
     retry_interval: "30s"            # 文件监控器启动失败后重试间隔
     max_retries: 3                   # 最大重试次数
-    debounce_delay: "100ms"          # 文件变更防抖延迟
+    debounce_delay: "100ms"          # 文件变更防抖延迟（同一文件的多次变更合并处理）
+    resync_interval: "30s"           # 定期核对规则文件，补上丢失的文件事件；"0" 关闭
+
+  # 聚合窗口状态持久化：保存到 JetStream KV（IOT_AGG_STATE），网关重启后恢复，长时间窗口的统计不被打断
+  aggregate_state:
+    persist: true
+    save_interval: "30s"
   
   # 内联规则定义
 #  rules:
@@ -527,6 +533,12 @@ northbound:
     
     # MQTT输出 - 用于外部系统集成
     # 需要断网续传时添加（并开启上面的 storage.enabled）：
+    #   # 接收哪些数据（默认只有 iot.data.> 原始数据）；也可以直接订阅规则结果和告警，并按设备、数据键过滤
+    #   # 聚合结果 iot.rules.aggregate.>，transform 输出 transformed.>（iot.rules.> 还包含每次匹配的 iot.rules.matched 事件）
+    #   subscriptions: ["iot.data.>", "iot.rules.aggregate.>", "transformed.>", {subject: "iot.alerts.>", data_type: alert}]
+    #   filter:
+    #     devices: ["temp_sensor_*"]
+    #     keys: ["temperature", "temperature_f"]
     #   buffer:
     #     enabled: true
     #     batch_size: 500

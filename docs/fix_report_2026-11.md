@@ -487,3 +487,52 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -o bench ./cmd/tools/benchm
 | 表达式引擎 | `value.magnitude` 等字段访问不被支持；没有 `round` 函数 | 选择器从基础变量（map 或结构体）中取字段，三维向量提供 magnitude；新增 `round(x[, n])` |
 
 验证：`TestRepoRulesRunWithoutActionErrors` 由 24 种错误变为 0；新增 `TestGetCompositeDataFromMap`、`TestTransformFlatParameters`、`TestTransformIdentityAndPassThroughComposite`、`TestTransformFieldSelection`、`TestTransformExpressionEngine`、`TestFilterFlatParametersAndField`、`TestExtractNumericFromCompositeValues`、`TestExpressionRoundAndValueFields`。
+
+## 14. 第十一轮：架构评审的四项改进
+
+另一份评审指出四个问题，逐条核实后改进如下。
+
+### 14.1 连接器订阅模型统一
+
+| 问题 | 修改 |
+|---|---|
+| 标准连接器只接收原始数据；要把规则结果写入 InfluxDB 等，必须再配置 `nats_subscriber` 并在 `target_sinks` 里重写一遍连接器（buffer 策略也用不上） | 所有连接器支持 `subscriptions`（默认 `iot.data.>`，可加 `iot.rules.>`、`iot.alerts.>` 等）和 `filter`（devices / keys 通配符）；订阅数据有独立的分发队列，多来源写入经 `routedSink` 串行化 |
+| 开启连接器即全量接收原始数据，无法"只上传清洗后的结果" | 只订阅 `iot.rules.>` 即不接收原始数据；`filter` 对所有来源生效 |
+
+限制：`buffer` 只对原始数据生效（规则结果不在 `IOT_RAW` 流中）；原始数据不能订阅 `iot.data.<设备>.>` 子主题（用 filter）。
+
+### 14.2 聚合窗口状态
+
+| 问题 | 修改 |
+|---|---|
+| 网关重启后聚合窗口状态清零 | 默认实现的状态定期保存到 JetStream KV `IOT_AGG_STATE`（`rule_engine.aggregate_state`，默认开启，30 秒），停止时再保存一次，启动时恢复；过期或配置不符的快照不恢复 |
+| （评审未发现）状态闲置 10 分钟即被清理，1 小时、1 天窗口的低频数据会在窗口中途丢失统计 | 每个状态的过期时间 = max(10 分钟, 配置 ttl, 2 × 时间窗口) |
+| 热加载修改规则的窗口配置后，旧状态按旧窗口继续累积 | 状态记录窗口配置指纹，配置变化时重建 |
+| 规则引擎停止时从不关闭动作处理器（聚合的后台协程不退出） | Stop 时调用处理器的 `Close()` |
+
+### 14.3 批次复制的内存开销
+
+评审的前提不准确：`Point.Clone` 原本就只复制标签。标签改为写时复制（`ShardedTags.Clone` 共享 map，写入方先复制）后，100 个点（每点 3 个标签）的批次每个连接器复制一次从 22 µs / 47 KB / 301 次分配降到 6.2 µs / 15.7 KB / 101 次分配（`BenchmarkCopyBatchForSink`）。
+
+### 14.4 端口与插件配置
+
+| 问题 | 修改 |
+|---|---|
+| 运维接口（8080）与 Web（8081）分开，Web 端口的 `/health` 固定返回 ok | Web 端口同时提供真实的 `/health`、`/metrics`、`/info`、`/storage`；`gateway.http_port: 0` 关闭单独的运维端口（Web 未启用时仍用 8080）。内嵌 NATS 只监听 127.0.0.1，部署时只需开放 Web 端口 |
+| 插件配置只读，修改需手工编辑 config.yaml | 插件页面可编辑并保存：校验后只替换 config.yaml 中该实例一项（注释保留，原子写入），`******` 占位的敏感字段沿用原值，运行中的实例用新配置重启，失败则自动回滚。仅管理员 |
+| 嵌套 `config` 中要重复填写 name / type，漏写时适配器初始化失败 | 缺少时用实例的值补上 |
+
+验证：新增 `TestAggregateStatePersistsAcrossRestart`、`TestAggregateStateResetsWhenWindowConfigChanges`、`TestAggregateStateTTLCoversTimeWindow`、`TestAggregatePersistenceExpiryAndRetry`、`TestStatsSnapshotRoundTrip`、`TestStopClosesActionHandlers`、`TestRuntimeAggregateStatePersistenceConfig`、`TestParseSinkRouting`、`TestRoutedSinkFiltersAndSerializes`、`TestSinkSubscriptionsEndToEnd`、`TestShardedTagsCloneCopyOnWrite`、`TestShardedTagsCloneConcurrent`、`TestOpsPort`、`TestUpdateInstanceConfig`、`TestUpdateInstanceConfigRollsBack`、`TestWriteInstanceToFileErrors`、`TestRestoreMaskedSecrets`、`TestPluginServiceValidateAndUpdateConfig` 等。
+
+### 14.5 验证中发现的问题
+
+| 位置 | 问题 | 修复 |
+|---|---|---|
+| 规则热加载 | 偶发 `TestHotReloadUpdatesDispatchIndex` 超时（规则变更未进入索引）。排查发现：文件监控只覆盖顶层目录（`rules/composite/` 等子目录的修改从不热加载）；"防抖"只是每个事件 Sleep；监控出错（例如事件队列溢出）只打日志，丢失的事件永远不会补上 | 子目录（含运行中新建的）加入监控；同一文件的事件合并后按文件当前状态处理一次；记录每个文件加载时的修改时间和大小，监控出错时立即核对、并按 `hot_reload.resync_interval`（默认 30s）定期核对，补上丢失的修改和删除 |
+| 聚合 `output_key` | 只有 `output.key_template` 支持模板，`"{{.Key}}_stats"` 被原样当作键名（示例规则 humidity_monitor）；模板只替换第一种写法 | `output_key` 也做模板替换，支持 `{{.Key}}`、`{{.DeviceID}}` 等写法 |
+| transform 发布主题 | `transformed.<设备>.<键>` 直接拼接，含 "." 的设备 ID 会多出主题层级 | 用 `model.EncodeSubjectToken` 转义 |
+| 插件配置接口 | 校验失败返回 500 | 校验失败 400、实例不存在 404 |
+| 配置热加载 | 先 `viper.WatchConfig()` 再 `OnConfigChange()`：监听协程读取回调时与注册存在数据竞争，启动后立即发生的变更会丢失（CI 上 `TestConfigManagerHotReload` 偶发失败） | 先注册回调再启动监听（`internal/config/manager.go`、`internal/core/runtime.go`） |
+| 文档 | `iot.rules.>` 被写成"规则结果"，实际还包含每次匹配的 `iot.rules.matched` 事件；transform 输出在 `transformed.>` | 文档与示例改为 `iot.rules.aggregate.>`、`transformed.>` |
+
+实测（Lima Linux 虚拟机，独立 NATS）：`http_port: 0` 时对外只监听 8081，`/health` 返回真实组件状态；只订阅 `iot.rules.>` 并按设备过滤的连接器只收到指定设备的规则消息；重启后从 KV 恢复 5 个聚合状态；页面保存插件配置后 config.yaml 只改动该实例、注释保留，实例自动重启。

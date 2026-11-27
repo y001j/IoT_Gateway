@@ -337,7 +337,14 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 		// 传递Runtime连接到规则引擎服务
 		ruleEngineService.SetRuntime(rt)
 		// 注册完整的动作处理器（filter/transform/forward/aggregate），必须在服务启动前完成
-		actions.RegisterBuiltinHandlers(ruleEngineService, nc)
+		handlerOpts := actions.HandlerOptions{}
+		// 聚合窗口状态持久化（默认开启，需要 JetStream）：重启后恢复，长时间窗口的统计不被打断
+		v.SetDefault("rule_engine.aggregate_state.persist", true)
+		if v.GetBool("rule_engine.aggregate_state.persist") && rt.Js != nil {
+			handlerOpts.AggregateStateKV = rt.Js
+			handlerOpts.AggregateSaveInterval = v.GetDuration("rule_engine.aggregate_state.save_interval")
+		}
+		actions.RegisterBuiltinHandlersWithOptions(ruleEngineService, nc, handlerOpts)
 
 		// 注册Transform和Forward动作处理器
 		// 注意：这些处理器需要NATS连接，将在Start阶段设置
@@ -347,6 +354,7 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	}
 
 	// 注册Web服务（稍后在Start阶段获取规则管理器）
+	webOps := false // Web 端口是否提供运维接口
 	if v.GetBool("web_ui.enabled") {
 		webService, err := NewWebService(v, pluginManager, nil, nc, rt.metrics)
 		if err != nil {
@@ -356,6 +364,9 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 			if ruleEngineService != nil {
 				webService.SetRuleEngineService(ruleEngineService)
 			}
+			// 运维接口同时由 Web 端口提供，部署时可以只开放一个端口
+			webService.SetOpsHandler(rt.GatewayHTTPHandler(v.GetString("web_ui.port")))
+			webOps = webService.config.Enabled
 			rt.RegisterService(webService)
 		}
 	}
@@ -379,28 +390,28 @@ func NewRuntime(cfgPath string) (*Runtime, error) {
 	)
 
 	// 启动Gateway主服务HTTP服务器 (用于metrics和健康检查)
-	gatewayPort := v.GetString("gateway.http_port")
-	if gatewayPort == "" {
-		gatewayPort = "8080"
+	gatewayPort := opsPort(v.GetString("gateway.http_port"), webOps)
+
+	if gatewayPort != "" {
+		go func() {
+			srv := &http.Server{
+				Addr:              ":" + gatewayPort,
+				Handler:           rt.GatewayHTTPHandler(gatewayPort),
+				ReadHeaderTimeout: 10 * time.Second,
+			}
+			log.Info().Str("port", gatewayPort).Msg("启动Gateway主服务HTTP服务器")
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("Gateway主服务HTTP服务器启动失败")
+			}
+		}()
 	}
 
-	go func() {
-		srv := &http.Server{
-			Addr:              ":" + gatewayPort,
-			Handler:           rt.GatewayHTTPHandler(gatewayPort),
-			ReadHeaderTimeout: 10 * time.Second,
-		}
-		log.Info().Str("port", gatewayPort).Msg("启动Gateway主服务HTTP服务器")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("Gateway主服务HTTP服务器启动失败")
-		}
-	}()
-
 	// watch config
-	v.WatchConfig()
+	// 先注册回调再启动监听（WatchConfig 的协程会读取回调，顺序反过来存在数据竞争）
 	v.OnConfigChange(func(e fsnotify.Event) {
 		log.Info().Str("file", e.Name).Msg("config changed (todo: hot reload)")
 	})
+	v.WatchConfig()
 
 	return rt, nil
 }
@@ -586,4 +597,21 @@ func storageDir(v *viper.Viper) string {
 		return d
 	}
 	return "./data/jetstream"
+}
+
+// opsPort 返回单独的运维端口（为空表示不单独监听）：
+// gateway.http_port 为 0 且 Web 端口已提供运维接口时不再单独监听；Web 未启用时仍使用 8080
+func opsPort(configured string, webOps bool) string {
+	switch configured {
+	case "":
+		return "8080"
+	case "0":
+		if webOps {
+			log.Info().Msg("gateway.http_port 为 0：运维接口只由 Web 端口提供")
+			return ""
+		}
+		log.Warn().Msg("gateway.http_port 为 0 但 Web 服务未启用，运维接口仍使用 8080 端口")
+		return "8080"
+	}
+	return configured
 }

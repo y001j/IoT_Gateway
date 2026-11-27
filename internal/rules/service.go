@@ -169,6 +169,9 @@ func NewRuleEngineServiceWithConfig(config map[string]interface{}) *RuleEngineSe
 		if debounceDelay, ok := hotReloadConfig["debounce_delay"].(string); ok {
 			hr.DebounceDelay = debounceDelay
 		}
+		if resync, ok := hotReloadConfig["resync_interval"].(string); ok {
+			hr.ResyncInterval = resync
+		}
 	}
 
 	return service
@@ -242,6 +245,11 @@ func (s *RuleEngineService) handleAggregateResult(aggregateResult *AggregateResu
 		forward, _ = output["forward"].(bool)
 	} else {
 		outputKey, _ = config["output_key"].(string)
+		// output_key 也支持模板（例如 "{{.Key}}_stats"）。以前只有 output.key_template 做替换，
+		// 示例规则 humidity_monitor 的输出键就是字面上的 "{{.Key}}_stats"
+		if strings.Contains(outputKey, "{{") {
+			outputKey = s.formatOutputKey(outputKey, originalPoint)
+		}
 		forward, _ = config["forward"].(bool)
 	}
 	if outputKey == "" {
@@ -481,6 +489,15 @@ func (s *RuleEngineService) Stop(ctx context.Context) error {
 	case <-time.After(5 * time.Second):
 		log.Warn().Msg("规则引擎服务停止超时")
 	}
+
+	// 关闭动作处理器（聚合处理器停止后台协程并保存窗口状态）。以前从未调用
+	s.handlersMu.RLock()
+	for _, h := range s.actionHandlers {
+		if c, ok := h.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+	s.handlersMu.RUnlock()
 
 	// 关闭监控器
 	if s.monitor != nil {
@@ -872,19 +889,19 @@ func (s *RuleEngineService) formatOutputKey(template string, point model.Point) 
 		return point.Key + "_processed"
 	}
 
-	// 支持{{.Key}}和{{.key}}格式的模板替换
-	result := template
-	if strings.Contains(result, "{{.Key}}") {
-		result = strings.ReplaceAll(result, "{{.Key}}", point.Key)
-	} else if strings.Contains(result, "{{.key}}") {
-		result = strings.ReplaceAll(result, "{{.key}}", point.Key)
-	} else if strings.Contains(result, "{{key}}") {
-		result = strings.ReplaceAll(result, "{{key}}", point.Key)
-	} else {
-		// 如果没有模板标记，直接使用sprintf格式
-		result = fmt.Sprintf(template, point.Key)
+	// 模板变量：{{.Key}} / {{.key}} / {{key}} 为数据键，{{.DeviceID}} / {{.device_id}} 为设备 ID。
+	// 以前只替换第一种出现的写法，且不支持设备 ID
+	if !strings.Contains(template, "{{") {
+		// 没有模板标记时按 sprintf 格式处理（兼容旧写法，例如 "%s_avg"）
+		if strings.Contains(template, "%s") {
+			return fmt.Sprintf(template, point.Key)
+		}
+		return template
 	}
-
+	result := strings.NewReplacer(
+		"{{.Key}}", point.Key, "{{.key}}", point.Key, "{{key}}", point.Key,
+		"{{.DeviceID}}", point.DeviceID, "{{.device_id}}", point.DeviceID, "{{device_id}}", point.DeviceID,
+	).Replace(template)
 	return result
 }
 

@@ -248,8 +248,12 @@ func TestPipelineFlushesByBatchSizeAndInterval(t *testing.T) {
 func TestAdapterConfigData(t *testing.T) {
 	nested := map[string]interface{}{"name": "a", "type": "mock", "enabled": true, "config": map[string]interface{}{"x": 1}}
 	data, err := adapterConfigData(nested, "a", "mock")
-	if err != nil || string(data) != `{"x":1}` {
-		t.Fatalf("旧格式配置 = %s %v", data, err)
+	if err != nil || string(data) != `{"name":"a","type":"mock","x":1}` {
+		t.Fatalf("嵌套配置缺少 name/type 时应补上: %s %v", data, err)
+	}
+	full := map[string]interface{}{"config": map[string]interface{}{"name": "inner", "type": "mock", "x": 1}}
+	if data, _ := adapterConfigData(full, "a", "mock"); string(data) != `{"name":"inner","type":"mock","x":1}` {
+		t.Fatalf("嵌套配置已有 name/type 时原样使用: %s", data)
 	}
 	flat := map[string]interface{}{"name": "a", "enabled": true, "interval": "1s"}
 	data, _ = adapterConfigData(flat, "a", "mock")

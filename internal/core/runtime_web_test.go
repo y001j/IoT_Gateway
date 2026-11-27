@@ -82,6 +82,23 @@ database:
 		return resp.StatusCode == 200
 	}, "Web 服务未启动")
 
+	// 运维接口也由 Web 端口提供，/health 返回真实的组件状态（以前固定返回 ok）
+	for _, path := range []string{"/health", "/metrics", "/info"} {
+		resp, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&m)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("Web 端口的 %s 应可访问: %d", path, resp.StatusCode)
+		}
+		if path == "/health" && m["components"] == nil {
+			t.Fatalf("Web 端口的 /health 应返回组件状态: %v", m)
+		}
+	}
+
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "runtime-web-pass"})
 	resp, err := http.Post(base+"/api/v1/auth/login", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -150,5 +167,17 @@ func TestStorageDirAndDisabledWebService(t *testing.T) {
 	}
 	if err := ws.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpsPort(t *testing.T) {
+	for _, c := range []struct {
+		in     string
+		webOps bool
+		want   string
+	}{{"", true, "8080"}, {"9090", true, "9090"}, {"0", true, ""}, {"0", false, "8080"}} {
+		if got := opsPort(c.in, c.webOps); got != c.want {
+			t.Errorf("opsPort(%q, %v) = %q, want %q", c.in, c.webOps, got, c.want)
+		}
 	}
 }

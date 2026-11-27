@@ -27,6 +27,7 @@ type WebService struct {
 	config            *WebConfig
 	ruleEngineService *rules.RuleEngineService
 	natsConn          *nats.Conn
+	opsHandler        http.Handler // 网关运维接口，同时由 Web 端口提供
 }
 
 type WebConfig struct {
@@ -94,6 +95,11 @@ func NewWebService(viper *viper.Viper, pluginMgr *plugin.Manager, ruleMgr rules.
 	}, nil
 }
 
+// SetOpsHandler 设置网关运维接口（/health、/metrics、/info、/storage），在 Start 之前调用
+func (ws *WebService) SetOpsHandler(h http.Handler) {
+	ws.opsHandler = h
+}
+
 // SetRuleEngineService 设置规则引擎服务的引用
 func (ws *WebService) SetRuleEngineService(ruleEngineService *rules.RuleEngineService) {
 	ws.ruleEngineService = ruleEngineService
@@ -143,7 +149,7 @@ func (ws *WebService) Start(ctx context.Context) error {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
-	api.SetupRoutes(router, ws.services, ws.natsConn, api.RouteOptions{AllowedOrigins: ws.config.CORS.AllowedOrigins})
+	api.SetupRoutes(router, ws.services, ws.natsConn, api.RouteOptions{AllowedOrigins: ws.config.CORS.AllowedOrigins, OpsHandler: ws.opsHandler})
 
 	// 设置路由到服务器
 	ws.server.Handler = router

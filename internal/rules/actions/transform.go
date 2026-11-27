@@ -80,8 +80,9 @@ func (h *TransformHandler) Execute(ctx context.Context, point model.Point, rule 
 		if subject, ok := config["publish_subject"].(string); ok && subject != "" {
 			publishSubject = subject
 		} else {
-			// 默认主题格式：transformed.{device_id}.{key}
-			publishSubject = fmt.Sprintf("transformed.%s.%s", transformedPoint.DeviceID, transformedPoint.Key)
+			// 默认主题格式：transformed.{device_id}.{key}。设备 ID 和键必须转义：
+			// 以前直接拼接，含 "." 的设备 ID 会多出主题层级，含 "*" ">" 空白的会导致发布失败
+			publishSubject = "transformed." + model.EncodeSubjectToken(transformedPoint.DeviceID) + "." + model.EncodeSubjectToken(transformedPoint.Key)
 		}
 
 		// 准备发布数据
