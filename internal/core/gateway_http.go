@@ -54,6 +54,10 @@ func (rt *Runtime) HealthStatus() HealthReport {
 		set("nats", 0, "")
 	}
 
+	if level, msg, ok := rt.mqttHealth(); ok {
+		set("mqtt", level, msg)
+	}
+
 	if !rt.started.Load() {
 		set("runtime", 2, "服务尚未启动完成")
 	} else {

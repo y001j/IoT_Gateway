@@ -11,6 +11,16 @@ gateway:
   nats_url: "embedded"
   plugins_dir: "./plugins"
 
+  # 内嵌 MQTT：让内嵌 NATS 服务器同时提供 MQTT 3.1.1 服务（只在 nats_url 为 embedded 且网关自己启动了 NATS 时生效）。
+  # MQTT 主题与 NATS 主题互通（"/" ↔ "."，"+" ↔ "*"，"#" ↔ ">"）：MQTT 客户端订阅 iot/rules/# 或 iot/alerts/#
+  # 就能收到规则引擎结果和告警；mqtt 连接器（mqtt_output）也可以把 broker 指向 tcp://localhost:1883。
+  mqtt:
+    enabled: false
+    host: "127.0.0.1"     # 只允许本机访问；让局域网设备连接时改为 "0.0.0.0"，并配置用户名密码
+    port: 1883
+    # username: "gateway"
+    # password: "请修改"
+
   # 采集数据管道参数
   pipeline:
     batch_size: 100          # 每批数据点数量
@@ -525,7 +535,7 @@ northbound:
     #     replay_rate: 2000     # 写入目标的最大速率（点/秒），0 不限；窄带链路建议设置，避免补发挤占实时数据
     - name: "mqtt_output"
       type: "mqtt"
-      enabled: false  # 默认禁用，需要MQTT broker
+      enabled: false  # 默认禁用，需要MQTT broker（可以开启上面的 gateway.mqtt 使用内嵌 MQTT）
       config:
         name: "mqtt_output"
         type: "mqtt"
